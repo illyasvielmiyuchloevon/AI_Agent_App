@@ -1,0 +1,31 @@
+{
+  "name": "ai-agent-app-electron",
+  "version": "0.0.1",
+  "main": "main.js",
+  "description": "Electron shell for AI Agent App",
+  "scripts": {
+    "dev": "concurrently \"npm --prefix ../frontend run dev\" \"npm run start:electron\"",
+    "start:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "npm --prefix ../frontend run build && electron-builder",
+    "lint": "echo \"No lint configured for electron shell\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^31.2.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.aiagent.app",
+    "files": [
+      "../frontend/dist/**/*",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "asar": true
+  }
+}

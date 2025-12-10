@@ -1,0 +1,21 @@
+{
+  "sessions": [
+    {
+      "id": "7e9f4fad-54d2-4943-916f-b75c2357d536",
+      "title": "Test Session",
+      "mode": "chat",
+      "created_at": "2025-12-09T09:30:46.401Z",
+      "updated_at": "2025-12-09T09:45:45.583Z"
+    }
+  ],
+  "messages": {
+    "7e9f4fad-54d2-4943-916f-b75c2357d536": []
+  },
+  "logs": {
+    "7e9f4fad-54d2-4943-916f-b75c2357d536": []
+  },
+  "meta": {
+    "message_seq": 0,
+    "log_seq": 0
+  }
+}
