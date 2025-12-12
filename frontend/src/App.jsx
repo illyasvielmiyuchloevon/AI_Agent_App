@@ -100,6 +100,47 @@ const shouldHidePath = (path = '') => {
   return clean === '.aichat' || clean.startsWith('.aichat/') || clean.startsWith('.aichat\\');
 };
 
+const safeDiffStat = (before = '', after = '') => {
+  const a = String(before || '').split('\n');
+  const b = String(after || '').split('\n');
+  const m = a.length;
+  const n = b.length;
+  if (m === 0 && n === 0) return { added: 0, removed: 0 };
+  if (m === 0) return { added: n, removed: 0 };
+  if (n === 0) return { added: 0, removed: m };
+  // Guard against pathological memory usage on very large files
+  if (m * n > 2000000) {
+      return { added: Math.max(n - m, 0), removed: Math.max(m - n, 0) };
+  }
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i += 1) {
+      for (let j = 1; j <= n; j += 1) {
+          dp[i][j] = a[i - 1] === b[j - 1]
+              ? dp[i - 1][j - 1] + 1
+              : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+  }
+  let i = m;
+  let j = n;
+  let added = 0;
+  let removed = 0;
+  while (i > 0 && j > 0) {
+      if (a[i - 1] === b[j - 1]) {
+          i -= 1;
+          j -= 1;
+      } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+          removed += 1;
+          i -= 1;
+      } else {
+          added += 1;
+          j -= 1;
+      }
+  }
+  removed += i;
+  added += j;
+  return { added, removed };
+};
+
 const readLayoutPrefs = () => {
   if (typeof window === 'undefined') return {};
   try {
@@ -216,6 +257,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [toolRuns, setToolRuns] = useState({});
   const [input, setInput] = useState('');
+  const [taskReview, setTaskReview] = useState({ taskId: null, files: [], status: 'idle', expanded: false });
   const [loadingSessions, setLoadingSessions] = useState(new Set());
   const [currentMode, setCurrentMode] = useState('chat');
   const [workspaceState, setWorkspaceState] = useState(initialWorkspaceState);
@@ -235,6 +277,7 @@ function App() {
   const syncLockRef = useRef(false);
   const lastSyncRef = useRef(0);
   const workspaceInitializedRef = useRef(false);
+  const taskSnapshotRef = useRef(null);
   const configHydratedRef = useRef(false);
   const userThemePreferenceRef = useRef(!!storedThemePreference);
 
@@ -555,20 +598,21 @@ function App() {
       }
   }, [normalizeProjectConfig]);
 
-  const syncWorkspaceFromDisk = useCallback(async ({ includeContent = true, highlight = true, driver: driverOverride = null, force = false } = {}) => {
+  const syncWorkspaceFromDisk = useCallback(async ({ includeContent = true, highlight = true, driver: driverOverride = null, force = false, snapshot = null } = {}) => {
       const driver = driverOverride || workspaceDriver;
       if (!driver) {
           setWorkspaceBindingStatus((prev) => (prev === 'error' ? prev : 'idle'));
-          return;
+          return null;
       }
       const now = Date.now();
-      if (!force && syncLockRef.current) return;
-      // ✅ 增加防抖间隔，避免同步过于频繁
-      if (!force && now - lastSyncRef.current < 800) return;
+      const shouldThrottle = !force && !snapshot;
+      if (shouldThrottle && syncLockRef.current) return null;
+      // ✅ 增加防抖间隔，避免同步过于频繁（仅对主动拉取生效）
+      if (shouldThrottle && now - lastSyncRef.current < 800) return null;
       syncLockRef.current = true;
       setWorkspaceLoading(true);
       try {
-          const data = await driver.getStructure({ includeContent });
+          const data = snapshot || await driver.getStructure({ includeContent });
           const incoming = (data.files || [])
               .filter((f) => !shouldHidePath(f.path))
               .map((f) => ({
@@ -614,16 +658,79 @@ function App() {
                   entryCandidates: data.entry_candidates || prev.entryCandidates,
               };
           });
+          lastSyncRef.current = Date.now();
+          return { files: incoming, raw: data };
       } catch (err) {
           console.error('Workspace sync failed', err);
           setWorkspaceBindingError(err.message);
           setWorkspaceBindingStatus('error');
       } finally {
-          lastSyncRef.current = Date.now();
           syncLockRef.current = false;
           setWorkspaceLoading(false);
       }
   }, [workspaceDriver]);
+
+  const captureWorkspaceSnapshot = useCallback(async () => {
+      if (!workspaceDriver) return null;
+      try {
+          const data = await workspaceDriver.getStructure({ includeContent: true });
+          const files = (data.files || [])
+              .filter((f) => !shouldHidePath(f.path))
+              .map((f) => ({ path: f.path, content: f.content ?? '' }));
+          return { raw: data, files };
+      } catch (err) {
+          console.error('Capture workspace snapshot failed', err);
+          return null;
+      }
+  }, [workspaceDriver]);
+
+  const buildTaskDiffs = useCallback((beforeFiles = [], afterFiles = []) => {
+      const beforeMap = new Map((beforeFiles || []).map((f) => [f.path, f.content ?? '']));
+      const afterMap = new Map((afterFiles || []).map((f) => [f.path, f.content ?? '']));
+      const allPaths = new Set([...beforeMap.keys(), ...afterMap.keys()]);
+      const diffs = [];
+      allPaths.forEach((path) => {
+          const prev = beforeMap.has(path) ? beforeMap.get(path) : null;
+          const next = afterMap.has(path) ? afterMap.get(path) : null;
+          if (prev === next) return;
+          const changeType = prev === null ? 'added' : (next === null ? 'deleted' : 'modified');
+          const stat = safeDiffStat(prev || '', next || '');
+          diffs.push({
+              path,
+              before: prev,
+              after: next,
+              changeType,
+              stat,
+              action: 'pending'
+          });
+      });
+      return diffs.sort((a, b) => a.path.localeCompare(b.path));
+  }, []);
+
+  const finalizeTaskReview = useCallback(async (taskId) => {
+      if (!taskSnapshotRef.current || taskSnapshotRef.current.id !== taskId) return;
+      try {
+          const after = await captureWorkspaceSnapshot();
+          const afterFiles = after?.files || [];
+          const diffs = buildTaskDiffs(taskSnapshotRef.current.files || [], afterFiles);
+          setTaskReview({
+              taskId,
+              files: diffs,
+              expanded: diffs.length > 0,
+              status: diffs.length ? 'ready' : 'clean'
+          });
+          if (after?.raw) {
+              await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true, snapshot: after.raw });
+          } else {
+              await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
+          }
+      } catch (err) {
+          console.error('Finalize task review failed', err);
+          setTaskReview((prev) => (prev && prev.taskId === taskId ? { ...prev, status: 'error' } : prev));
+      } finally {
+          taskSnapshotRef.current = null;
+      }
+  }, [buildTaskDiffs, captureWorkspaceSnapshot, syncWorkspaceFromDisk]);
 
   const hydrateProject = useCallback(async (driver, preferredRoot = '') => {
       if (!driver) return;
@@ -634,6 +741,8 @@ function App() {
       setMessages([]);
       setToolRuns({});
       setLogs([]);
+      setTaskReview({ taskId: null, files: [], status: 'idle', expanded: false });
+      taskSnapshotRef.current = null;
       setShowLogs(false);
       setCurrentSessionId(null);
       const cfg = await loadProjectConfigFromDisk(driver);
@@ -791,6 +900,30 @@ function App() {
       const ownerByToolId = {};
       const derived = {};
 
+      const resolveStatus = (payload) => {
+          const inspectObject = (obj) => {
+              if (!obj || typeof obj !== 'object') return null;
+              const statusValue = typeof obj.status === 'string' ? obj.status.toLowerCase() : '';
+              if (['error', 'failed', 'fail'].includes(statusValue)) return 'error';
+              if (obj.success === false || obj.ok === false) return 'error';
+              if (typeof obj.error === 'string' || typeof obj.err === 'string') return 'error';
+              if (typeof obj.message === 'string' && obj.message.toLowerCase().includes('error')) return 'error';
+              if (obj.result && typeof obj.result === 'object') {
+                  const nested = inspectObject(obj.result);
+                  if (nested) return nested;
+              }
+              return null;
+          };
+
+          const nestedStatus = inspectObject(payload);
+          if (nestedStatus) return nestedStatus;
+
+          const preview = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+          const lowered = (preview || '').toLowerCase();
+          if (lowered.includes('error') || lowered.includes('fail')) return 'error';
+          return 'done';
+      };
+
       list.forEach((msg, idx) => {
           const cid = msg._cid || msg.id || `msg-${idx}`;
           if (msg.role === 'assistant') {
@@ -825,7 +958,7 @@ function App() {
               try { parsedResult = JSON.parse(msg.content); } catch { parsedResult = msg.content; }
           }
           const previewSource = typeof parsedResult === 'string' ? parsedResult : JSON.stringify(parsedResult || {});
-          const status = (previewSource || '').toLowerCase().includes('error') ? 'error' : 'done';
+          const status = resolveStatus(parsedResult);
           const existingRuns = derived[targetId] || [];
           const argsSource = (existingRuns.find((r) => r.id === (msg.tool_call_id || `tool-${idx}`)) || {}).args;
           const diffTarget = deriveDiffTarget(parsedResult, argsSource);
@@ -1350,6 +1483,7 @@ function App() {
     }
     if ((!cleanedText.trim()) && safeAttachments.length === 0) return;
 
+    const trackTaskChanges = ['canva', 'agent'].includes(currentMode);
     const deriveTitle = () => {
         const t = (cleanedText || '').trim();
         if (t) return t.slice(0, 60);
@@ -1372,6 +1506,23 @@ function App() {
         if (candidateTitle && candidateTitle !== sessionForTitle.title) {
             renameSession(sessionIdToUse, candidateTitle);
         }
+    }
+
+    const taskId = Date.now();
+    let snapshotReady = false;
+    if (trackTaskChanges && workspaceDriver) {
+        const beforeSnapshot = await captureWorkspaceSnapshot();
+        if (beforeSnapshot) {
+            taskSnapshotRef.current = { id: taskId, files: beforeSnapshot.files || [] };
+            setTaskReview({ taskId, files: [], status: 'running', expanded: false });
+            snapshotReady = true;
+        } else {
+            taskSnapshotRef.current = null;
+            setTaskReview({ taskId, files: [], status: 'idle', expanded: false });
+        }
+    } else {
+        taskSnapshotRef.current = null;
+        setTaskReview({ taskId: null, files: [], status: 'idle', expanded: false });
     }
 
     const userMessage = { _cid: `user-${Date.now()}`, role: 'user', content: { text: cleanedText, attachments: safeAttachments, mode: currentMode } };
@@ -1485,13 +1636,6 @@ function App() {
       }
       fetchSessions();
       fetchLogs();
-
-      // ✅ 只在必要时同步，并加上延迟避免频繁刷新
-      if (['canva', 'agent'].includes(currentMode)) {
-          setTimeout(() => {
-              syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
-          }, 1000);
-      }
       await refreshMessages(sessionIdToUse);
       emitSessionsUpdated({ action: 'messages', sessionId: sessionIdToUse });
     } catch (err) {
@@ -1503,15 +1647,106 @@ function App() {
           setMessages((prev) => [...prev, { role: 'error', content: 'Error getting response' }]);
       }
     } finally {
+      abortControllerRef.current = null;
+      streamBufferRef.current = '';
+      if (snapshotReady && taskId) {
+          await finalizeTaskReview(taskId);
+      } else {
+          taskSnapshotRef.current = null;
+      }
       setLoadingSessions(prev => {
           const next = new Set(prev);
           next.delete(sessionIdToUse);
           return next;
       });
-      abortControllerRef.current = null;
-      streamBufferRef.current = '';
     }
   };
+
+  const toggleTaskReview = useCallback(() => {
+      setTaskReview((prev) => (prev ? { ...prev, expanded: !prev.expanded } : prev));
+  }, []);
+
+  const keepTaskFile = useCallback((path) => {
+      if (!taskReview?.files?.length) return;
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((f) => f.path === path ? { ...f, action: 'kept' } : f);
+          const status = files.every((f) => f.action !== 'pending') ? 'resolved' : prev.status;
+          return { ...prev, files, status };
+      });
+      setWorkspaceState((prev) => ({
+          ...prev,
+          files: prev.files.map((f) => f.path === path ? { ...f, updated: false } : f)
+      }));
+  }, [taskReview]);
+
+  const keepAllTaskFiles = useCallback(() => {
+      const paths = taskReview?.files?.map((f) => f.path) || [];
+      if (!paths.length) {
+          setTaskReview((prev) => (prev ? { ...prev, status: 'clean', expanded: false } : prev));
+          return;
+      }
+      setWorkspaceState((prev) => ({
+          ...prev,
+          files: prev.files.map((f) => paths.includes(f.path) ? { ...f, updated: false } : f)
+      }));
+      setTaskReview((prev) => (prev ? {
+          ...prev,
+          files: prev.files.map((f) => ({ ...f, action: 'kept' })),
+          status: 'resolved',
+          expanded: false
+      } : prev));
+  }, [taskReview]);
+
+  const revertTaskFile = useCallback(async (path) => {
+      const target = taskReview?.files?.find((f) => f.path === path);
+      if (!target || !workspaceDriver) return;
+      setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
+      try {
+          if (target.changeType === 'added') {
+              await workspaceDriver.deletePath(path);
+          } else {
+              await workspaceDriver.writeFile(path, target.before || '', { createDirectories: true });
+          }
+          await syncWorkspaceFromDisk({ includeContent: true, highlight: false, force: true });
+          setTaskReview((prev) => {
+              if (!prev) return prev;
+              const files = prev.files.map((f) => f.path === path ? { ...f, action: 'reverted' } : f);
+              const status = files.every((f) => f.action !== 'pending') ? 'resolved' : 'ready';
+              return { ...prev, files, status };
+          });
+      } catch (err) {
+          console.error('Revert file failed', err);
+          alert(`撤销失败：${err.message || err}`);
+          setTaskReview((prev) => (prev ? { ...prev, status: prev.status === 'applying' ? 'ready' : prev.status } : prev));
+      }
+  }, [syncWorkspaceFromDisk, taskReview, workspaceDriver]);
+
+  const revertAllTaskFiles = useCallback(async () => {
+      if (!taskReview?.files?.length || !workspaceDriver) return;
+      setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
+      try {
+          for (const file of taskReview.files) {
+              // eslint-disable-next-line no-await-in-loop
+              if (file.changeType === 'added') {
+                  await workspaceDriver.deletePath(file.path);
+              } else {
+                  await workspaceDriver.writeFile(file.path, file.before || '', { createDirectories: true });
+              }
+          }
+          await syncWorkspaceFromDisk({ includeContent: true, highlight: false, force: true });
+          setTaskReview((prev) => (prev ? {
+              ...prev,
+              files: prev.files.map((f) => ({ ...f, action: 'reverted' })),
+              status: 'resolved',
+              expanded: false
+          } : prev));
+      } catch (err) {
+          console.error('Revert all failed', err);
+          alert(`撤销失败：${err.message || err}`);
+          setTaskReview((prev) => (prev ? { ...prev, status: prev.status === 'applying' ? 'ready' : prev.status } : prev));
+      }
+  }, [syncWorkspaceFromDisk, taskReview, workspaceDriver]);
 
   const openFile = (path) => {
       if (!workspaceDriver) {
@@ -2109,13 +2344,19 @@ function App() {
                  onStop={handleStop}
                  onToggleLogs={() => setShowLogs(!showLogs)}
                  currentSession={currentSession}
-                 logStatus={logStatus}
-                 mode={currentMode}
-                 modeOptions={MODE_OPTIONS}
-                 onModeChange={handleModeChange}
-                 toolRuns={toolRuns}
-                 onOpenDiff={handleOpenDiff}
-              />
+              logStatus={logStatus}
+              mode={currentMode}
+              modeOptions={MODE_OPTIONS}
+              onModeChange={handleModeChange}
+              toolRuns={toolRuns}
+              onOpenDiff={handleOpenDiff}
+              taskReview={taskReview}
+              onTaskToggle={toggleTaskReview}
+              onTaskKeepAll={keepAllTaskFiles}
+              onTaskRevertAll={revertAllTaskFiles}
+              onTaskKeepFile={keepTaskFile}
+              onTaskRevertFile={revertTaskFile}
+            />
           </div>
 
           {!chatPanelCollapsed && (

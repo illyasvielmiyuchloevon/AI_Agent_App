@@ -343,12 +343,35 @@ export class EditFileTool extends BaseToolImplementation {
         const warnings: string[] = [];
         let rawEdits: any[] = [];
 
+        const parseStringEdits = (value: string): any => {
+            const trimmed = (value || '').trim();
+            if (!trimmed) return null;
+            try {
+                return JSON.parse(trimmed);
+            } catch (err: any) {
+                warnings.push(`Failed to parse string edits as JSON: ${err?.message || err}`);
+                return null;
+            }
+        };
+
         if (Array.isArray(args.edits)) {
             rawEdits = args.edits;
         } else if (args.edits && typeof args.edits === 'object') {
             rawEdits = [args.edits];
-        } else if (typeof args.edits === 'string' && args.replace !== undefined) {
-            rawEdits = [{ search: args.edits, replace: args.replace, description: args.description }];
+        } else if (typeof args.edits === 'string') {
+            const parsed = parseStringEdits(args.edits);
+            if (Array.isArray(parsed)) {
+                rawEdits = parsed;
+            } else if (parsed && typeof parsed === 'object') {
+                rawEdits = [parsed];
+            } else if (parsed && typeof parsed === 'string' && args.replace !== undefined) {
+                rawEdits = [{ search: parsed, replace: args.replace, description: args.description }];
+            } else if (args.replace !== undefined) {
+                // Fallback: treat the raw string as search text when replace is provided
+                rawEdits = [{ search: args.edits, replace: args.replace, description: args.description }];
+            } else {
+                warnings.push("String 'edits' provided but no 'replace' given; supply replace or use JSON edits array.");
+            }
         }
 
         if (rawEdits.length === 0 && args.search !== undefined && args.replace !== undefined) {

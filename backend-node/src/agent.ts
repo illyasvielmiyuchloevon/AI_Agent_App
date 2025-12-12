@@ -230,8 +230,8 @@ export class Agent {
                     if (this.activeToolNames.size > 0 && !this.activeToolNames.has(toolCall.function.name)) {
                         throw new Error(`Tool ${toolCall.function.name} is not enabled in ${this.mode} mode`);
                     }
-                    console.log(`[Agent] Executing tool_call id=${toolCall.id} name=${toolCall.function.name} args=${JSON.stringify(toolCall.function.arguments)}`);
-                    result = await this.registry.execute(toolCall.function.name, toolCall.function.arguments, this.sessionId);
+                    console.log(`[Agent] Executing tool_call id=${toolCall.id} name=${toolCall.function.name} args=${JSON.stringify(args)}`);
+                    result = await this.registry.execute(toolCall.function.name, args, this.sessionId);
                 } catch (e: any) {
                     result = `Error: ${e.message}`;
                 }

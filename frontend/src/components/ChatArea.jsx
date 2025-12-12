@@ -64,7 +64,13 @@ function ChatArea({
     modeOptions,
     onModeChange,
     toolRuns = {},
-    onOpenDiff
+    onOpenDiff,
+    taskReview,
+    onTaskToggle = () => {},
+    onTaskKeepAll = () => {},
+    onTaskRevertAll = () => {},
+    onTaskKeepFile = () => {},
+    onTaskRevertFile = () => {}
 }) {
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
@@ -330,6 +336,20 @@ function ChatArea({
         );
     };
 
+    const reviewTotal = taskReview?.files?.length || 0;
+    const reviewPending = taskReview?.files?.filter((f) => f.action === 'pending').length || 0;
+    const reviewStatus = taskReview?.status || 'idle';
+    const reviewBusy = reviewStatus === 'running' || reviewStatus === 'applying';
+    const showTaskReview = !!taskReview && (reviewStatus === 'running' || reviewTotal > 0 || reviewStatus === 'clean');
+    const reviewSummary = (() => {
+        if (reviewStatus === 'running') return '正在收集本次任务的改动…';
+        if (reviewStatus === 'applying') return '正在应用选择…';
+        if (reviewStatus === 'resolved') return '改动已处理';
+        if (reviewStatus === 'clean') return '本次任务无文件改动';
+        if (reviewStatus === 'error') return '改动收集失败';
+        return `${reviewTotal} 个文件待审查`;
+    })();
+
     return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', overflowX: 'hidden' }}>
             {/* Chat Header */}
@@ -546,6 +566,82 @@ function ChatArea({
                 onDrop={handleDrop}
                 style={{ padding: '1rem', borderTop: '1px solid var(--border)', background: 'var(--panel)' }}
             >
+                {showTaskReview && (
+                    <div className="task-review-shell">
+                        <div className="task-review-head">
+                            <button
+                                type="button"
+                                className="task-review-toggle"
+                                onClick={onTaskToggle}
+                                title="展开/收起本次任务的改动列表"
+                                disabled={reviewBusy}
+                            >
+                                <span className="codicon codicon-versions" aria-hidden />
+                                <span className="task-review-pill">{reviewSummary}</span>
+                                {reviewPending > 0 && <span className="task-review-muted">{reviewPending} 未处理</span>}
+                                <span className={`codicon ${taskReview?.expanded ? 'codicon-chevron-down' : 'codicon-chevron-right'}`} aria-hidden />
+                            </button>
+                            <div className="task-review-actions">
+                                <button
+                                    type="button"
+                                    className="task-review-btn subtle"
+                                    onClick={onTaskRevertAll}
+                                    disabled={reviewBusy || reviewTotal === 0}
+                                >
+                                    全部撤销
+                                </button>
+                                <button
+                                    type="button"
+                                    className="task-review-btn primary"
+                                    onClick={onTaskKeepAll}
+                                    disabled={reviewBusy || reviewTotal === 0}
+                                >
+                                    全部保留
+                                </button>
+                            </div>
+                        </div>
+                        {taskReview?.expanded && reviewTotal > 0 && (
+                            <div className="task-review-list">
+                                {taskReview.files.map((file) => (
+                                    <div key={file.path} className="task-review-row">
+                                        <div className="task-review-file">
+                                            <span className={`task-review-dot ${file.changeType}`} aria-hidden />
+                                            <div className="task-review-path" title={file.path}>{file.path}</div>
+                                            <div className="task-review-stat">
+                                                <span className="add">+{file.stat?.added ?? 0}</span>
+                                                <span className="del">-{file.stat?.removed ?? 0}</span>
+                                            </div>
+                                            {file.action !== 'pending' && (
+                                                <span className={`task-review-state ${file.action === 'reverted' ? 'danger' : 'muted'}`}>
+                                                    {file.action === 'reverted' ? '已撤销' : '已保留'}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="task-review-buttons">
+                                            <button
+                                                type="button"
+                                                className="task-review-btn subtle"
+                                                onClick={() => onTaskRevertFile(file.path)}
+                                                disabled={reviewBusy || file.action === 'reverted'}
+                                            >
+                                                撤销
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="task-review-btn primary"
+                                                onClick={() => onTaskKeepFile(file.path)}
+                                                disabled={reviewBusy || file.action === 'kept'}
+                                            >
+                                                保留
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 <div 
                     className={`input-shell ${dragActive ? 'dragging' : ''}`} 
                     style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--panel-sub)', padding: 0, borderRadius: 'var(--radius)', border: '1px solid var(--border)', position: 'relative', cursor: 'text', overflow: 'visible' }}
