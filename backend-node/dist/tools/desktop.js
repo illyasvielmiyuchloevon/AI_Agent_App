@@ -48,7 +48,7 @@ class KeyboardControlTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["action"]
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         const script = `
 import pyautogui
 import json
@@ -124,7 +124,7 @@ class MouseControlTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["action"]
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         const script = `
 import pyautogui
 import json

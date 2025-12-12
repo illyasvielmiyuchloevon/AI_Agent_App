@@ -1056,6 +1056,20 @@ function App() {
           if (!res.ok) return;
           const data = await res.json();
           const normalized = normalizeMessages(data);
+          const derivedRuns = buildToolRunsFromMessages(normalized);
+
+          // 在任务执行中，不覆盖本地消息，只更新 toolRuns，避免占位卡片被刷新隐藏
+          if (loadingSessions.has(sessionId)) {
+              setToolRuns((prev) => {
+                  const next = {};
+                  Object.entries(derivedRuns).forEach(([cid, runs]) => {
+                      next[cid] = mergeRunLists(prev[cid] || [], runs);
+                  });
+                  return next;
+              });
+              return;
+          }
+
           // 保留本地尚未完成的工具占位气泡，避免轮询时被覆盖
           const localToolPlaceholders = messages.filter((m) => m.role === 'tool' && m.synthetic).filter((m) => {
               const runs = toolRuns[m._cid];
@@ -1063,8 +1077,7 @@ function App() {
               return runs.some((r) => !r.status || r.status === 'running');
           });
           const mergedMessages = [...normalized, ...localToolPlaceholders];
-          setMessages(normalized);
-          const derivedRuns = buildToolRunsFromMessages(normalized);
+          setMessages(mergedMessages);
           setToolRuns((prev) => {
               const next = {};
               Object.entries(derivedRuns).forEach(([cid, runs]) => {
@@ -1075,7 +1088,7 @@ function App() {
       } catch (err) {
           console.error(err);
       }
-  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, backendBound, messages, toolRuns]);
+  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, backendBound, messages, toolRuns, loadingSessions]);
 
   const refreshToolRuns = useCallback(async (sessionId) => {
       if (!sessionId || !backendBound) return;

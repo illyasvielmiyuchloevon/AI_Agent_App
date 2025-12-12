@@ -21,7 +21,7 @@ class ScreenCaptureTool extends base_tool_1.BaseToolImplementation {
         },
         required: []
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         const resizeFactor = args.resize_factor ?? 0.5;
         try {
             const imgBuffer = await screenshot({ format: 'png' });

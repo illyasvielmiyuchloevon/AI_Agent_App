@@ -9,34 +9,7 @@ const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const base_tool_1 = require("../core/base_tool");
 const context_1 = require("../context");
-const MAX_DIFF_CHARS = 120_000; // keep diff payloads bounded to avoid blowing up context
-async function readFileSafe(fullPath) {
-    try {
-        const content = await promises_1.default.readFile(fullPath, 'utf-8');
-        return content;
-    }
-    catch {
-        return null;
-    }
-}
-function snapshotContent(raw) {
-    if (typeof raw !== 'string')
-        return { content: '', truncated: false };
-    if (raw.length <= MAX_DIFF_CHARS)
-        return { content: raw, truncated: false };
-    return { content: raw.slice(0, MAX_DIFF_CHARS), truncated: true };
-}
-function buildDiffPayload(filePath, beforeRaw, afterRaw) {
-    const before = snapshotContent(beforeRaw);
-    const after = snapshotContent(afterRaw);
-    return {
-        path: filePath,
-        before: before.content,
-        after: after.content,
-        before_truncated: before.truncated,
-        after_truncated: after.truncated
-    };
-}
+const diffs_1 = require("../diffs");
 function isLikelyText(content) {
     return content.indexOf('\0') === -1;
 }
@@ -152,7 +125,7 @@ class ReadFileTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["path"]
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         console.log(`[Filesystem] ReadFileTool: ${args.path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const fullPath = path_1.default.resolve(root, args.path);
@@ -189,7 +162,7 @@ class WriteFileTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["path", "content"]
     };
-    async execute(args) {
+    async execute(args, context = {}) {
         console.log(`[Filesystem] WriteFileTool: ${args.path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const fullPath = path_1.default.resolve(root, args.path);
@@ -201,15 +174,22 @@ class WriteFileTool extends base_tool_1.BaseToolImplementation {
             if (args.create_directories !== false) {
                 await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
             }
-            const beforeContent = await readFileSafe(fullPath);
+            const beforeSnapshot = await (0, diffs_1.takeSnapshot)(args.path);
             await promises_1.default.writeFile(fullPath, args.content, 'utf-8');
+            const afterSnapshot = await (0, diffs_1.takeSnapshot)(args.path);
+            const diff = await (0, diffs_1.persistDiffSafely)({
+                sessionId: context.sessionId,
+                path: args.path,
+                before: beforeSnapshot,
+                after: afterSnapshot
+            });
             console.log(`[Filesystem] Write success: ${args.path}`);
             return {
                 status: "ok",
                 path: args.path,
                 bytes: (args.content || "").length,
                 message: `Successfully wrote to ${args.path}`,
-                diff: buildDiffPayload(args.path, beforeContent, args.content || '')
+                diff
             };
         }
         catch (e) {
@@ -274,7 +254,7 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
             { required: ["search", "replace"] }
         ]
     };
-    async execute(args) {
+    async execute(args, context = {}) {
         console.log(`[Filesystem] EditFileTool: ${args.path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const fullPath = path_1.default.resolve(root, args.path);
@@ -282,8 +262,8 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
             throw new Error("Access denied: Cannot edit files outside workspace.");
         }
         try {
+            const beforeSnapshot = await (0, diffs_1.takeSnapshot)(args.path);
             let content = await promises_1.default.readFile(fullPath, 'utf-8');
-            const originalContent = content;
             const { edits, warnings } = this.normalizeEdits(args);
             const appliedDetails = [];
             for (const edit of edits) {
@@ -335,6 +315,13 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
                 }
             }
             await promises_1.default.writeFile(fullPath, content, 'utf-8');
+            const afterSnapshot = await (0, diffs_1.takeSnapshot)(args.path);
+            const diff = await (0, diffs_1.persistDiffSafely)({
+                sessionId: context.sessionId,
+                path: args.path,
+                before: beforeSnapshot,
+                after: afterSnapshot
+            });
             return {
                 status: "ok",
                 path: args.path,
@@ -342,7 +329,7 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
                 details: appliedDetails,
                 warnings,
                 message: `Edited ${args.path} (${appliedDetails.length} changes applied)`,
-                diff: buildDiffPayload(args.path, originalContent, content)
+                diff
             };
         }
         catch (e) {
@@ -353,14 +340,42 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
     normalizeEdits(args) {
         const warnings = [];
         let rawEdits = [];
+        const parseStringEdits = (value) => {
+            const trimmed = (value || '').trim();
+            if (!trimmed)
+                return null;
+            try {
+                return JSON.parse(trimmed);
+            }
+            catch (err) {
+                warnings.push(`Failed to parse string edits as JSON: ${err?.message || err}`);
+                return null;
+            }
+        };
         if (Array.isArray(args.edits)) {
             rawEdits = args.edits;
         }
         else if (args.edits && typeof args.edits === 'object') {
             rawEdits = [args.edits];
         }
-        else if (typeof args.edits === 'string' && args.replace !== undefined) {
-            rawEdits = [{ search: args.edits, replace: args.replace, description: args.description }];
+        else if (typeof args.edits === 'string') {
+            const parsed = parseStringEdits(args.edits);
+            if (Array.isArray(parsed)) {
+                rawEdits = parsed;
+            }
+            else if (parsed && typeof parsed === 'object') {
+                rawEdits = [parsed];
+            }
+            else if (parsed && typeof parsed === 'string' && args.replace !== undefined) {
+                rawEdits = [{ search: parsed, replace: args.replace, description: args.description }];
+            }
+            else if (args.replace !== undefined) {
+                // Fallback: treat the raw string as search text when replace is provided
+                rawEdits = [{ search: args.edits, replace: args.replace, description: args.description }];
+            }
+            else {
+                warnings.push("String 'edits' provided but no 'replace' given; supply replace or use JSON edits array.");
+            }
         }
         if (rawEdits.length === 0 && args.search !== undefined && args.replace !== undefined) {
             rawEdits = [{ search: args.search, replace: args.replace, description: args.description }];
@@ -436,7 +451,7 @@ class ListFilesTool extends base_tool_1.BaseToolImplementation {
             path: { type: "string", description: "Folder path to list. Leave empty for workspace root." }
         }
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         console.log(`[Filesystem] ListFilesTool: ${args.path || '.'}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const targetPath = args.path ? path_1.default.resolve(root, args.path) : root;
@@ -475,7 +490,7 @@ class CreateFolderTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["path"]
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         console.log(`[Filesystem] CreateFolderTool: ${args.path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const fullPath = path_1.default.resolve(root, args.path);
@@ -503,7 +518,7 @@ class DeleteFileTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["path"]
     };
-    async execute(args) {
+    async execute(args, context = {}) {
         console.log(`[Filesystem] DeleteFileTool: ${args.path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const fullPath = path_1.default.resolve(root, args.path);
@@ -511,18 +526,24 @@ class DeleteFileTool extends base_tool_1.BaseToolImplementation {
             throw new Error("Access denied: Cannot delete files outside workspace.");
         }
         try {
-            let beforeContent = null;
+            let shouldCapture = false;
             try {
                 const stats = await promises_1.default.stat(fullPath);
-                if (stats.isFile()) {
-                    beforeContent = await readFileSafe(fullPath);
-                }
+                shouldCapture = stats.isFile();
             }
             catch {
                 /* ignore missing files */
             }
+            const beforeSnapshot = shouldCapture ? await (0, diffs_1.takeSnapshot)(args.path) : (0, diffs_1.emptySnapshot)();
             await promises_1.default.rm(fullPath, { recursive: true, force: true });
-            const diff = beforeContent !== null ? buildDiffPayload(args.path, beforeContent, '') : undefined;
+            const diff = shouldCapture
+                ? await (0, diffs_1.persistDiffSafely)({
+                    sessionId: context.sessionId,
+                    path: args.path,
+                    before: beforeSnapshot,
+                    after: (0, diffs_1.emptySnapshot)()
+                })
+                : undefined;
             return { status: "ok", path: args.path, deleted: true, diff };
         }
         catch (e) {
@@ -543,7 +564,7 @@ class RenameFileTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["old_path", "new_path"]
     };
-    async execute(args) {
+    async execute(args, context = {}) {
         console.log(`[Filesystem] RenameFileTool: ${args.old_path} -> ${args.new_path}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const oldFullPath = path_1.default.resolve(root, args.old_path);
@@ -552,13 +573,13 @@ class RenameFileTool extends base_tool_1.BaseToolImplementation {
             throw new Error("Access denied: Cannot rename files outside workspace.");
         }
         try {
-            let beforeContent = null;
             let isFile = false;
+            let beforeSnapshot = (0, diffs_1.emptySnapshot)();
             try {
                 const stats = await promises_1.default.stat(oldFullPath);
                 isFile = stats.isFile();
                 if (isFile) {
-                    beforeContent = await readFileSafe(oldFullPath);
+                    beforeSnapshot = await (0, diffs_1.takeSnapshot)(args.old_path);
                 }
             }
             catch {
@@ -566,8 +587,14 @@ class RenameFileTool extends base_tool_1.BaseToolImplementation {
             }
             await promises_1.default.mkdir(path_1.default.dirname(newFullPath), { recursive: true });
             await promises_1.default.rename(oldFullPath, newFullPath);
-            const diff = isFile && beforeContent !== null
-                ? buildDiffPayload(args.new_path, beforeContent, await readFileSafe(newFullPath) ?? '')
+            const afterSnapshot = isFile ? await (0, diffs_1.takeSnapshot)(args.new_path) : (0, diffs_1.emptySnapshot)();
+            const diff = isFile
+                ? await (0, diffs_1.persistDiffSafely)({
+                    sessionId: context.sessionId,
+                    path: args.new_path,
+                    before: beforeSnapshot,
+                    after: afterSnapshot
+                })
                 : undefined;
             return { status: "ok", from: args.old_path, to: args.new_path, diff };
         }
@@ -596,7 +623,7 @@ class SearchInFilesTool extends base_tool_1.BaseToolImplementation {
         },
         required: ["query"]
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         console.log(`[Filesystem] SearchInFilesTool: ${args.query} in ${args.path || args.paths?.join(',') || args.files?.join(',') || '.'}`);
         const root = (0, context_1.getWorkspaceRoot)();
         const searchRoots = (args.paths && args.paths.length > 0)
@@ -688,7 +715,7 @@ class ProjectStructureTool extends base_tool_1.BaseToolImplementation {
         },
         required: []
     };
-    async execute(args) {
+    async execute(args, _context = {}) {
         const root = (0, context_1.getWorkspaceRoot)();
         try {
             const structure = await getProjectStructure(root);

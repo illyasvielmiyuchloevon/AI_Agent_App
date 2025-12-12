@@ -45,6 +45,7 @@ const db = __importStar(require("./db"));
 const agent_1 = require("./agent");
 const llm_1 = require("./core/llm");
 const filesystem_1 = require("./tools/filesystem");
+const diffs_1 = require("./diffs");
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
@@ -203,6 +204,20 @@ app.get('/sessions/:id/logs', async (req, res) => {
     }
 });
 // Diff snapshots
+app.get('/diffs', async (req, res) => {
+    try {
+        const { session_id, path: queryPath, limit } = req.query;
+        const diffs = await db.getDiffs({
+            session_id: typeof session_id === 'string' ? session_id : undefined,
+            path: typeof queryPath === 'string' ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined
+        });
+        res.json(diffs);
+    }
+    catch (e) {
+        res.status(500).json({ detail: e.message });
+    }
+});
 app.get('/sessions/:id/diffs', async (req, res) => {
     try {
         const { path: queryPath, limit } = req.query;
@@ -358,41 +373,18 @@ app.post('/workspace/write', async (req, res) => {
         const fullPath = path_1.default.resolve(root, relativePath);
         if (!fullPath.startsWith(root))
             throw new Error("Access denied");
-        // Capture pre/post snapshot for workspace writes as well (so diff is independent of tool calls)
-        let before = '';
-        let before_truncated = false;
-        try {
-            const existing = await promises_1.default.readFile(fullPath, 'utf-8');
-            before_truncated = existing.length > 120000;
-            before = before_truncated ? existing.slice(0, 120000) : existing;
-        }
-        catch {
-            before = '';
-            before_truncated = false;
-        }
+        const beforeSnapshot = await (0, diffs_1.takeSnapshot)(relativePath);
         if (create_directories) {
             await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
         }
         await promises_1.default.writeFile(fullPath, content || "", 'utf-8');
-        let after = '';
-        let after_truncated = false;
+        const afterSnapshot = await (0, diffs_1.takeSnapshot)(relativePath);
         try {
-            const updated = await promises_1.default.readFile(fullPath, 'utf-8');
-            after_truncated = updated.length > 120000;
-            after = after_truncated ? updated.slice(0, 120000) : updated;
-        }
-        catch {
-            after = '';
-        }
-        try {
-            // workspace write is not tied to a session; we store session_id as empty string
-            await db.addDiff({
-                session_id: '',
+            await (0, diffs_1.persistDiffSafely)({
+                sessionId: typeof req.body.session_id === 'string' ? req.body.session_id : '',
                 path: relativePath,
-                before,
-                after,
-                before_truncated,
-                after_truncated
+                before: beforeSnapshot,
+                after: afterSnapshot
             });
         }
         catch (e) {

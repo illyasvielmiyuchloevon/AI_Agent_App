@@ -29,7 +29,7 @@ function getDefaultState() {
         sessions: [],
         messages: {},
         logs: {},
-        diffs: [],
+        file_diffs: [],
         meta: { message_seq: 0, log_seq: 0, diff_seq: 0 }
     };
 }
@@ -69,13 +69,15 @@ async function loadState() {
 }
 function normalizeState(raw) {
     const base = getDefaultState();
+    const legacyDiffs = Array.isArray(raw?.diffs) ? raw.diffs : [];
+    const fileDiffs = Array.isArray(raw?.file_diffs) ? raw.file_diffs : legacyDiffs;
     const state = {
         ...base,
         ...raw,
         sessions: Array.isArray(raw?.sessions) ? raw.sessions : base.sessions,
         messages: raw?.messages && typeof raw.messages === 'object' ? raw.messages : base.messages,
         logs: raw?.logs && typeof raw.logs === 'object' ? raw.logs : base.logs,
-        diffs: Array.isArray(raw?.diffs) ? raw.diffs : [],
+        file_diffs: fileDiffs,
         meta: {
             message_seq: raw?.meta?.message_seq || 0,
             log_seq: raw?.meta?.log_seq || 0,
@@ -245,8 +247,8 @@ async function getLogs(sessionId) {
 // --- Diff Snapshots ---
 async function addDiff(entry) {
     const state = await loadState();
-    if (!Array.isArray(state.diffs)) {
-        state.diffs = [];
+    if (!Array.isArray(state.file_diffs)) {
+        state.file_diffs = [];
     }
     const seq = (state.meta.diff_seq || 0) + 1;
     state.meta.diff_seq = seq;
@@ -261,18 +263,20 @@ async function addDiff(entry) {
         after_truncated: !!entry.after_truncated,
         created_at
     };
-    state.diffs.push(record);
+    state.file_diffs.push(record);
+    // keep legacy mirror for any older consumers
+    state.diffs = state.file_diffs;
     await saveState(state);
     return record;
 }
 async function getDiffById(id) {
     const state = await loadState();
-    return state.diffs.find(d => d.id === id) || null;
+    return state.file_diffs.find(d => d.id === id) || null;
 }
 async function getDiffs(options) {
     const state = await loadState();
     const limit = options.limit && options.limit > 0 ? options.limit : 20;
-    let list = state.diffs;
+    let list = state.file_diffs;
     if (options.session_id)
         list = list.filter(d => d.session_id === options.session_id);
     if (options.path)

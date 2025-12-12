@@ -83,12 +83,13 @@ export class Agent {
         // However getPrompt returns default chat prompt if mode invalid, so better check explicitly if needed.
         // For now trusting the caller or just setting prompt.
         this.mode = mode;
-        
+
         let activeTools: BaseTool[] = [];
         if (mode === 'agent') {
             activeTools = this.agentTools;
         } else if (mode === 'canva') {
-            activeTools = this.fileTools; // simplified for PoC
+            // Canva mode still needs shell for quick builds/verification
+            activeTools = [...this.fileTools, this.shellTool];
         }
         
         if (enabledTools && enabledTools.length > 0) {
