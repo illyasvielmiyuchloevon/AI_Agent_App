@@ -1,4 +1,4 @@
-import React, { Suspense, useMemo, useRef, useEffect, useCallback } from 'react';
+import React, { Suspense, useMemo, useRef, useEffect, useCallback, useState } from 'react';
 
 const MonacoDiffEditor = React.lazy(() =>
   import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
@@ -21,6 +21,18 @@ const inferLanguage = (path = '') => {
   return LANG_MAP[ext] || 'plaintext';
 };
 
+const findFirstDiffLine = (before = '', after = '') => {
+  const beforeLines = (before || '').split('\n');
+  const afterLines = (after || '').split('\n');
+  const len = Math.max(beforeLines.length, afterLines.length);
+  for (let i = 0; i < len; i += 1) {
+    if (beforeLines[i] !== afterLines[i]) {
+      return { originalLine: i + 1, modifiedLine: i + 1 };
+    }
+  }
+  return null;
+};
+
 function DiffModal({ diff, onClose, theme }) {
   const hasDiff = !!diff && typeof diff === 'object';
   const path = hasDiff ? diff.path : '';
@@ -28,7 +40,10 @@ function DiffModal({ diff, onClose, theme }) {
   const after = hasDiff ? diff.after || '' : '';
   const beforeTruncated = hasDiff ? !!diff.before_truncated : false;
   const afterTruncated = hasDiff ? !!diff.after_truncated : false;
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const editorRef = useRef(null);
+  const modifiedEditorRef = useRef(null);
+  const originalEditorRef = useRef(null);
   const modelRef = useRef({ original: null, modified: null });
 
   const language = useMemo(() => inferLanguage(path || ''), [path]);
@@ -44,6 +59,13 @@ function DiffModal({ diff, onClose, theme }) {
       original: model?.original || null,
       modified: model?.modified || null
     };
+    try {
+      modifiedEditorRef.current = editor.getModifiedEditor();
+      originalEditorRef.current = editor.getOriginalEditor();
+    } catch (e) {
+      modifiedEditorRef.current = null;
+      originalEditorRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -58,11 +80,46 @@ function DiffModal({ diff, onClose, theme }) {
     };
   }, []);
 
+  useEffect(() => {
+    const diffEditor = editorRef.current;
+    const editor = modifiedEditorRef.current || (diffEditor && diffEditor.getModifiedEditor && diffEditor.getModifiedEditor());
+    if (!editor) return;
+    const { modified } = modelRef.current;
+    if (!modified) return;
+
+    const lineChanges = (diffEditor && diffEditor.getLineChanges && diffEditor.getLineChanges()) || [];
+    const firstChange = lineChanges.length > 0 ? lineChanges[0] : null;
+    const fallbackPos = findFirstDiffLine(before, after);
+
+    const targetLine = (() => {
+      if (firstChange && typeof firstChange.modifiedStartLineNumber === 'number') {
+        return firstChange.modifiedStartLineNumber;
+      }
+      if (fallbackPos) return fallbackPos.modifiedLine || fallbackPos.originalLine || 1;
+      return 1;
+    })();
+
+    const boundedLine = Math.min(Math.max(targetLine, 1), modified.getLineCount());
+    // Slight delay to ensure models are attached
+    setTimeout(() => {
+      try {
+        editor.revealLineInCenter(boundedLine);
+        editor.setPosition({ lineNumber: boundedLine, column: Math.max(1, modified.getLineMaxColumn(boundedLine) || 1) });
+      } catch (e) {
+        // ignore
+      }
+    }, 0);
+  }, [before, after]);
+
   if (!hasDiff) return null;
 
   return (
     <div className="diff-modal-backdrop" onClick={onClose}>
-      <div className="diff-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="diff-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={isFullScreen ? { width: '96vw', height: '92vh', maxWidth: 'none' } : undefined}
+      >
         <div className="diff-modal-header">
           <div className="diff-modal-title">
             <span className="codicon codicon-diff" aria-hidden />
@@ -70,6 +127,15 @@ function DiffModal({ diff, onClose, theme }) {
             {path ? <span className="diff-modal-path">{path}</span> : null}
           </div>
           <div className="diff-modal-actions">
+            <button
+              className="ghost-btn"
+              title={isFullScreen ? '退出全屏' : '全屏查看'}
+              onClick={() => setIsFullScreen((v) => !v)}
+              style={{ marginRight: '0.5rem' }}
+            >
+              <span className={`codicon ${isFullScreen ? 'codicon-screen-normal' : 'codicon-screen-full'}`} aria-hidden />
+              <span style={{ marginLeft: '0.25rem' }}>{isFullScreen ? '退出全屏' : '全屏'}</span>
+            </button>
             {(beforeTruncated || afterTruncated) && (
               <span className="diff-modal-note">
                 {[
@@ -89,7 +155,7 @@ function DiffModal({ diff, onClose, theme }) {
           <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
             <MonacoDiffEditor
               key={(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}
-              height="70vh"
+              height={isFullScreen ? 'calc(92vh - 80px)' : '70vh'}
               language={language}
               original={before}
               modified={after}
@@ -104,7 +170,7 @@ function DiffModal({ diff, onClose, theme }) {
                 readOnly: true,
                 automaticLayout: true,
                 wordWrap: 'off',
-                diffWordWrap: 'on',
+                diffWordWrap: 'off',
                 minimap: { enabled: false },
               }}
             />
