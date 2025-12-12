@@ -41,24 +41,14 @@ const Icon = ({ name, size = 18 }) => {
                 </svg>
             );
         case 'diff':
-            return (
-                <svg {...common}>
-                    <path d="M5 3h7v5H5z" fill="currentColor" opacity="0.18"></path>
-                    <path d="M12 16h7v5h-7z" fill="currentColor" opacity="0.18"></path>
-                    <path d="M12 8V3l4 0"></path>
-                    <path d="M12 3l-2 2 2 2"></path>
-                    <path d="M12 16v5h-4"></path>
-                    <path d="M12 21l2-2-2-2"></path>
-                    <rect x="4" y="3" width="7" height="5" rx="1"></rect>
-                    <rect x="13" y="16" width="7" height="5" rx="1"></rect>
-                </svg>
-            );
+            return <span className="codicon codicon-git-compare" style={{ fontSize: size, color: 'var(--text)' }} aria-hidden />;
         default:
             return null;
     }
 };
 
 const FILE_DIFF_TOOLS = ['write_file', 'edit_file', 'delete_file', 'rename_file'];
+const isDiffToolName = (name) => FILE_DIFF_TOOLS.includes(name);
 
 function ChatArea({ 
     messages, 
@@ -282,7 +272,7 @@ function ChatArea({
         const statusColor = run.status === 'done' ? 'var(--success)' : (run.status === 'error' ? 'var(--danger)' : 'var(--accent)');
         const diffTarget = run.diffTarget || null;
         const fallbackPath = run.args?.path || run.args?.new_path || run.args?.old_path || '';
-        const shouldShowDiffButton = !!diffTarget?.path || !!diffTarget?.diff_id || FILE_DIFF_TOOLS.includes(run.name);
+        const shouldShowDiffButton = (diffTarget && (diffTarget.path || diffTarget.diff_id)) && isDiffToolName(run.name);
         return (
             <div 
                 key={runKey} 
@@ -444,7 +434,7 @@ function ChatArea({
                                             if (!fallbackPath) return null;
                                             return { path: fallbackPath };
                                         })();
-                                        const shouldShowDiffButton = !!diffTarget?.path || !!diffTarget?.diff_id || FILE_DIFF_TOOLS.includes(msg.name);
+                                        const shouldShowDiffButton = diffTarget && (diffTarget.path || diffTarget.diff_id) && isDiffToolName(msg.name);
                                         return (
                                             <div
                                                 onClick={() => setExpandedRuns((prev) => ({ ...prev, [toolKey]: !toolExpanded }))}
