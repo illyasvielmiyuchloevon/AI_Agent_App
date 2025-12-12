@@ -41,10 +41,27 @@ function DiffModal({ diff, onClose, theme }) {
   const beforeTruncated = hasDiff ? !!diff.before_truncated : false;
   const afterTruncated = hasDiff ? !!diff.after_truncated : false;
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [compactView, setCompactView] = useState(true); // true: 仅改动块；false: 全量文件
+  const editorKey = useMemo(
+    () => `${(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}-${compactView ? 'compact' : 'full'}`,
+    [diff, compactView]
+  );
   const editorRef = useRef(null);
   const modifiedEditorRef = useRef(null);
   const originalEditorRef = useRef(null);
   const modelRef = useRef({ original: null, modified: null });
+
+  const isModelAlive = useCallback((model) => {
+    if (!model) return false;
+    try {
+      if (typeof model.isDisposed === 'function' && model.isDisposed()) return false;
+      // Accessing line count will throw if disposed
+      model.getLineCount();
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   const language = useMemo(() => inferLanguage(path || ''), [path]);
   const monacoTheme = useMemo(() => {
@@ -69,23 +86,11 @@ function DiffModal({ diff, onClose, theme }) {
   }, []);
 
   useEffect(() => {
-    return () => {
-      try { editorRef.current?.dispose(); } catch (e) {}
-      const { original, modified } = modelRef.current;
-      // Defer disposal to avoid race with DiffEditor cleanup
-      setTimeout(() => {
-        try { original?.dispose(); } catch (e) {}
-        try { modified?.dispose(); } catch (e) {}
-      }, 0);
-    };
-  }, []);
-
-  useEffect(() => {
     const diffEditor = editorRef.current;
     const editor = modifiedEditorRef.current || (diffEditor && diffEditor.getModifiedEditor && diffEditor.getModifiedEditor());
     if (!editor) return;
     const { modified } = modelRef.current;
-    if (!modified) return;
+    if (!isModelAlive(modified)) return;
 
     const lineChanges = (diffEditor && diffEditor.getLineChanges && diffEditor.getLineChanges()) || [];
     const firstChange = lineChanges.length > 0 ? lineChanges[0] : null;
@@ -109,7 +114,7 @@ function DiffModal({ diff, onClose, theme }) {
         // ignore
       }
     }, 0);
-  }, [before, after]);
+  }, [before, after, isModelAlive]);
 
   if (!hasDiff) return null;
 
@@ -127,6 +132,15 @@ function DiffModal({ diff, onClose, theme }) {
             {path ? <span className="diff-modal-path">{path}</span> : null}
           </div>
           <div className="diff-modal-actions">
+            <button
+              className="ghost-btn"
+              title={compactView ? '切换为全量文件对比' : '仅显示改动块'}
+              onClick={() => setCompactView((v) => !v)}
+              style={{ marginRight: '0.5rem' }}
+            >
+              <span className="codicon codicon-diff" aria-hidden />
+              <span style={{ marginLeft: '0.25rem' }}>{compactView ? '全量对比' : '仅改动'}</span>
+            </button>
             <button
               className="ghost-btn"
               title={isFullScreen ? '退出全屏' : '全屏查看'}
@@ -154,7 +168,7 @@ function DiffModal({ diff, onClose, theme }) {
         <div className="diff-modal-body">
           <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
             <MonacoDiffEditor
-              key={(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}
+              key={editorKey}
               height={isFullScreen ? 'calc(92vh - 80px)' : '70vh'}
               language={language}
               original={before}
@@ -172,6 +186,17 @@ function DiffModal({ diff, onClose, theme }) {
                 wordWrap: 'off',
                 diffWordWrap: 'off',
                 minimap: { enabled: false },
+                // Try both flags to support different monaco versions
+                hideUnchangedRegions: compactView ? {
+                  enabled: true,
+                  revealLinePadding: 3,
+                  contextLineCount: 3
+                } : { enabled: false },
+                renderUnchangedRegions: compactView ? {
+                  enabled: true,
+                  revealLinePadding: 3,
+                  contextLineCount: 3
+                } : { enabled: false }
               }}
             />
           </Suspense>
