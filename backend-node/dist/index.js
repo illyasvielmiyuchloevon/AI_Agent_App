@@ -202,6 +202,34 @@ app.get('/sessions/:id/logs', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
+// Diff snapshots
+app.get('/sessions/:id/diffs', async (req, res) => {
+    try {
+        const { path: queryPath, limit } = req.query;
+        const diffs = await db.getDiffs({
+            session_id: req.params.id,
+            path: typeof queryPath === 'string' ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined
+        });
+        res.json(diffs);
+    }
+    catch (e) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+app.get('/diffs/:diffId', async (req, res) => {
+    try {
+        const diff = await db.getDiffById(Number(req.params.diffId));
+        if (!diff) {
+            res.status(404).json({ detail: "Diff not found" });
+            return;
+        }
+        res.json(diff);
+    }
+    catch (e) {
+        res.status(500).json({ detail: e.message });
+    }
+});
 app.post('/sessions/:id/chat', async (req, res) => {
     const sessionId = req.params.id;
     const { message, mode, attachments, tool_overrides } = req.body;
@@ -330,10 +358,46 @@ app.post('/workspace/write', async (req, res) => {
         const fullPath = path_1.default.resolve(root, relativePath);
         if (!fullPath.startsWith(root))
             throw new Error("Access denied");
+        // Capture pre/post snapshot for workspace writes as well (so diff is independent of tool calls)
+        let before = '';
+        let before_truncated = false;
+        try {
+            const existing = await promises_1.default.readFile(fullPath, 'utf-8');
+            before_truncated = existing.length > 120000;
+            before = before_truncated ? existing.slice(0, 120000) : existing;
+        }
+        catch {
+            before = '';
+            before_truncated = false;
+        }
         if (create_directories) {
             await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
         }
         await promises_1.default.writeFile(fullPath, content || "", 'utf-8');
+        let after = '';
+        let after_truncated = false;
+        try {
+            const updated = await promises_1.default.readFile(fullPath, 'utf-8');
+            after_truncated = updated.length > 120000;
+            after = after_truncated ? updated.slice(0, 120000) : updated;
+        }
+        catch {
+            after = '';
+        }
+        try {
+            // workspace write is not tied to a session; we store session_id as empty string
+            await db.addDiff({
+                session_id: '',
+                path: relativePath,
+                before,
+                after,
+                before_truncated,
+                after_truncated
+            });
+        }
+        catch (e) {
+            console.warn(`[Workspace] Failed to persist diff for ${relativePath}: ${e.message}`);
+        }
         res.json({ path: relativePath, bytes: (content || "").length });
     }
     catch (e) {

@@ -40,10 +40,25 @@ const Icon = ({ name, size = 18 }) => {
                     <path d="M21.44 11.05l-9.19 9.19a5 5 0 1 1-7.07-7.07l9.19-9.19a3 3 0 1 1 4.24 4.24L9.88 16.24a1 1 0 0 1-1.41-1.41L15.31 8"></path>
                 </svg>
             );
+        case 'diff':
+            return (
+                <svg {...common}>
+                    <path d="M5 3h7v5H5z" fill="currentColor" opacity="0.18"></path>
+                    <path d="M12 16h7v5h-7z" fill="currentColor" opacity="0.18"></path>
+                    <path d="M12 8V3l4 0"></path>
+                    <path d="M12 3l-2 2 2 2"></path>
+                    <path d="M12 16v5h-4"></path>
+                    <path d="M12 21l2-2-2-2"></path>
+                    <rect x="4" y="3" width="7" height="5" rx="1"></rect>
+                    <rect x="13" y="16" width="7" height="5" rx="1"></rect>
+                </svg>
+            );
         default:
             return null;
     }
 };
+
+const FILE_DIFF_TOOLS = ['write_file', 'edit_file', 'delete_file', 'rename_file'];
 
 function ChatArea({ 
     messages, 
@@ -58,7 +73,8 @@ function ChatArea({
     mode,
     modeOptions,
     onModeChange,
-    toolRuns = {}
+    toolRuns = {},
+    onOpenDiff
 }) {
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
@@ -84,6 +100,22 @@ function ChatArea({
             inputRef.current?.focus();
         }
     }, [currentSession, loading]);
+
+    const parseMaybeJSON = (value) => {
+        if (typeof value !== 'string') return value;
+        let text = value.trim();
+        if (text.startsWith('```')) {
+            const firstLineEnd = text.indexOf('\n');
+            if (firstLineEnd !== -1) {
+                text = text.slice(firstLineEnd + 1);
+            }
+            if (text.endsWith('```')) {
+                text = text.slice(0, -3);
+            }
+            text = text.trim();
+        }
+        try { return JSON.parse(text); } catch { return value; }
+    };
 
     const extractContent = (content, fallbackMode) => {
         let textParts = [];
@@ -236,40 +268,58 @@ function ChatArea({
         }
     };
 
-    const toggleRunDetail = (key) => {
-        setExpandedRuns((prev) => ({ ...prev, [key]: !prev[key] }));
-    };
-
     const focusInput = () => {
         inputRef.current?.focus();
+    };
+
+    const toggleRunDetail = (key) => {
+        setExpandedRuns((prev) => ({ ...prev, [key]: !prev[key] }));
     };
 
     const renderRunBadge = (run, messageKey) => {
         const runKey = `${messageKey}-${run.id || run.name}`;
         const expanded = !!expandedRuns[runKey];
         const statusColor = run.status === 'done' ? 'var(--success)' : (run.status === 'error' ? 'var(--danger)' : 'var(--accent)');
-        const statusLabel = run.status === 'done' ? '已完成' : run.status === 'error' ? '失败' : '执行中';
-        const detailPreview = run.detail || '';
-        const shortDetail = detailPreview.length > 80 ? `${detailPreview.slice(0, 80)}…` : detailPreview;
+        const diffTarget = run.diffTarget || null;
+        const fallbackPath = run.args?.path || run.args?.new_path || run.args?.old_path || '';
+        const shouldShowDiffButton = !!diffTarget?.path || !!diffTarget?.diff_id || FILE_DIFF_TOOLS.includes(run.name);
         return (
             <div 
                 key={runKey} 
                 className={`tool-run-chip ${run.status || 'running'}`} 
+                title="点击展开/收起工具调用详情"
                 onClick={() => toggleRunDetail(runKey)}
-                title="收起/展开工具调用详情"
             >
                 <div className="tool-run-chip-main">
-                    <span className="tool-run-chip-icon" style={{ color: statusColor }}>
-                        {run.status === 'done' ? '✔︎' : (run.status === 'error' ? '⚠' : <span className="tool-run-spinner" />)}
+                    <span className="tool-run-chip-icon" style={{ color: '#111' }}>
+                        {run.status === 'running' ? (
+                            <span className="tool-run-spinner" />
+                        ) : (
+                            <span style={{ fontSize: '1.05rem', lineHeight: 1, filter: 'grayscale(1)' }}>🛠</span>
+                        )}
                     </span>
                     <div className="tool-run-chip-text">
                         <div className="tool-run-chip-title">[工具] {run.name || '调用'}</div>
-                        <div className="tool-run-chip-desc" style={{ color: statusColor }}>
-                            {statusLabel} {shortDetail ? `· ${shortDetail}` : ''}
-                        </div>
                     </div>
+                    {shouldShowDiffButton && (
+                        <button
+                            type="button"
+                            className="tool-run-chip-action"
+                            title="查看本次文件修改的 Diff"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                const target = diffTarget || (fallbackPath ? { path: fallbackPath } : null);
+                                if (target) {
+                                    onOpenDiff && onOpenDiff(target);
+                                } else {
+                                    alert('当前调用未找到可用的 diff 记录');
+                                }
+                            }}
+                        >
+                            <Icon name="diff" size={16} />
+                        </button>
+                    )}
                 </div>
-                {run.status === 'running' && <div className="tool-run-progress" />}
                 {expanded && (
                     <div className="tool-run-chip-detail">
                         {run.args && (
@@ -282,11 +332,6 @@ function ChatArea({
                             <div className="tool-run-chip-block">
                                 <div className="tool-run-chip-label">返回值</div>
                                 <pre>{typeof run.result === 'string' ? run.result : JSON.stringify(run.result, null, 2)}</pre>
-                            </div>
-                        )}
-                        {!run.args && !run.result && detailPreview && (
-                            <div className="tool-run-chip-block">
-                                <pre>{detailPreview}</pre>
                             </div>
                         )}
                     </div>
@@ -332,7 +377,7 @@ function ChatArea({
             </div>
 
             {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--panel-sub)' }}>
+            <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--panel-sub)' }}>
                 {!currentSession ? (
                     <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: '2rem' }}>
                         Select a chat to start messaging
@@ -384,9 +429,80 @@ function ChatArea({
                                     )}
                                 </div>
                                 {isToolMessage ? (
-                                    <div style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: '0.82rem', background: 'var(--panel-sub)', padding: '0.6rem', borderRadius: 'var(--radius)', color: 'var(--muted)', border: '1px dashed var(--border)', width: '100%', boxSizing: 'border-box' }}>
-                                        工具调用结果已隐藏
-                                    </div>
+                                    (() => {
+                                        const toolKey = `toolmsg-${messageKey}`;
+                                        const toolExpanded = !!expandedRuns[toolKey];
+                                        const primaryRun = runs[0] || {};
+                                        const status = primaryRun.status || 'done';
+                                        const statusColor = status === 'error' ? 'var(--danger)' : status === 'running' ? 'var(--accent)' : 'var(--success)';
+                                        const statusLabel = status === 'error' ? '工具调用失败（点击查看详情）' : status === 'running' ? '工具调用中' : '工具调用成功';
+                                        const detailLabel = status === 'error' ? '错误' : status === 'running' ? '详情' : '返回';
+                                        const detailSource = primaryRun.result || primaryRun.detail || msg.content || '';
+                                        const argsSource = primaryRun.args;
+                                        const diffTarget = primaryRun?.diffTarget || (() => {
+                                            const fallbackPath = argsSource?.path || argsSource?.new_path || argsSource?.old_path;
+                                            if (!fallbackPath) return null;
+                                            return { path: fallbackPath };
+                                        })();
+                                        const shouldShowDiffButton = !!diffTarget?.path || !!diffTarget?.diff_id || FILE_DIFF_TOOLS.includes(msg.name);
+                                        return (
+                                            <div
+                                                onClick={() => setExpandedRuns((prev) => ({ ...prev, [toolKey]: !toolExpanded }))}
+                                                title="点击展开/收起工具调用详情"
+                                                style={{
+                                                    fontFamily: 'monospace',
+                                                    whiteSpace: 'pre-wrap',
+                                                    fontSize: '0.82rem',
+                                                    background: 'var(--panel-sub)',
+                                                    padding: '0.6rem',
+                                                    borderRadius: 'var(--radius)',
+                                                    color: statusColor,
+                                                    border: `1px solid ${statusColor}`,
+                                                    width: '100%',
+                                                    boxSizing: 'border-box',
+                                                    cursor: 'pointer',
+                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'space-between' }}>
+                                                    <span>{statusLabel}</span>
+                                                    {shouldShowDiffButton && (
+                                                        <button
+                                                            type="button"
+                                                            className="ghost-btn"
+                                                            style={{ padding: '0.25rem 0.5rem', height: 'auto', fontSize: '0.78rem' }}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                if (diffTarget) {
+                                                                    onOpenDiff && onOpenDiff(diffTarget);
+                                                                } else {
+                                                                    alert('当前调用未找到可用的 diff 记录');
+                                                                }
+                                                            }}
+                                                        >
+                                                            查看 Diff
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                {toolExpanded && (
+                                                    <div className="tool-run-chip-detail" style={{ marginTop: '0.5rem' }}>
+                                                        {argsSource && (
+                                                            <div className="tool-run-chip-block">
+                                                                <div className="tool-run-chip-label">入参</div>
+                                                                <pre>{typeof argsSource === 'string' ? argsSource : JSON.stringify(argsSource, null, 2)}</pre>
+                                                            </div>
+                                                        )}
+                                                        {detailSource && (
+                                                            <div className="tool-run-chip-block">
+                                                                <div className="tool-run-chip-label">{detailLabel}</div>
+                                                                <pre>{typeof detailSource === 'string' ? detailSource : JSON.stringify(detailSource, null, 2)}</pre>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()
                                 ) : (
                                     <>
                                         {parsed.text && (
@@ -415,7 +531,7 @@ function ChatArea({
                                         )}
                                     </>
                                 )}
-                                {msg.role !== 'user' && runs.length > 0 && (
+                                {msg.role === 'assistant' && runs.length > 0 && (
                                     <div className="tool-run-row">
                                         {runs.map((run) => renderRunBadge(run, messageKey))}
                                     </div>

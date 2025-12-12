@@ -5,7 +5,7 @@ export abstract class BaseToolImplementation implements BaseTool {
     abstract description: string;
     abstract input_schema: any;
 
-    abstract execute(args: any): Promise<any>;
+    abstract execute(args: any, context?: { sessionId?: string }): Promise<any>;
 
     toOpenAISchema(): ToolSchema {
         return {

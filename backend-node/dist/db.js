@@ -13,6 +13,9 @@ exports.addLog = addLog;
 exports.addMessage = addMessage;
 exports.getMessages = getMessages;
 exports.getLogs = getLogs;
+exports.addDiff = addDiff;
+exports.getDiffById = getDiffById;
+exports.getDiffs = getDiffs;
 exports.loadLlmConfig = loadLlmConfig;
 exports.saveLlmConfig = saveLlmConfig;
 const promises_1 = __importDefault(require("fs/promises"));
@@ -26,7 +29,8 @@ function getDefaultState() {
         sessions: [],
         messages: {},
         logs: {},
-        meta: { message_seq: 0, log_seq: 0 }
+        diffs: [],
+        meta: { message_seq: 0, log_seq: 0, diff_seq: 0 }
     };
 }
 function getDataDir(create = false) {
@@ -55,7 +59,7 @@ async function loadState() {
     try {
         const content = await promises_1.default.readFile(filePath, 'utf-8');
         const raw = JSON.parse(content);
-        return { ...getDefaultState(), ...raw };
+        return normalizeState(raw);
     }
     catch (e) {
         const state = getDefaultState();
@@ -63,12 +67,48 @@ async function loadState() {
         return state;
     }
 }
+function normalizeState(raw) {
+    const base = getDefaultState();
+    const state = {
+        ...base,
+        ...raw,
+        sessions: Array.isArray(raw?.sessions) ? raw.sessions : base.sessions,
+        messages: raw?.messages && typeof raw.messages === 'object' ? raw.messages : base.messages,
+        logs: raw?.logs && typeof raw.logs === 'object' ? raw.logs : base.logs,
+        diffs: Array.isArray(raw?.diffs) ? raw.diffs : [],
+        meta: {
+            message_seq: raw?.meta?.message_seq || 0,
+            log_seq: raw?.meta?.log_seq || 0,
+            diff_seq: raw?.meta?.diff_seq || 0
+        }
+    };
+    return state;
+}
 async function saveState(state) {
     const dir = await ensureDataDir();
     const filePath = path_1.default.join(dir, DATA_FILE_NAME);
     const tempPath = `${filePath}.tmp`;
-    await promises_1.default.writeFile(tempPath, JSON.stringify(state, null, 2), 'utf-8');
-    await promises_1.default.rename(tempPath, filePath);
+    const payload = JSON.stringify(state, null, 2);
+    await promises_1.default.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await promises_1.default.rename(tempPath, filePath);
+    }
+    catch (e) {
+        console.warn(`[DB] rename failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await promises_1.default.writeFile(filePath, payload, 'utf-8');
+        }
+        catch (inner) {
+            console.error(`[DB] direct write failed: ${inner?.message}`);
+            throw inner;
+        }
+        finally {
+            try {
+                await promises_1.default.unlink(tempPath);
+            }
+            catch { }
+        }
+    }
 }
 // --- Public API ---
 async function initDb() {
@@ -202,6 +242,43 @@ async function getLogs(sessionId) {
     const logs = state.logs[sessionId] || [];
     return logs.sort((a, b) => b.id - a.id); // Descending by ID (newest first)
 }
+// --- Diff Snapshots ---
+async function addDiff(entry) {
+    const state = await loadState();
+    if (!Array.isArray(state.diffs)) {
+        state.diffs = [];
+    }
+    const seq = (state.meta.diff_seq || 0) + 1;
+    state.meta.diff_seq = seq;
+    const created_at = new Date().toISOString();
+    const record = {
+        id: seq,
+        session_id: entry.session_id,
+        path: entry.path,
+        before: entry.before,
+        after: entry.after,
+        before_truncated: !!entry.before_truncated,
+        after_truncated: !!entry.after_truncated,
+        created_at
+    };
+    state.diffs.push(record);
+    await saveState(state);
+    return record;
+}
+async function getDiffById(id) {
+    const state = await loadState();
+    return state.diffs.find(d => d.id === id) || null;
+}
+async function getDiffs(options) {
+    const state = await loadState();
+    const limit = options.limit && options.limit > 0 ? options.limit : 20;
+    let list = state.diffs;
+    if (options.session_id)
+        list = list.filter(d => d.session_id === options.session_id);
+    if (options.path)
+        list = list.filter(d => d.path === options.path);
+    return list.sort((a, b) => b.id - a.id).slice(0, limit);
+}
 // LLM Config
 function getLlmConfigPath() {
     return path_1.default.join(getDataDir(), LLM_CONFIG_FILE);
@@ -226,7 +303,26 @@ async function saveLlmConfig(config) {
     console.log(`[DB] Saving LLM config to: ${filePath}`);
     console.log(`[DB] Saving config provider: ${config.provider}`);
     const tempPath = `${filePath}.tmp`;
-    await promises_1.default.writeFile(tempPath, JSON.stringify(config, null, 2), 'utf-8');
-    await promises_1.default.rename(tempPath, filePath);
+    const payload = JSON.stringify(config, null, 2);
+    await promises_1.default.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await promises_1.default.rename(tempPath, filePath);
+    }
+    catch (e) {
+        console.warn(`[DB] rename config failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await promises_1.default.writeFile(filePath, payload, 'utf-8');
+        }
+        catch (inner) {
+            console.error(`[DB] direct write config failed: ${inner?.message}`);
+            throw inner;
+        }
+        finally {
+            try {
+                await promises_1.default.unlink(tempPath);
+            }
+            catch { }
+        }
+    }
     return config;
 }

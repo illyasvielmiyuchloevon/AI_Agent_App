@@ -31,10 +31,23 @@ interface DBState {
     sessions: Session[];
     messages: Record<string, Message[]>;
     logs: Record<string, any[]>;
+    file_diffs: DiffEntry[];
     meta: {
         message_seq: number;
         log_seq: number;
+        diff_seq: number;
     };
+}
+
+export interface DiffEntry {
+    id: number;
+    session_id: string;
+    path: string;
+    before: string;
+    after: string;
+    before_truncated: boolean;
+    after_truncated: boolean;
+    created_at: string;
 }
 
 function getDefaultState(): DBState {
@@ -42,7 +55,8 @@ function getDefaultState(): DBState {
         sessions: [],
         messages: {},
         logs: {},
-        meta: { message_seq: 0, log_seq: 0 }
+        file_diffs: [],
+        meta: { message_seq: 0, log_seq: 0, diff_seq: 0 }
     };
 }
 
@@ -74,7 +88,7 @@ async function loadState(): Promise<DBState> {
     try {
         const content = await fs.readFile(filePath, 'utf-8');
         const raw = JSON.parse(content);
-        return { ...getDefaultState(), ...raw };
+        return normalizeState(raw);
     } catch (e) {
         const state = getDefaultState();
         await saveState(state);
@@ -82,12 +96,45 @@ async function loadState(): Promise<DBState> {
     }
 }
 
+function normalizeState(raw: any): DBState {
+    const base = getDefaultState();
+    const legacyDiffs = Array.isArray(raw?.diffs) ? raw.diffs : [];
+    const fileDiffs = Array.isArray(raw?.file_diffs) ? raw.file_diffs : legacyDiffs;
+    const state: DBState = {
+        ...base,
+        ...raw,
+        sessions: Array.isArray(raw?.sessions) ? raw.sessions : base.sessions,
+        messages: raw?.messages && typeof raw.messages === 'object' ? raw.messages : base.messages,
+        logs: raw?.logs && typeof raw.logs === 'object' ? raw.logs : base.logs,
+        file_diffs: fileDiffs,
+        meta: {
+            message_seq: raw?.meta?.message_seq || 0,
+            log_seq: raw?.meta?.log_seq || 0,
+            diff_seq: raw?.meta?.diff_seq || 0
+        }
+    };
+    return state;
+}
+
 async function saveState(state: DBState): Promise<void> {
     const dir = await ensureDataDir();
     const filePath = path.join(dir, DATA_FILE_NAME);
     const tempPath = `${filePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(state, null, 2), 'utf-8');
-    await fs.rename(tempPath, filePath);
+    const payload = JSON.stringify(state, null, 2);
+    await fs.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await fs.rename(tempPath, filePath);
+    } catch (e: any) {
+        console.warn(`[DB] rename failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await fs.writeFile(filePath, payload, 'utf-8');
+        } catch (inner) {
+            console.error(`[DB] direct write failed: ${(inner as any)?.message}`);
+            throw inner;
+        } finally {
+            try { await fs.unlink(tempPath); } catch {}
+        }
+    }
 }
 
 // --- Public API ---
@@ -250,6 +297,54 @@ export async function getLogs(sessionId: string): Promise<any[]> {
     return logs.sort((a, b) => b.id - a.id); // Descending by ID (newest first)
 }
 
+// --- Diff Snapshots ---
+
+export async function addDiff(entry: {
+    session_id: string;
+    path: string;
+    before: string;
+    after: string;
+    before_truncated?: boolean;
+    after_truncated?: boolean;
+}): Promise<DiffEntry> {
+    const state = await loadState();
+    if (!Array.isArray((state as any).file_diffs)) {
+        (state as any).file_diffs = [];
+    }
+    const seq = (state.meta.diff_seq || 0) + 1;
+    state.meta.diff_seq = seq;
+    const created_at = new Date().toISOString();
+    const record: DiffEntry = {
+        id: seq,
+        session_id: entry.session_id,
+        path: entry.path,
+        before: entry.before,
+        after: entry.after,
+        before_truncated: !!entry.before_truncated,
+        after_truncated: !!entry.after_truncated,
+        created_at
+    };
+    state.file_diffs.push(record);
+    // keep legacy mirror for any older consumers
+    (state as any).diffs = state.file_diffs;
+    await saveState(state);
+    return record;
+}
+
+export async function getDiffById(id: number): Promise<DiffEntry | null> {
+    const state = await loadState();
+    return state.file_diffs.find(d => d.id === id) || null;
+}
+
+export async function getDiffs(options: { session_id?: string, path?: string, limit?: number }): Promise<DiffEntry[]> {
+    const state = await loadState();
+    const limit = options.limit && options.limit > 0 ? options.limit : 20;
+    let list = state.file_diffs;
+    if (options.session_id) list = list.filter(d => d.session_id === options.session_id);
+    if (options.path) list = list.filter(d => d.path === options.path);
+    return list.sort((a, b) => b.id - a.id).slice(0, limit);
+}
+
 // LLM Config
 
 function getLlmConfigPath(): string {
@@ -276,7 +371,20 @@ export async function saveLlmConfig(config: any): Promise<any> {
     console.log(`[DB] Saving LLM config to: ${filePath}`);
     console.log(`[DB] Saving config provider: ${config.provider}`);
     const tempPath = `${filePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(config, null, 2), 'utf-8');
-    await fs.rename(tempPath, filePath);
+    const payload = JSON.stringify(config, null, 2);
+    await fs.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await fs.rename(tempPath, filePath);
+    } catch (e: any) {
+        console.warn(`[DB] rename config failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await fs.writeFile(filePath, payload, 'utf-8');
+        } catch (inner) {
+            console.error(`[DB] direct write config failed: ${(inner as any)?.message}`);
+            throw inner;
+        } finally {
+            try { await fs.unlink(tempPath); } catch {}
+        }
+    }
     return config;
 }

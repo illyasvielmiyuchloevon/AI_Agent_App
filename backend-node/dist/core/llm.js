@@ -50,7 +50,11 @@ class OpenAIProvider extends LLMClient {
         super();
         const opts = { apiKey: apiKey };
         if (baseUrl && baseUrl.trim().length > 0) {
-            opts.baseURL = baseUrl;
+            // Normalize Base URL: remove surrounding quotes/backticks and whitespace
+            let cleaned = baseUrl.trim().replace(/^['"`]+|['"`]+$/g, '');
+            if (cleaned.length > 0) {
+                opts.baseURL = cleaned;
+            }
         }
         console.log(`[OpenAI] Initializing client. BaseURL: ${opts.baseURL || 'default'}`);
         this.client = new openai_1.default(opts);

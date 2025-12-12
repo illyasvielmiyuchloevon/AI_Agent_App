@@ -74,7 +74,7 @@ export class ToolRegistry {
 
         try {
             console.log(`[ToolRegistry] Executing ${name} with args: ${JSON.stringify(args)}`);
-            const result = await tool.execute(args);
+            const result = await tool.execute(args, { sessionId });
             const duration = Date.now() - startTime;
             
             if (this.debugMode) {

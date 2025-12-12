@@ -32,11 +32,17 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Agent = void 0;
 const db = __importStar(require("./db"));
 const tool_registry_1 = require("./core/tool_registry");
 const prompts_1 = require("./core/prompts");
+const promises_1 = __importDefault(require("fs/promises"));
+const path_1 = __importDefault(require("path"));
+const context_1 = require("./context");
 const filesystem_1 = require("./tools/filesystem");
 const shell_1 = require("./tools/shell");
 const screen_capture_1 = require("./tools/screen_capture");
@@ -51,6 +57,7 @@ class Agent {
     systemPrompt = (0, prompts_1.getPrompt)('chat');
     contextMaxLength = 128000;
     registry;
+    diffCap = 120_000;
     // Toolsets
     fileTools;
     shellTool;
@@ -156,6 +163,20 @@ class Agent {
         }
         return 0;
     }
+    async snapshotFile(relPath) {
+        try {
+            const root = (0, context_1.getWorkspaceRoot)();
+            const full = path_1.default.resolve(root, relPath);
+            const data = await promises_1.default.readFile(full, 'utf-8');
+            if (data.length > this.diffCap) {
+                return { content: data.slice(0, this.diffCap), truncated: true };
+            }
+            return { content: data, truncated: false };
+        }
+        catch {
+            return { content: null, truncated: false };
+        }
+    }
     getActiveTools() {
         return this.tools;
     }
@@ -226,24 +247,95 @@ class Agent {
             for (const toolCall of response.tool_calls) {
                 yield `\n[Executing ${toolCall.function.name}...]\n`;
                 let result = "";
+                let preSnapshot = null;
+                let postSnapshot = null;
+                const toolName = toolCall.function.name;
+                let args = toolCall.function.arguments || {};
+                try {
+                    if (typeof args === 'string')
+                        args = JSON.parse(args);
+                }
+                catch {
+                    // leave as is
+                }
+                const isDiffCandidate = ['write_file', 'edit_file', 'delete_file', 'rename_file'].includes(toolName);
                 try {
                     if (this.activeToolNames.size > 0 && !this.activeToolNames.has(toolCall.function.name)) {
                         throw new Error(`Tool ${toolCall.function.name} is not enabled in ${this.mode} mode`);
                     }
                     console.log(`[Agent] Executing tool_call id=${toolCall.id} name=${toolCall.function.name} args=${JSON.stringify(toolCall.function.arguments)}`);
+                    if (isDiffCandidate) {
+                        if (toolName === 'rename_file') {
+                            preSnapshot = await this.snapshotFile(args.old_path);
+                        }
+                        else {
+                            preSnapshot = await this.snapshotFile(args.path);
+                        }
+                    }
                     result = await this.registry.execute(toolCall.function.name, toolCall.function.arguments, this.sessionId);
+                    if (isDiffCandidate) {
+                        let targetPath = args.path;
+                        if (toolName === 'rename_file') {
+                            targetPath = args.new_path;
+                        }
+                        postSnapshot = await this.snapshotFile(targetPath);
+                    }
                 }
                 catch (e) {
                     result = `Error: ${e.message}`;
                 }
-                if (typeof result !== 'string') {
-                    result = JSON.stringify(result);
+                // Normalize result and attach diff when possible
+                let resultObject;
+                if (typeof result === 'string') {
+                    try {
+                        resultObject = JSON.parse(result);
+                    }
+                    catch {
+                        resultObject = { message: result };
+                    }
                 }
-                console.log(`[Agent] Tool result id=${toolCall.id} name=${toolCall.function.name} size=${result.length}`);
+                else {
+                    resultObject = result;
+                }
+                const hasDiff = resultObject && typeof resultObject === 'object' && resultObject.diff;
+                if (isDiffCandidate) {
+                    const before = preSnapshot?.content ?? '';
+                    const after = postSnapshot?.content ?? '';
+                    const diffPath = toolName === 'rename_file' ? args.new_path : args.path;
+                    const diff = {
+                        path: diffPath,
+                        before,
+                        after,
+                        before_truncated: !!preSnapshot?.truncated,
+                        after_truncated: !!postSnapshot?.truncated
+                    };
+                    // Attach to message for convenience
+                    if (!hasDiff) {
+                        resultObject = { ...resultObject, diff };
+                    }
+                    // Persist snapshot independently of tool message
+                    if (this.sessionId) {
+                        try {
+                            await db.addDiff({
+                                session_id: this.sessionId,
+                                path: diffPath,
+                                before,
+                                after,
+                                before_truncated: !!preSnapshot?.truncated,
+                                after_truncated: !!postSnapshot?.truncated
+                            });
+                        }
+                        catch (e) {
+                            console.warn(`[Agent] Failed to persist diff snapshot: ${e.message}`);
+                        }
+                    }
+                }
+                const serialized = typeof resultObject === 'string' ? resultObject : JSON.stringify(resultObject);
+                console.log(`[Agent] Tool result id=${toolCall.id} name=${toolCall.function.name} size=${serialized.length}`);
                 const toolMsg = {
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    content: result,
+                    content: serialized,
                     name: toolCall.function.name
                 };
                 this.history.push(toolMsg);

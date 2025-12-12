@@ -33,6 +33,6 @@ export interface BaseTool {
     name: string;
     description: string;
     input_schema: any;
-    execute(args: any): Promise<any>;
+    execute(args: any, context?: { sessionId?: string }): Promise<any>;
     toOpenAISchema(): ToolSchema;
 }

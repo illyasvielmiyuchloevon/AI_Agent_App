@@ -9,6 +9,34 @@ const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const base_tool_1 = require("../core/base_tool");
 const context_1 = require("../context");
+const MAX_DIFF_CHARS = 120_000; // keep diff payloads bounded to avoid blowing up context
+async function readFileSafe(fullPath) {
+    try {
+        const content = await promises_1.default.readFile(fullPath, 'utf-8');
+        return content;
+    }
+    catch {
+        return null;
+    }
+}
+function snapshotContent(raw) {
+    if (typeof raw !== 'string')
+        return { content: '', truncated: false };
+    if (raw.length <= MAX_DIFF_CHARS)
+        return { content: raw, truncated: false };
+    return { content: raw.slice(0, MAX_DIFF_CHARS), truncated: true };
+}
+function buildDiffPayload(filePath, beforeRaw, afterRaw) {
+    const before = snapshotContent(beforeRaw);
+    const after = snapshotContent(afterRaw);
+    return {
+        path: filePath,
+        before: before.content,
+        after: after.content,
+        before_truncated: before.truncated,
+        after_truncated: after.truncated
+    };
+}
 function isLikelyText(content) {
     return content.indexOf('\0') === -1;
 }
@@ -173,9 +201,16 @@ class WriteFileTool extends base_tool_1.BaseToolImplementation {
             if (args.create_directories !== false) {
                 await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
             }
+            const beforeContent = await readFileSafe(fullPath);
             await promises_1.default.writeFile(fullPath, args.content, 'utf-8');
             console.log(`[Filesystem] Write success: ${args.path}`);
-            return `Successfully wrote to ${args.path}`;
+            return {
+                status: "ok",
+                path: args.path,
+                bytes: (args.content || "").length,
+                message: `Successfully wrote to ${args.path}`,
+                diff: buildDiffPayload(args.path, beforeContent, args.content || '')
+            };
         }
         catch (e) {
             console.error(`[Filesystem] Write error: ${e.message}`);
@@ -248,6 +283,7 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
         }
         try {
             let content = await promises_1.default.readFile(fullPath, 'utf-8');
+            const originalContent = content;
             const { edits, warnings } = this.normalizeEdits(args);
             const appliedDetails = [];
             for (const edit of edits) {
@@ -305,7 +341,8 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
                 applied: appliedDetails.length,
                 details: appliedDetails,
                 warnings,
-                message: `Edited ${args.path} (${appliedDetails.length} changes applied)`
+                message: `Edited ${args.path} (${appliedDetails.length} changes applied)`,
+                diff: buildDiffPayload(args.path, originalContent, content)
             };
         }
         catch (e) {
@@ -474,8 +511,19 @@ class DeleteFileTool extends base_tool_1.BaseToolImplementation {
             throw new Error("Access denied: Cannot delete files outside workspace.");
         }
         try {
+            let beforeContent = null;
+            try {
+                const stats = await promises_1.default.stat(fullPath);
+                if (stats.isFile()) {
+                    beforeContent = await readFileSafe(fullPath);
+                }
+            }
+            catch {
+                /* ignore missing files */
+            }
             await promises_1.default.rm(fullPath, { recursive: true, force: true });
-            return { status: "ok", path: args.path, deleted: true };
+            const diff = beforeContent !== null ? buildDiffPayload(args.path, beforeContent, '') : undefined;
+            return { status: "ok", path: args.path, deleted: true, diff };
         }
         catch (e) {
             console.error(`[Filesystem] DeleteFile error: ${e.message}`);
@@ -504,9 +552,24 @@ class RenameFileTool extends base_tool_1.BaseToolImplementation {
             throw new Error("Access denied: Cannot rename files outside workspace.");
         }
         try {
+            let beforeContent = null;
+            let isFile = false;
+            try {
+                const stats = await promises_1.default.stat(oldFullPath);
+                isFile = stats.isFile();
+                if (isFile) {
+                    beforeContent = await readFileSafe(oldFullPath);
+                }
+            }
+            catch {
+                /* ignore stat errors; proceed to rename for robustness */
+            }
             await promises_1.default.mkdir(path_1.default.dirname(newFullPath), { recursive: true });
             await promises_1.default.rename(oldFullPath, newFullPath);
-            return { status: "ok", from: args.old_path, to: args.new_path };
+            const diff = isFile && beforeContent !== null
+                ? buildDiffPayload(args.new_path, beforeContent, await readFileSafe(newFullPath) ?? '')
+                : undefined;
+            return { status: "ok", from: args.old_path, to: args.new_path, diff };
         }
         catch (e) {
             console.error(`[Filesystem] RenameFile error: ${e.message}`);

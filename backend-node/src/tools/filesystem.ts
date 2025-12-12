@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { BaseToolImplementation } from '../core/base_tool';
 import { getWorkspaceRoot } from '../context';
+import { takeSnapshot, persistDiffSafely, emptySnapshot } from '../diffs';
 
 function isLikelyText(content: string): boolean {
     return content.indexOf('\0') === -1;
@@ -121,7 +122,7 @@ export class ReadFileTool extends BaseToolImplementation {
         required: ["path"]
     };
 
-    async execute(args: { path: string }): Promise<any> {
+    async execute(args: { path: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] ReadFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
         const fullPath = path.resolve(root, args.path);
@@ -160,7 +161,7 @@ export class WriteFileTool extends BaseToolImplementation {
         required: ["path", "content"]
     };
 
-    async execute(args: { path: string, content: string, create_directories?: boolean }): Promise<any> {
+    async execute(args: { path: string, content: string, create_directories?: boolean }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] WriteFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
         const fullPath = path.resolve(root, args.path);
@@ -174,9 +175,23 @@ export class WriteFileTool extends BaseToolImplementation {
             if (args.create_directories !== false) {
                 await fs.mkdir(path.dirname(fullPath), { recursive: true });
             }
+            const beforeSnapshot = await takeSnapshot(args.path);
             await fs.writeFile(fullPath, args.content, 'utf-8');
+            const afterSnapshot = await takeSnapshot(args.path);
+            const diff = await persistDiffSafely({
+                sessionId: context.sessionId,
+                path: args.path,
+                before: beforeSnapshot,
+                after: afterSnapshot
+            });
             console.log(`[Filesystem] Write success: ${args.path}`);
-            return `Successfully wrote to ${args.path}`;
+            return {
+                status: "ok",
+                path: args.path,
+                bytes: (args.content || "").length,
+                message: `Successfully wrote to ${args.path}`,
+                diff
+            };
         } catch (e: any) {
             console.error(`[Filesystem] Write error: ${e.message}`);
             return `Error writing file: ${e.message}`;
@@ -240,7 +255,7 @@ export class EditFileTool extends BaseToolImplementation {
         ]
     };
 
-    async execute(args: { path: string, edits?: any, search?: string, replace?: string, description?: string }): Promise<any> {
+    async execute(args: { path: string, edits?: any, search?: string, replace?: string, description?: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] EditFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
         const fullPath = path.resolve(root, args.path);
@@ -250,6 +265,7 @@ export class EditFileTool extends BaseToolImplementation {
         }
 
         try {
+            const beforeSnapshot = await takeSnapshot(args.path);
             let content = await fs.readFile(fullPath, 'utf-8');
             const { edits, warnings } = this.normalizeEdits(args);
             const appliedDetails: any[] = [];
@@ -301,13 +317,21 @@ export class EditFileTool extends BaseToolImplementation {
             }
 
             await fs.writeFile(fullPath, content, 'utf-8');
+            const afterSnapshot = await takeSnapshot(args.path);
+            const diff = await persistDiffSafely({
+                sessionId: context.sessionId,
+                path: args.path,
+                before: beforeSnapshot,
+                after: afterSnapshot
+            });
             return {
                 status: "ok",
                 path: args.path,
                 applied: appliedDetails.length,
                 details: appliedDetails,
                 warnings,
-                message: `Edited ${args.path} (${appliedDetails.length} changes applied)`
+                message: `Edited ${args.path} (${appliedDetails.length} changes applied)`,
+                diff
             };
         } catch (e: any) {
             console.error(`[Filesystem] Edit error: ${e.message}`);
@@ -410,7 +434,7 @@ export class ListFilesTool extends BaseToolImplementation {
         }
     };
 
-    async execute(args: { path?: string }): Promise<any> {
+    async execute(args: { path?: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] ListFilesTool: ${args.path || '.'}`);
         const root = getWorkspaceRoot();
         const targetPath = args.path ? path.resolve(root, args.path) : root;
@@ -452,7 +476,7 @@ export class CreateFolderTool extends BaseToolImplementation {
         required: ["path"]
     };
 
-    async execute(args: { path: string }): Promise<any> {
+    async execute(args: { path: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] CreateFolderTool: ${args.path}`);
         const root = getWorkspaceRoot();
         const fullPath = path.resolve(root, args.path);
@@ -482,7 +506,7 @@ export class DeleteFileTool extends BaseToolImplementation {
         required: ["path"]
     };
 
-    async execute(args: { path: string }): Promise<any> {
+    async execute(args: { path: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] DeleteFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
         const fullPath = path.resolve(root, args.path);
@@ -492,8 +516,24 @@ export class DeleteFileTool extends BaseToolImplementation {
         }
 
         try {
+            let shouldCapture = false;
+            try {
+                const stats = await fs.stat(fullPath);
+                shouldCapture = stats.isFile();
+            } catch {
+                /* ignore missing files */
+            }
+            const beforeSnapshot = shouldCapture ? await takeSnapshot(args.path) : emptySnapshot();
             await fs.rm(fullPath, { recursive: true, force: true });
-            return { status: "ok", path: args.path, deleted: true };
+            const diff = shouldCapture
+                ? await persistDiffSafely({
+                    sessionId: context.sessionId,
+                    path: args.path,
+                    before: beforeSnapshot,
+                    after: emptySnapshot()
+                })
+                : undefined;
+            return { status: "ok", path: args.path, deleted: true, diff };
         } catch (e: any) {
              console.error(`[Filesystem] DeleteFile error: ${e.message}`);
              return { status: "error", message: e.message };
@@ -513,7 +553,7 @@ export class RenameFileTool extends BaseToolImplementation {
         required: ["old_path", "new_path"]
     };
 
-    async execute(args: { old_path: string, new_path: string }): Promise<any> {
+    async execute(args: { old_path: string, new_path: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] RenameFileTool: ${args.old_path} -> ${args.new_path}`);
         const root = getWorkspaceRoot();
         const oldFullPath = path.resolve(root, args.old_path);
@@ -524,9 +564,29 @@ export class RenameFileTool extends BaseToolImplementation {
         }
 
         try {
+            let isFile = false;
+            let beforeSnapshot = emptySnapshot();
+            try {
+                const stats = await fs.stat(oldFullPath);
+                isFile = stats.isFile();
+                if (isFile) {
+                    beforeSnapshot = await takeSnapshot(args.old_path);
+                }
+            } catch {
+                /* ignore stat errors; proceed to rename for robustness */
+            }
             await fs.mkdir(path.dirname(newFullPath), { recursive: true });
             await fs.rename(oldFullPath, newFullPath);
-            return { status: "ok", from: args.old_path, to: args.new_path };
+            const afterSnapshot = isFile ? await takeSnapshot(args.new_path) : emptySnapshot();
+            const diff = isFile
+                ? await persistDiffSafely({
+                    sessionId: context.sessionId,
+                    path: args.new_path,
+                    before: beforeSnapshot,
+                    after: afterSnapshot
+                })
+                : undefined;
+            return { status: "ok", from: args.old_path, to: args.new_path, diff };
         } catch (e: any) {
              console.error(`[Filesystem] RenameFile error: ${e.message}`);
              return { status: "error", message: e.message };
@@ -553,7 +613,7 @@ export class SearchInFilesTool extends BaseToolImplementation {
         required: ["query"]
     };
 
-    async execute(args: { query: string, path?: string, paths?: string[], files?: string[], file_globs?: string[], regex?: boolean, case_sensitive?: boolean, context_lines?: number, max_results?: number }): Promise<any> {
+    async execute(args: { query: string, path?: string, paths?: string[], files?: string[], file_globs?: string[], regex?: boolean, case_sensitive?: boolean, context_lines?: number, max_results?: number }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] SearchInFilesTool: ${args.query} in ${args.path || args.paths?.join(',') || args.files?.join(',') || '.'}`);
         const root = getWorkspaceRoot();
         const searchRoots = (args.paths && args.paths.length > 0)
@@ -645,7 +705,7 @@ export class ProjectStructureTool extends BaseToolImplementation {
         required: []
     };
 
-    async execute(args: { include_content?: boolean }): Promise<any> {
+    async execute(args: { include_content?: boolean }, _context: { sessionId?: string } = {}): Promise<any> {
         const root = getWorkspaceRoot();
         try {
             const structure = await getProjectStructure(root);

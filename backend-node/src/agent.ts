@@ -219,6 +219,13 @@ export class Agent {
                 yield `\n[Executing ${toolCall.function.name}...]\n`;
                 
                 let result: any = "";
+                const toolName = toolCall.function.name;
+                let args: any = toolCall.function.arguments || {};
+                try {
+                    if (typeof args === 'string') args = JSON.parse(args);
+                } catch {
+                    // leave as is
+                }
                 try {
                     if (this.activeToolNames.size > 0 && !this.activeToolNames.has(toolCall.function.name)) {
                         throw new Error(`Tool ${toolCall.function.name} is not enabled in ${this.mode} mode`);
@@ -229,15 +236,21 @@ export class Agent {
                     result = `Error: ${e.message}`;
                 }
 
-                if (typeof result !== 'string') {
-                    result = JSON.stringify(result);
+                // Normalize result and attach diff when possible
+                let resultObject: any;
+                if (typeof result === 'string') {
+                    try { resultObject = JSON.parse(result); } catch { resultObject = { message: result }; }
+                } else {
+                    resultObject = result;
                 }
-                console.log(`[Agent] Tool result id=${toolCall.id} name=${toolCall.function.name} size=${result.length}`);
+
+                const serialized = typeof resultObject === 'string' ? resultObject : JSON.stringify(resultObject);
+                console.log(`[Agent] Tool result id=${toolCall.id} name=${toolCall.function.name} size=${serialized.length}`);
 
                 const toolMsg: UnifiedMessage = {
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    content: result,
+                    content: serialized,
                     name: toolCall.function.name
                 };
                 

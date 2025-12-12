@@ -8,6 +8,7 @@ import ConfigPanel from './components/ConfigPanel';
 import TitleBar from './components/TitleBar';
 import Workspace from './components/Workspace';
 import { LocalWorkspaceDriver } from './utils/localWorkspaceDriver';
+import DiffModal from './components/DiffModal';
 
 const DEBUG_SEPARATORS = false;
 
@@ -238,6 +239,7 @@ function App() {
 
   // --- Modal State ---
   const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', onConfirm: () => {}, onClose: () => {} });
+  const [diffModal, setDiffModal] = useState(null);
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -706,6 +708,53 @@ function App() {
       }
   }, [projectMeta]);
 
+  const openDiffModal = useCallback((payload) => {
+      if (!payload) return;
+      setDiffModal(payload);
+  }, []);
+
+  const fetchDiffSnapshot = useCallback(async ({ diffId, path } = {}) => {
+      if (!currentSessionId) return null;
+      try {
+          let url = '';
+          if (diffId) {
+              url = `/api/diffs/${diffId}`;
+          } else if (path) {
+              url = `/api/diffs?session_id=${encodeURIComponent(currentSessionId)}&path=${encodeURIComponent(path)}&limit=1`;
+          } else {
+              url = `/api/diffs?session_id=${encodeURIComponent(currentSessionId)}&limit=1`;
+          }
+          const res = await projectFetch(url);
+          if (!res.ok) return null;
+          const data = await res.json();
+          if (Array.isArray(data)) {
+              return data[0] || null;
+          }
+          return data;
+      } catch (e) {
+          console.warn('fetchDiffSnapshot failed', e);
+          return null;
+      }
+  }, [currentSessionId, projectFetch]);
+
+  const handleOpenDiff = useCallback(async (payload = {}) => {
+      const diffId = payload?.diff_id || payload?.id;
+      const path = payload?.path;
+      const direct = payload && payload.before !== undefined && payload.after !== undefined ? payload : null;
+      const latest = await fetchDiffSnapshot({ diffId, path });
+      if (latest && latest.before !== undefined && latest.after !== undefined) {
+          openDiffModal(latest);
+          return;
+      }
+      if (direct) {
+          openDiffModal(direct);
+          return;
+      }
+      alert('未找到可用的 diff 快照（请确认已触发文件写入操作）');
+  }, [fetchDiffSnapshot, openDiffModal]);
+
+  const closeDiffModal = useCallback(() => setDiffModal(null), []);
+
   const mergeRunLists = useCallback((existing = [], incoming = []) => {
       const map = new Map();
       existing.forEach((run, idx) => {
@@ -718,6 +767,23 @@ function App() {
           map.set(key, prev ? { ...prev, ...run, status: run.status || prev.status } : run);
       });
       return Array.from(map.values());
+  }, []);
+
+  const deriveDiffTarget = useCallback((result, args) => {
+      const resultObject = result && typeof result === 'object' ? result : null;
+      const diffObject = resultObject && typeof resultObject.diff === 'object' ? resultObject.diff : null;
+      const diffId = typeof resultObject?.diff_id === 'number'
+          ? resultObject.diff_id
+          : (diffObject && typeof diffObject.id === 'number' ? diffObject.id : undefined);
+      const pathCandidate =
+          (diffObject && typeof diffObject.path === 'string' && diffObject.path) ||
+          (resultObject && typeof resultObject.path === 'string' && resultObject.path) ||
+          (args && typeof args.path === 'string' && args.path) ||
+          (args && typeof args.new_path === 'string' && args.new_path) ||
+          (args && typeof args.old_path === 'string' && args.old_path) ||
+          undefined;
+      if (!diffId && !pathCandidate) return null;
+      return { diff_id: diffId, path: pathCandidate };
   }, []);
 
   const buildToolRunsFromMessages = useCallback((list = []) => {
@@ -738,7 +804,8 @@ function App() {
                       name: tc.function?.name || 'tool',
                       status: 'running',
                       detail: typeof parsedArgs === 'string' ? parsedArgs.slice(0, 120) : JSON.stringify(parsedArgs || {}).slice(0, 120),
-                      args: parsedArgs
+                      args: parsedArgs,
+                      diffTarget: deriveDiffTarget(null, parsedArgs)
                   };
               });
               if (calls.length) {
@@ -758,18 +825,25 @@ function App() {
           }
           const previewSource = typeof parsedResult === 'string' ? parsedResult : JSON.stringify(parsedResult || {});
           const status = (previewSource || '').toLowerCase().includes('error') ? 'error' : 'done';
+          const existingRuns = derived[targetId] || [];
+          const argsSource = (existingRuns.find((r) => r.id === (msg.tool_call_id || `tool-${idx}`)) || {}).args;
+          const diffTarget = deriveDiffTarget(parsedResult, argsSource);
           const nextRun = {
               id: msg.tool_call_id || `tool-${idx}`,
               name: msg.name || 'tool',
               status,
               detail: previewSource ? previewSource.slice(0, 160) : '',
-              result: parsedResult
+              result: parsedResult,
+              diffTarget
           };
           derived[targetId] = mergeRunLists(derived[targetId] || [], [nextRun]);
+          // Also attach to the tool message itself so the UI can show buttons on tool bubbles.
+          const selfCid = msg._cid || msg.id || `toolmsg-${idx}`;
+          derived[selfCid] = mergeRunLists(derived[selfCid] || [], [nextRun]);
       });
 
       return derived;
-  }, [mergeRunLists]);
+  }, [mergeRunLists, deriveDiffTarget]);
 
   const normalizeMessages = useCallback((data = []) => data.map((msg, idx) => {
       let payload = msg.content;
@@ -1310,7 +1384,6 @@ function App() {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const assistantCid = `assistant-${Date.now()}`;
     streamBufferRef.current = '';
 
     try {
@@ -1327,45 +1400,90 @@ function App() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantMessage = { _cid: assistantCid, role: 'assistant', content: '', tool_calls: [] };
-      
-      setMessages((prev) => [...prev, assistantMessage]);
+      let currentAssistantCid = null;
+      let shouldStartNewAssistant = false;
+
+      const ensureAssistantMessage = () => {
+          if (currentAssistantCid && !shouldStartNewAssistant) return currentAssistantCid;
+          const cid = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          currentAssistantCid = cid;
+          shouldStartNewAssistant = false;
+          setMessages((prev) => [...prev, { _cid: cid, role: 'assistant', content: '', tool_calls: [] }]);
+          return cid;
+      };
+
+      const appendToAssistant = (text = '') => {
+          if (!text) return;
+          const cid = ensureAssistantMessage();
+          setMessages((prev) => {
+              const next = [...prev];
+              const idx = next.findIndex((m) => m._cid === cid);
+              if (idx === -1) {
+                  next.push({ _cid: cid, role: 'assistant', content: text, tool_calls: [] });
+              } else {
+                  const existing = next[idx];
+                  next[idx] = { ...existing, content: `${existing.content || ''}${text}` };
+              }
+              return next;
+          });
+      };
+
+      const handleToolMarker = (rawName = '') => {
+          const ownerCid = currentAssistantCid || ensureAssistantMessage();
+          const toolName = rawName?.trim() || '工具';
+          upsertToolRun(ownerCid, {
+              id: `live-${ownerCid}-${toolName}`,
+              name: toolName,
+              status: 'running',
+              detail: `正在执行 ${toolName}…`
+          });
+          const placeholderCid = `tool-${ownerCid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          setMessages((prev) => [...prev, { _cid: placeholderCid, role: 'tool', name: toolName, content: `执行 ${toolName} 中…` }]);
+          upsertToolRun(placeholderCid, {
+              id: `live-${placeholderCid}`,
+              name: toolName,
+              status: 'running',
+              detail: `正在执行 ${toolName}…`
+          });
+          shouldStartNewAssistant = true; // 下一段回复使用新的 agent 卡片
+      };
+
+      ensureAssistantMessage();
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        assistantMessage = { ...assistantMessage, content: assistantMessage.content + chunk };
 
-        streamBufferRef.current += chunk;
-        const toolRegex = /\[Executing\s+([^\]]+?)\.\.\.\]/g;
+        let buffer = `${streamBufferRef.current}${chunk}`;
+        let lastIndex = 0;
+        const execRegex = /\[Executing\s+([^\]]+?)\.\.\.\]/g;
         let match;
-        while ((match = toolRegex.exec(streamBufferRef.current))) {
-            const toolName = match[1]?.trim() || '工具';
-            upsertToolRun(assistantCid, {
-                id: `live-${assistantCid}-${toolName}`,
-                name: toolName,
-                status: 'running',
-                detail: `正在执行 ${toolName}…`
-            });
-        }
-        if (streamBufferRef.current.length > 4000) {
-            streamBufferRef.current = streamBufferRef.current.slice(-2000);
+
+        while ((match = execRegex.exec(buffer))) {
+            const textChunk = buffer.slice(lastIndex, match.index);
+            appendToAssistant(textChunk);
+            handleToolMarker(match[1]);
+            lastIndex = execRegex.lastIndex;
         }
 
-        setMessages((prev) => {
-            const newMessages = [...prev];
-            const idx = newMessages.findIndex((m) => m._cid === assistantCid);
-            if (idx === -1) {
-                newMessages.push({ ...assistantMessage });
-            } else {
-                newMessages[idx] = { ...assistantMessage };
-            }
-            return newMessages;
-        });
+        const remainder = buffer.slice(lastIndex);
+        const partialIdx = remainder.lastIndexOf('[Executing ');
+        if (partialIdx !== -1) {
+            appendToAssistant(remainder.slice(0, partialIdx));
+            streamBufferRef.current = remainder.slice(partialIdx);
+        } else {
+            appendToAssistant(remainder);
+            streamBufferRef.current = '';
+        }
       }
-       fetchSessions();
-       fetchLogs();
+
+      if (streamBufferRef.current) {
+          appendToAssistant(streamBufferRef.current);
+          streamBufferRef.current = '';
+      }
+      fetchSessions();
+      fetchLogs();
 
       // ✅ 只在必要时同步，并加上延迟避免频繁刷新
       if (['canva', 'agent'].includes(currentMode)) {
@@ -1373,8 +1491,8 @@ function App() {
               syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
           }, 1000);
       }
-       await refreshMessages(sessionIdToUse);
-       emitSessionsUpdated({ action: 'messages', sessionId: sessionIdToUse });
+      await refreshMessages(sessionIdToUse);
+      emitSessionsUpdated({ action: 'messages', sessionId: sessionIdToUse });
     } catch (err) {
       if (err.name === 'AbortError') {
           console.log('Generation aborted');
@@ -1995,6 +2113,7 @@ function App() {
                  modeOptions={MODE_OPTIONS}
                  onModeChange={handleModeChange}
                  toolRuns={toolRuns}
+                 onOpenDiff={handleOpenDiff}
               />
           </div>
 
@@ -2087,6 +2206,11 @@ function App() {
             {resizeTooltip.text}
         </div>
       )}
+      <DiffModal 
+          diff={diffModal} 
+          onClose={closeDiffModal} 
+          theme={theme} 
+      />
       <InputModal 
           isOpen={inputModal.isOpen}
           title={inputModal.title}

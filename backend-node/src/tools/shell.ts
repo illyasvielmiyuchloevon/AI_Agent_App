@@ -17,7 +17,7 @@ export class ExecuteShellTool extends BaseToolImplementation {
         required: ["command"]
     };
 
-    async execute(args: { command: string, workdir?: string }): Promise<any> {
+    async execute(args: { command: string, workdir?: string }, _context: { sessionId?: string } = {}): Promise<any> {
         const root = getWorkspaceRoot();
         const cwd = args.workdir ? require('path').resolve(root, args.workdir) : root;
         

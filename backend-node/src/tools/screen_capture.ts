@@ -17,7 +17,7 @@ export class ScreenCaptureTool extends BaseToolImplementation {
         required: []
     };
 
-    async execute(args: { resize_factor?: number }): Promise<any> {
+    async execute(args: { resize_factor?: number }, _context: { sessionId?: string } = {}): Promise<any> {
         const resizeFactor = args.resize_factor ?? 0.5;
         
         try {

@@ -49,7 +49,7 @@ export class KeyboardControlTool extends BaseToolImplementation {
         required: ["action"]
     };
 
-    async execute(args: any): Promise<any> {
+    async execute(args: any, _context: { sessionId?: string } = {}): Promise<any> {
         const script = `
 import pyautogui
 import json
@@ -125,7 +125,7 @@ export class MouseControlTool extends BaseToolImplementation {
         required: ["action"]
     };
 
-    async execute(args: any): Promise<any> {
+    async execute(args: any, _context: { sessionId?: string } = {}): Promise<any> {
         const script = `
 import pyautogui
 import json

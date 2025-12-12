@@ -7,6 +7,7 @@ import * as db from './db';
 import { Agent } from './agent';
 import { OpenAIProvider, AnthropicProvider, LLMClient } from './core/llm';
 import { getProjectStructure } from './tools/filesystem';
+import { takeSnapshot, persistDiffSafely } from './diffs';
 
 const app = express();
 app.use(cors());
@@ -170,6 +171,48 @@ app.get('/sessions/:id/logs', async (req, res) => {
     }
 });
 
+// Diff snapshots
+app.get('/diffs', async (req, res) => {
+    try {
+        const { session_id, path: queryPath, limit } = req.query;
+        const diffs = await db.getDiffs({
+            session_id: typeof session_id === 'string' ? session_id : undefined,
+            path: typeof queryPath === 'string' ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined
+        });
+        res.json(diffs);
+    } catch (e: any) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+
+app.get('/sessions/:id/diffs', async (req, res) => {
+    try {
+        const { path: queryPath, limit } = req.query;
+        const diffs = await db.getDiffs({
+            session_id: req.params.id,
+            path: typeof queryPath === 'string' ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined
+        });
+        res.json(diffs);
+    } catch (e: any) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+
+app.get('/diffs/:diffId', async (req, res) => {
+    try {
+        const diff = await db.getDiffById(Number(req.params.diffId));
+        if (!diff) {
+            res.status(404).json({ detail: "Diff not found" });
+            return;
+        }
+        res.json(diff);
+    } catch (e: any) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+
 app.post('/sessions/:id/chat', async (req, res) => {
     const sessionId = req.params.id;
     const { message, mode, attachments, tool_overrides } = req.body;
@@ -307,10 +350,26 @@ app.post('/workspace/write', async (req, res) => {
         const fullPath = path.resolve(root, relativePath);
         if (!fullPath.startsWith(root)) throw new Error("Access denied");
 
+        const beforeSnapshot = await takeSnapshot(relativePath);
+
         if (create_directories) {
             await fs.mkdir(path.dirname(fullPath), { recursive: true });
         }
         await fs.writeFile(fullPath, content || "", 'utf-8');
+
+        const afterSnapshot = await takeSnapshot(relativePath);
+
+        try {
+            await persistDiffSafely({
+                sessionId: typeof req.body.session_id === 'string' ? req.body.session_id : '',
+                path: relativePath,
+                before: beforeSnapshot,
+                after: afterSnapshot
+            });
+        } catch (e) {
+            console.warn(`[Workspace] Failed to persist diff for ${relativePath}: ${(e as any).message}`);
+        }
+
         res.json({ path: relativePath, bytes: (content || "").length });
     } catch (e: any) {
          res.status(400).json({ detail: e.message });
