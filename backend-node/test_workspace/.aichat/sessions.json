@@ -1,0 +1,94 @@
+{
+  "sessions": [],
+  "messages": {},
+  "logs": {},
+  "file_diffs": [
+    {
+      "id": 1,
+      "session_id": "",
+      "path": "test.txt",
+      "before": "",
+      "after": "Hello World",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.664Z"
+    },
+    {
+      "id": 2,
+      "session_id": "",
+      "path": "test.txt",
+      "before": "Hello World",
+      "after": "Hello Node",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.668Z"
+    },
+    {
+      "id": 3,
+      "session_id": "",
+      "path": "renamed.txt",
+      "before": "Hello Node",
+      "after": "Hello Node",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.673Z"
+    },
+    {
+      "id": 4,
+      "session_id": "",
+      "path": "renamed.txt",
+      "before": "Hello Node",
+      "after": "",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.679Z"
+    }
+  ],
+  "meta": {
+    "message_seq": 0,
+    "log_seq": 0,
+    "diff_seq": 4
+  },
+  "diffs": [
+    {
+      "id": 1,
+      "session_id": "",
+      "path": "test.txt",
+      "before": "",
+      "after": "Hello World",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.664Z"
+    },
+    {
+      "id": 2,
+      "session_id": "",
+      "path": "test.txt",
+      "before": "Hello World",
+      "after": "Hello Node",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.668Z"
+    },
+    {
+      "id": 3,
+      "session_id": "",
+      "path": "renamed.txt",
+      "before": "Hello Node",
+      "after": "Hello Node",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.673Z"
+    },
+    {
+      "id": 4,
+      "session_id": "",
+      "path": "renamed.txt",
+      "before": "Hello Node",
+      "after": "",
+      "before_truncated": false,
+      "after_truncated": false,
+      "created_at": "2025-12-12T17:41:58.679Z"
+    }
+  ]
+}

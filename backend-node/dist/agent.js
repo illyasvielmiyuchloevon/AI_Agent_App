@@ -229,12 +229,30 @@ class Agent {
                 let result = "";
                 const toolName = toolCall.function.name;
                 let args = toolCall.function.arguments || {};
-                try {
-                    if (typeof args === 'string')
-                        args = JSON.parse(args);
-                }
-                catch {
-                    // leave as is
+                // Parse and normalize tool args, with fallbacks for malformed payloads
+                if (typeof args === 'string') {
+                    const cleaned = this.cleanArgsString(args);
+                    const tryParse = (txt) => {
+                        try {
+                            return JSON.parse(txt);
+                        }
+                        catch {
+                            return undefined;
+                        }
+                    };
+                    // 1) direct parse
+                    let parsed = tryParse(cleaned);
+                    // 2) wrap key/value snippets without braces (e.g., "\"command\":\"ls\"")
+                    if (!parsed && !cleaned.trim().startsWith('{') && cleaned.includes(':')) {
+                        parsed = tryParse(`{${cleaned.replace(/^{|}$/g, '')}}`);
+                    }
+                    if (parsed) {
+                        args = parsed;
+                    }
+                    else if (toolCall.function.name === 'execute_shell') {
+                        // 3) shell-specific fallback: treat raw string as command
+                        args = { command: cleaned.trim() };
+                    }
                 }
                 try {
                     if (this.activeToolNames.size > 0 && !this.activeToolNames.has(toolCall.function.name)) {
@@ -271,6 +289,22 @@ class Agent {
                 await this.saveMessage(toolMsg);
             }
         }
+    }
+    // Sanitizes common malformed argument strings from LLM (e.g., code fences, trailing "null")
+    cleanArgsString(raw) {
+        let s = raw.trim();
+        // Drop trailing "null" artifacts
+        s = s.replace(/[,\s]*null\s*$/i, '');
+        // Remove surrounding code fences like ```json ... ```
+        if (s.startsWith('```')) {
+            s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
+        }
+        // If extra text trails after a closing brace/bracket, cut at the last one
+        const lastBrace = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+        if (lastBrace >= 0 && lastBrace < s.length - 1) {
+            s = s.slice(0, lastBrace + 1);
+        }
+        return s;
     }
 }
 exports.Agent = Agent;
