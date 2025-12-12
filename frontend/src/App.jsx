@@ -187,6 +187,7 @@ const initialWorkspaceState = {
   livePreview: '',
   view: 'code',
   entryCandidates: [],
+  previewEntry: '',
 };
 
 function App() {
@@ -1521,7 +1522,7 @@ function App() {
           const exists = prev.files.find((f) => f.path === path);
           const nextFiles = exists ? prev.files : [...prev.files, { path, content: '', updated: false }];
           const nextTabs = prev.openTabs.includes(path) ? prev.openTabs : [...prev.openTabs, path];
-          return { ...prev, files: nextFiles, openTabs: nextTabs, activeFile: path };
+          return { ...prev, files: nextFiles, openTabs: nextTabs, activeFile: path, previewEntry: path };
       });
       loadFileContent(path);
   };
@@ -1530,7 +1531,7 @@ function App() {
       setWorkspaceState((prev) => {
           const nextTabs = prev.openTabs.filter((p) => p !== path);
           const nextActive = prev.activeFile === path ? (nextTabs[nextTabs.length - 1] || '') : prev.activeFile;
-          return { ...prev, openTabs: nextTabs, activeFile: nextActive };
+          return { ...prev, openTabs: nextTabs, activeFile: nextActive, previewEntry: nextActive || prev.previewEntry };
       });
   };
 
@@ -2169,14 +2170,20 @@ function App() {
                   onOpenFile={openFile}
                   onCloseFile={closeFile}
                   onFileChange={handleFileChange}
-                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path }))} 
+                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path || prev.previewEntry }))} 
                   onTabReorder={handleTabReorder}
                   onAddFile={handleAddFile}
                   onAddFolder={handleAddFolder}
                   onRefreshPreview={handleRefreshPreview}
                   onToggleTheme={handleToggleTheme}
-                  onToggleView={() => setWorkspaceState((prev) => ({ ...prev, view: prev.view === 'code' ? 'preview' : 'code' }))}
+                  onToggleView={() => setWorkspaceState((prev) => {
+                    const nextView = prev.view === 'code' ? 'preview' : 'code';
+                    const nextPreviewEntry = prev.activeFile || prev.previewEntry;
+                    return { ...prev, view: nextView, previewEntry: nextPreviewEntry };
+                  })}
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
+                  previewEntry={workspaceState.previewEntry}
+                  onPreviewEntryChange={(value) => setWorkspaceState((prev) => ({ ...prev, previewEntry: value }))}
                 />
               )}
               {showLogs && (

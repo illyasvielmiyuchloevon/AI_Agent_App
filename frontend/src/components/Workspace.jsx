@@ -45,10 +45,13 @@ const themedFallback = (message) => `
   <div class="__preview-fallback">${message}</div>
 `;
 
+const stripExternalScripts = (html = '') =>
+  html.replace(/<script[^>]*src=["'][^"']+["'][^>]*>\s*<\/script>/gi, '');
+
 const wrapHtml = (content, css, scripts, headExtras = '') => {
   const base =
     content && content.includes('<html')
-      ? content
+      ? stripExternalScripts(content)
       : `<!doctype html><html><head></head><body>${
           content || themedFallback('Nothing to preview')
         }</body></html>`;
@@ -66,12 +69,84 @@ const wrapHtml = (content, css, scripts, headExtras = '') => {
   return `${headInjected}${scripts || ''}`;
 };
 
-const buildPreviewDoc = ({ files, liveContent, entryCandidates }) => {
+const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }) => {
   const fileMap = Object.fromEntries(files.map((f) => [f.path, f]));
   if (liveContent && liveContent.trim().length > 0) {
     return wrapHtml(liveContent, '', '');
   }
 
+  const css = files
+    .filter((f) => f.path.toLowerCase().endsWith('.css'))
+    .map((f) => f.content || '')
+    .join('\n');
+
+  const resolveEntry = () => {
+    if (preferredEntry && fileMap[preferredEntry]) return preferredEntry;
+    const htmlEntry =
+      (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
+      files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
+    if (htmlEntry) return htmlEntry;
+    const jsxEntry =
+      (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.jsx') || f.toLowerCase().endsWith('.tsx')) ||
+      files.find((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))?.path;
+    if (jsxEntry) return jsxEntry;
+    const jsEntry = files.find((f) => f.path.toLowerCase().endsWith('.js'))?.path;
+    if (jsEntry) return jsEntry;
+    const pyEntry = (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.py'));
+    if (pyEntry) return pyEntry;
+    return null;
+  };
+
+  const entry = resolveEntry();
+  const entryFile = entry ? fileMap[entry] : null;
+  const entryExt = entry ? entry.toLowerCase().split('.').pop() : '';
+
+  // If HTML entry
+  if (entryFile && entryExt === 'html') {
+    const sanitizedHtml = stripExternalScripts(entryFile.content || '');
+    const htmlHasInlineScript = sanitizedHtml ? /<script[\s\S]*?>[\s\S]*?<\/script>/i.test(sanitizedHtml) : false;
+    const scripts = htmlHasInlineScript ? '' : '';
+    return wrapHtml(
+      sanitizedHtml || themedFallback('请选择文件以预览'),
+      css,
+      scripts,
+      ''
+    );
+  }
+
+  // If JSX/TSX entry
+  if (entryFile && (entryExt === 'jsx' || entryExt === 'tsx')) {
+    const jsx = entryFile.content || '';
+    const headExtras = `
+      <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+      <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+      <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    `;
+    const scripts = `
+      <script type="text/babel">
+        ${jsx}
+      </script>
+    `;
+    return wrapHtml(`<div id="root"></div>`, css, scripts, headExtras);
+  }
+
+  // If JS entry
+  if (entryFile && entryExt === 'js') {
+    const js = entryFile.content || '';
+    const scripts = `<script>${js}</script>`;
+    return wrapHtml(`<div id="root"></div>`, css, scripts, '');
+  }
+
+  // If Python entry fallback
+  if (entry && entryExt === 'py') {
+    const html = `<main style="font-family:Inter,Arial,sans-serif;padding:2rem;line-height:1.6;">
+      <h2 style="margin-top:0;">Python entry detected: ${entry}</h2>
+      <p>Run the backend or start the script locally to preview the app. Frontend preview shows files only.</p>
+    </main>`;
+    return wrapHtml(html, css, '', '');
+  }
+
+  // Fallback: auto aggregate
   const htmlCandidate =
     (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
     files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
@@ -80,12 +155,6 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates }) => {
     (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.jsx') || f.toLowerCase().endsWith('.tsx')) ||
     files.find((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))?.path;
 
-  const pythonCandidate = (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.py'));
-
-  const css = files
-    .filter((f) => f.path.toLowerCase().endsWith('.css'))
-    .map((f) => f.content || '')
-    .join('\n');
   const js = files
     .filter((f) => f.path.toLowerCase().endsWith('.js'))
     .map((f) => f.content || '')
@@ -97,18 +166,14 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates }) => {
 
   let htmlSource = htmlCandidate ? fileMap[htmlCandidate]?.content : null;
 
-  if (!htmlSource && pythonCandidate) {
-    htmlSource = `<main style="font-family:Inter,Arial,sans-serif;padding:2rem;line-height:1.6;">
-      <h2 style="margin-top:0;">Python entry detected: ${pythonCandidate}</h2>
-      <p>Run the backend or start the script locally to preview the app. Frontend preview shows files only.</p>
-    </main>`;
-  }
-
   if (!htmlSource && jsxCandidate) {
     htmlSource = `<div id="root"></div>`;
   }
 
-  const needsBabel = jsx.trim().length > 0;
+  const sanitizedHtml = htmlSource ? stripExternalScripts(htmlSource) : htmlSource;
+  const htmlHasInlineScript = sanitizedHtml ? /<script[\s\S]*?>[\s\S]*?<\/script>/i.test(sanitizedHtml) : false;
+
+  const needsBabel = jsx.trim().length > 0 && !htmlHasInlineScript;
   const headExtras = needsBabel
     ? `
       <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -117,13 +182,16 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates }) => {
     `
     : '';
 
-  const scripts = `
+  const shouldInjectAppScripts = !htmlHasInlineScript;
+  const scripts = shouldInjectAppScripts
+    ? `
     ${js ? `<script>${js}</script>` : ''}
     ${jsx ? `<script type="text/babel">${jsx}</script>` : ''}
-  `;
+  `
+    : '';
 
   return wrapHtml(
-    htmlSource || themedFallback('请选择文件以预览'),
+    sanitizedHtml || themedFallback('请选择文件以预览'),
     css,
     scripts,
     headExtras
@@ -145,6 +213,7 @@ function Workspace({
   hotReloadToken,
   theme,
   backendRoot,
+  previewEntry = '',
   onSelectFolder,
   onBindBackendRoot,
   onOpenFile,
@@ -158,6 +227,7 @@ function Workspace({
   onToggleTheme,
   onToggleView,
   onSyncStructure,
+  onPreviewEntryChange,
 }) {
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
@@ -191,9 +261,20 @@ function Workspace({
     []
   );
 
+  const previewOptions = useMemo(
+    () =>
+      files
+        .filter((f) => {
+          const ext = f.path.toLowerCase();
+          return ext.endsWith('.html') || ext.endsWith('.jsx') || ext.endsWith('.tsx') || ext.endsWith('.js') || ext.endsWith('.py');
+        })
+        .map((f) => f.path),
+    [files]
+  );
+
   const previewDoc = useMemo(
-    () => buildPreviewDoc({ files, liveContent: livePreviewContent, entryCandidates }),
-    [files, livePreviewContent, entryCandidates]
+    () => buildPreviewDoc({ files, liveContent: livePreviewContent, entryCandidates, preferredEntry: previewEntry }),
+    [files, livePreviewContent, entryCandidates, previewEntry]
   );
 
   const activeContent = files.find((f) => f.path === activeFile)?.content || '';
@@ -294,10 +375,24 @@ function Workspace({
           <div className="workspace-preview fullscreen-preview">
             <div className="preview-header">
               <div>
-                Live Preview
-                {entryCandidates?.length ? (
-                  <span className="preview-entry">入口: {entryCandidates[0]}</span>
-                ) : null}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <span>Live Preview</span>
+                  <select
+                    value={previewEntry}
+                    onChange={(e) => onPreviewEntryChange?.(e.target.value)}
+                    className="ghost-input"
+                    style={{ minWidth: '200px', padding: '0.2rem 0.4rem' }}
+                    title="选择要预览的入口文件"
+                  >
+                    <option value="">自动选择入口</option>
+                    {previewOptions.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  {entryCandidates?.length ? (
+                    <span className="preview-entry">默认入口: {entryCandidates[0]}</span>
+                  ) : null}
+                </div>
               </div>
               <div className="preview-actions">
                 <button onClick={onToggleView} className="ghost-btn">
