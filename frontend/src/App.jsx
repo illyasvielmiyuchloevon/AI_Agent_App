@@ -274,6 +274,7 @@ function App() {
   const saveTimersRef = useRef({});
   const configSaveTimerRef = useRef(null);
   const streamBufferRef = useRef('');
+  const toolRunSyncTimerRef = useRef(null);
   const syncLockRef = useRef(false);
   const lastSyncRef = useRef(0);
   const workspaceInitializedRef = useRef(false);
@@ -865,33 +866,35 @@ function App() {
 
   const closeDiffModal = useCallback(() => setDiffModal(null), []);
 
-  const toolRunKey = (run) => {
-      if (!run) return '';
-      const base = run.name || run.id || 'tool';
-      const diffKey = run.diffTarget
-          ? (run.diffTarget.diff_id !== undefined
-              ? `#${run.diffTarget.diff_id}`
-              : (run.diffTarget.path ? `@${run.diffTarget.path}` : ''))
-          : '';
-      return `${base}${diffKey}`;
+  const collectRunKeys = (run) => {
+      const keys = [];
+      if (!run) return keys;
+      if (run.id) keys.push(String(run.id));
+      if (run.name) keys.push(run.name);
+      const diff = run.diffTarget;
+      if (diff && (diff.path || diff.diff_id !== undefined)) {
+          const suffix = diff.diff_id !== undefined ? `#${diff.diff_id}` : `@${diff.path}`;
+          if (run.name) keys.push(`${run.name}${suffix}`);
+          if (run.id) keys.push(`${run.id}${suffix}`);
+      }
+      return keys;
   };
 
   const mergeRunLists = useCallback((existing = [], incoming = []) => {
       const base = [...existing];
-      const doneKeySet = new Set(
-          incoming
-              .filter((run) => run && run.status && run.status !== 'running')
-              .map((run) => toolRunKey(run))
-              .filter(Boolean)
-      );
+      const doneKeySet = new Set();
+      incoming
+          .filter((run) => run && run.status && run.status !== 'running')
+          .forEach((run) => collectRunKeys(run).forEach((k) => k && doneKeySet.add(k)));
 
       if (doneKeySet.size > 0) {
           // Remove stale placeholders that have been completed
           for (let i = base.length - 1; i >= 0; i -= 1) {
               const candidate = base[i];
-              if (candidate && candidate.synthetic && candidate.status === 'running' && doneKeySet.has(toolRunKey(candidate))) {
-                  base.splice(i, 1);
-              }
+              if (!candidate || !candidate.synthetic || candidate.status !== 'running') continue;
+              const candidateKeys = collectRunKeys(candidate);
+              const shouldDrop = candidateKeys.some((k) => doneKeySet.has(k));
+              if (shouldDrop) base.splice(i, 1);
           }
       }
 
@@ -1053,6 +1056,13 @@ function App() {
           if (!res.ok) return;
           const data = await res.json();
           const normalized = normalizeMessages(data);
+          // 保留本地尚未完成的工具占位气泡，避免轮询时被覆盖
+          const localToolPlaceholders = messages.filter((m) => m.role === 'tool' && m.synthetic).filter((m) => {
+              const runs = toolRuns[m._cid];
+              if (!runs || runs.length === 0) return true;
+              return runs.some((r) => !r.status || r.status === 'running');
+          });
+          const mergedMessages = [...normalized, ...localToolPlaceholders];
           setMessages(normalized);
           const derivedRuns = buildToolRunsFromMessages(normalized);
           setToolRuns((prev) => {
@@ -1065,7 +1075,7 @@ function App() {
       } catch (err) {
           console.error(err);
       }
-  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, backendBound]);
+  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, backendBound, messages, toolRuns]);
 
   const refreshToolRuns = useCallback(async (sessionId) => {
       if (!sessionId || !backendBound) return;
@@ -1079,8 +1089,7 @@ function App() {
           Object.values(derivedRuns).forEach((runs) => {
               runs.forEach((run) => {
                   if (run && run.status && run.status !== 'running') {
-                      const key = toolRunKey(run);
-                      if (key) completedKeys.push(key);
+                      collectRunKeys(run).forEach((k) => k && completedKeys.push(k));
                   }
               });
           });
@@ -1101,10 +1110,10 @@ function App() {
                       let changed = false;
                       const filtered = runs.filter((run) => {
                           if (!run || !run.synthetic || run.status !== 'running') return true;
-                          const key = toolRunKey(run);
-                          const left = key ? (remaining.get(key) || 0) : 0;
-                          if (left > 0) {
-                              remaining.set(key, left - 1);
+                          const keys = collectRunKeys(run);
+                          const matchedKey = keys.find((k) => remaining.get(k) > 0);
+                          if (matchedKey) {
+                              remaining.set(matchedKey, (remaining.get(matchedKey) || 0) - 1);
                               changed = true;
                               return false;
                           }
@@ -1114,12 +1123,29 @@ function App() {
                   });
               }
 
+              // 将后端返回的真实运行结果按名称补充到当前存在的 tool 占位消息上，以便展开详情可见
+              const nameBuckets = {};
+              Object.values(derivedRuns).forEach((runs) => {
+                  runs.forEach((run) => {
+                      const key = run?.name;
+                      if (!key) return;
+                      if (!nameBuckets[key]) nameBuckets[key] = [];
+                      nameBuckets[key].push(run);
+                  });
+              });
+              messages.forEach((msg) => {
+                  if (msg.role !== 'tool' || !msg.name) return;
+                  const bucket = nameBuckets[msg.name];
+                  if (!bucket || bucket.length === 0) return;
+                  next[msg._cid || msg.id] = mergeRunLists(prev[msg._cid || msg.id] || [], bucket);
+              });
+
               return next;
           });
       } catch (err) {
           console.error('Failed to refresh tool runs', err);
       }
-  }, [backendBound, projectFetch, normalizeMessages, buildToolRunsFromMessages, mergeRunLists]);
+  }, [backendBound, projectFetch, normalizeMessages, buildToolRunsFromMessages, mergeRunLists, messages]);
 
   const upsertToolRun = useCallback((messageId, run) => {
       if (!messageId) return;
@@ -1356,6 +1382,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+      const hasPending = loadingSessions.size > 0;
+      if (hasPending && !toolRunSyncTimerRef.current) {
+          const targetSession = currentSessionId || Array.from(loadingSessions)[0];
+          if (targetSession) refreshToolRuns(targetSession);
+          toolRunSyncTimerRef.current = setInterval(() => {
+              const target = currentSessionId || Array.from(loadingSessions)[0];
+              if (target) refreshToolRuns(target);
+          }, 900);
+      } else if (!hasPending && toolRunSyncTimerRef.current) {
+          clearInterval(toolRunSyncTimerRef.current);
+          toolRunSyncTimerRef.current = null;
+      }
+      return () => {
+          if (toolRunSyncTimerRef.current) {
+              clearInterval(toolRunSyncTimerRef.current);
+              toolRunSyncTimerRef.current = null;
+          }
+      };
+  }, [loadingSessions, currentSessionId, refreshToolRuns]);
+
+  useEffect(() => {
       const label = projectConfig.projectPath || projectConfig.backendRoot;
       if (label) {
           setWorkspaceRootLabel(label);
@@ -1555,7 +1602,6 @@ function App() {
     const messageText = text !== undefined ? text : input;
     const cleanedText = messageText || '';
     const safeAttachments = attachments || [];
-    let toolRunSyncTimer = null;
     if (!projectReady) {
         alert('请先选择项目文件夹。');
         return;
@@ -1592,12 +1638,6 @@ function App() {
             renameSession(sessionIdToUse, candidateTitle);
         }
     }
-
-    const ensureToolRunSync = () => {
-        if (toolRunSyncTimer || !sessionIdToUse) return;
-        refreshToolRuns(sessionIdToUse);
-        toolRunSyncTimer = setInterval(() => refreshToolRuns(sessionIdToUse), 1200);
-    };
 
     const taskId = Date.now();
     let snapshotReady = false;
@@ -1675,7 +1715,6 @@ function App() {
           const ownerCid = currentAssistantCid || ensureAssistantMessage();
           const toolName = rawName?.trim() || '工具';
           const startedAt = Date.now();
-          ensureToolRunSync();
           upsertToolRun(ownerCid, {
               id: `live-${ownerCid}-${toolName}`,
               name: toolName,
@@ -1685,7 +1724,7 @@ function App() {
               startedAt
           });
           const placeholderCid = `tool-${ownerCid}-${startedAt}-${Math.random().toString(16).slice(2)}`;
-          setMessages((prev) => [...prev, { _cid: placeholderCid, role: 'tool', name: toolName, content: `执行 ${toolName} 中…` }]);
+          setMessages((prev) => [...prev, { _cid: placeholderCid, role: 'tool', name: toolName, content: `执行 ${toolName} 中…`, synthetic: true }]);
           upsertToolRun(placeholderCid, {
               id: `live-${placeholderCid}`,
               name: toolName,
@@ -1746,7 +1785,6 @@ function App() {
     } finally {
       abortControllerRef.current = null;
       streamBufferRef.current = '';
-      if (toolRunSyncTimer) clearInterval(toolRunSyncTimer);
       if (snapshotReady && taskId) {
           await finalizeTaskReview(taskId);
       } else {
