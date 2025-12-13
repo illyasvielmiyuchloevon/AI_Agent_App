@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     status: (cwd) => ipcRenderer.invoke('git:status', cwd),
     stage: (cwd, files) => ipcRenderer.invoke('git:stage', { cwd, files }),
     unstage: (cwd, files) => ipcRenderer.invoke('git:unstage', { cwd, files }),
+    restore: (cwd, files) => ipcRenderer.invoke('git:restore', { cwd, files }),
     commit: (cwd, message) => ipcRenderer.invoke('git:commit', { cwd, message }),
     push: (cwd) => ipcRenderer.invoke('git:push', cwd),
     pull: (cwd) => ipcRenderer.invoke('git:pull', cwd),
@@ -19,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getRemotes: (cwd) => ipcRenderer.invoke('git:getRemotes', cwd),
     addRemote: (cwd, name, url) => ipcRenderer.invoke('git:addRemote', { cwd, name, url }),
     getCommitDetails: (cwd, hash) => ipcRenderer.invoke('git:getCommitDetails', { cwd, hash }),
+    getCommitStats: (cwd, hash) => ipcRenderer.invoke('git:getCommitStats', { cwd, hash }),
     getCommitFileDiffs: (cwd, hash) => ipcRenderer.invoke('git:getCommitFileDiffs', { cwd, hash }),
     getFileContent: (cwd, hash, path) => ipcRenderer.invoke('git:getFileContent', { cwd, hash, path }),
   }

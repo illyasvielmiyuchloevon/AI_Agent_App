@@ -112,6 +112,13 @@ app.whenReady().then(() => {
     return { success: true };
   }));
 
+  ipcMain.handle('git:restore', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    // Discard changes in working directory
+    // git checkout -- path/to/file
+    await git.checkout(files);
+    return { success: true };
+  }));
+
   ipcMain.handle('git:commit', (e, { cwd, message }) => handleGit(cwd, async (git) => {
     const summary = await git.commit(message);
     return { success: true, summary: JSON.parse(JSON.stringify(summary)) };
@@ -163,6 +170,27 @@ app.whenReady().then(() => {
       return { status, path: pathParts.join(' ') };
     });
     return { success: true, files };
+  }));
+
+  ipcMain.handle('git:getCommitStats', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
+    // git show --shortstat --format="" <hash>
+    // Output: " 3 files changed, 15 insertions(+), 5 deletions(-)"
+    const raw = await git.raw(['show', '--shortstat', '--format=', hash]);
+    const trimmed = raw.trim();
+    if (!trimmed) return { success: true, stats: { files: 0, insertions: 0, deletions: 0 } };
+    
+    const filesMatch = trimmed.match(/(\d+) files? changed/);
+    const insertionsMatch = trimmed.match(/(\d+) insertions?\(\+\)/);
+    const deletionsMatch = trimmed.match(/(\d+) deletions?\(-\)/);
+    
+    return {
+      success: true,
+      stats: {
+        files: filesMatch ? parseInt(filesMatch[1], 10) : 0,
+        insertions: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
+        deletions: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
+      }
+    };
   }));
 
   ipcMain.handle('git:getCommitFileDiffs', (e, { cwd, hash }) => handleGit(cwd, async (git) => {

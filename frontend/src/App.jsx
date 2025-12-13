@@ -263,6 +263,7 @@ function App() {
   const [loadingSessions, setLoadingSessions] = useState(new Set());
   const [currentMode, setCurrentMode] = useState('chat');
   const [workspaceState, setWorkspaceState] = useState(initialWorkspaceState);
+  const [workspaceDiffData, setWorkspaceDiffData] = useState(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceDriver, setWorkspaceDriver] = useState(null);
   const [workspaceBindingStatus, setWorkspaceBindingStatus] = useState('idle'); // idle | checking | ready | error
@@ -874,6 +875,17 @@ function App() {
   }, [fetchDiffSnapshot, openDiffModal]);
 
   const closeDiffModal = useCallback(() => setDiffModal(null), []);
+
+  const handleOpenDiffInWorkspace = useCallback((diff) => {
+      setWorkspaceDiffData(diff);
+      setWorkspaceState(prev => ({ ...prev, view: 'diff' }));
+      setDiffModal(null);
+  }, []);
+
+  const handleCloseDiffInWorkspace = useCallback(() => {
+      setWorkspaceDiffData(null);
+      setWorkspaceState(prev => ({ ...prev, view: 'code' }));
+  }, []);
 
   const collectRunKeys = (run) => {
       const keys = [];
@@ -2158,9 +2170,72 @@ function App() {
       await GitDriver.unstage(backendWorkspaceRoot, '.');
       refreshGitStatus();
   };
+  const handleGitRestore = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      if (!window.confirm(`Are you sure you want to discard changes in ${files.length > 1 ? files.length + ' files' : files[0]}?`)) return;
+      
+      const untracked = [];
+      const tracked = [];
+      
+      files.forEach(path => {
+          const file = gitStatus?.files?.find(f => f.path === path);
+          if (file && (file.working_dir === '?' || file.working_dir === 'U')) {
+              untracked.push(path);
+          } else {
+              tracked.push(path);
+          }
+      });
+
+      if (tracked.length > 0) {
+          await GitDriver.restore(backendWorkspaceRoot, tracked);
+      }
+      if (untracked.length > 0 && workspaceDriver) {
+          for (const p of untracked) {
+             try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+      }
+      refreshGitStatus();
+  };
+
+  const handleGitRestoreAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      if (!window.confirm('Are you sure you want to discard ALL changes? This cannot be undone.')) return;
+      
+      const files = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R', '?'].includes(f.working_dir)) || [];
+      const untracked = [];
+      const tracked = [];
+      
+      files.forEach(f => {
+          if (f.working_dir === '?' || f.working_dir === 'U') {
+              untracked.push(f.path);
+          } else {
+              tracked.push(f.path);
+          }
+      });
+
+      if (tracked.length > 0) {
+          await GitDriver.restore(backendWorkspaceRoot, tracked.length === files.length ? '.' : tracked);
+      }
+      if (untracked.length > 0 && workspaceDriver) {
+          for (const p of untracked) {
+             try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+      }
+      refreshGitStatus();
+  };
   const handleGitCommit = async (msg) => {
       if (!backendWorkspaceRoot) return;
       await GitDriver.commit(backendWorkspaceRoot, msg);
+      refreshGitStatus();
+  };
+  const handleGitPull = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.pull(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+  const handleGitPush = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.push(backendWorkspaceRoot);
       refreshGitStatus();
   };
   const handleGitSync = async () => {
@@ -2204,6 +2279,11 @@ function App() {
   const handleGetCommitDetails = useCallback(async (hash) => {
       if (!backendWorkspaceRoot) return [];
       return await GitDriver.getCommitDetails(backendWorkspaceRoot, hash);
+  }, [backendWorkspaceRoot]);
+
+  const handleGetCommitStats = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return null;
+      return await GitDriver.getCommitStats(backendWorkspaceRoot, hash);
   }, [backendWorkspaceRoot]);
 
   const handleOpenCommitDiff = useCallback(async (hash, path) => {
@@ -2252,6 +2332,29 @@ function App() {
           openFile(path);
       }
   }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, openFile]);
+
+  const handleOpenBatchDiffs = useCallback(async (files, type = 'unstaged') => {
+      if (!backendWorkspaceRoot || !workspaceDriver || !files || files.length === 0) return;
+      try {
+          const diffs = await Promise.all(files.map(async (file) => {
+              const path = file.path;
+              let before = '';
+              let after = '';
+              if (type === 'staged') {
+                  before = await GitDriver.getFileContent(backendWorkspaceRoot, 'HEAD', path);
+                  after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+              } else {
+                  before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+                  const fileData = await workspaceDriver.readFile(path);
+                  after = fileData.content || '';
+              }
+              return { path, before, after };
+          }));
+          openDiffModal({ files: diffs });
+      } catch (e) {
+          console.error('Failed to open batch diffs', e);
+      }
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal]);
 
   // --- Resizer Logic ---
   const startResize = useCallback((target) => (mouseDownEvent) => {
@@ -2619,7 +2722,11 @@ function App() {
                     onUnstage={handleGitUnstage}
                     onStageAll={handleGitStageAll}
                     onUnstageAll={handleGitUnstageAll}
+                    onDiscard={handleGitRestore}
+                    onDiscardAll={handleGitRestoreAll}
                     onSync={handleGitSync}
+                    onPull={handleGitPull}
+                    onPush={handleGitPush}
                     onRefresh={refreshGitStatus}
                     onGenerateCommitMessage={handleGenerateCommitMessage}
                     onInit={handleGitInit}
@@ -2627,8 +2734,10 @@ function App() {
                     onOpenFile={openFile}
                     onDiff={handleOpenWorkingCopyDiff}
                     onGetCommitDetails={handleGetCommitDetails}
+                    onGetCommitStats={handleGetCommitStats}
                     onOpenCommitDiff={handleOpenCommitDiff}
                     onOpenAllDiffs={handleOpenAllCommitDiffs}
+                    onOpenBatchDiffs={handleOpenBatchDiffs}
                     loading={gitLoading}
                 />
             )}
@@ -2730,6 +2839,7 @@ function App() {
                   openTabs={workspaceProps.openTabs}
                   activeFile={workspaceState.activeFile}
                   viewMode={workspaceState.view}
+                  diffData={workspaceDiffData}
                   livePreviewContent={workspaceState.livePreview}
                   entryCandidates={workspaceState.entryCandidates}
                   loading={workspaceLoading}
@@ -2744,6 +2854,7 @@ function App() {
                   onBindBackendRoot={promptBindBackendRoot}
                   onOpenFile={openFile}
                   onCloseFile={closeFile}
+                  onCloseDiff={handleCloseDiffInWorkspace}
                   onFileChange={handleFileChange}
                   onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path || prev.previewEntry }))} 
                   onTabReorder={handleTabReorder}
@@ -2828,6 +2939,8 @@ function App() {
           diff={diffModal} 
           onClose={closeDiffModal} 
           theme={theme} 
+          onOpenFile={openFile}
+          onOpenDiffInWorkspace={handleOpenDiffInWorkspace}
       />
       <InputModal 
           isOpen={inputModal.isOpen}

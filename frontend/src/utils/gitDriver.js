@@ -34,6 +34,17 @@ export const GitDriver = {
         }
     },
 
+    async restore(cwd, files) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.restore(cwd, files);
+            return res.success;
+        } catch (e) {
+            console.error('Git restore failed', e);
+            return false;
+        }
+    },
+
     async commit(cwd, message) {
         if (!this.isAvailable()) return false;
         try {
@@ -130,6 +141,17 @@ export const GitDriver = {
         } catch (e) {
             console.error('Git getCommitDetails failed', e);
             return [];
+        }
+    },
+
+    async getCommitStats(cwd, hash) {
+        if (!this.isAvailable()) return null;
+        try {
+            const res = await window.electronAPI.git.getCommitStats(cwd, hash);
+            return res.success ? res.stats : null;
+        } catch (e) {
+            console.error('Git getCommitStats failed', e);
+            return null;
         }
     },
 

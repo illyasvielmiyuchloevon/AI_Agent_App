@@ -55,7 +55,7 @@ const findFirstDiffLine = (before = '', after = '') => {
   return null;
 };
 
-function DiffModal({ diff, onClose, theme }) {
+function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) {
   const hasDiff = !!diff && typeof diff === 'object';
   const path = hasDiff ? diff.path : '';
   const before = hasDiff ? diff.before || '' : '';
@@ -145,33 +145,20 @@ function DiffModal({ diff, onClose, theme }) {
       <div
         className="diff-modal"
         onClick={(e) => e.stopPropagation()}
-        style={isFullScreen ? { width: '96vw', height: '92vh', maxWidth: 'none' } : undefined}
+        style={isFullScreen ? { 
+            width: 'calc(100vw - 32px)', 
+            height: 'calc(100vh - 32px)', 
+            maxWidth: 'none',
+            borderRadius: '16px' 
+        } : undefined}
       >
         <div className="diff-modal-header">
           <div className="diff-modal-title">
-            <span className="codicon codicon-diff" aria-hidden />
+            <span className="codicon codicon-diff" aria-hidden style={{ fontSize: '18px', color: 'var(--accent)' }} />
             <span>代码对比</span>
             {path ? <span className="diff-modal-path">{path}</span> : null}
           </div>
           <div className="diff-modal-actions">
-            <button
-              className="ghost-btn"
-              title={compactView ? '切换为全量文件对比' : '仅显示改动块'}
-              onClick={() => setCompactView((v) => !v)}
-              style={{ marginRight: '0.5rem' }}
-            >
-              <span className="codicon codicon-diff" aria-hidden />
-              <span style={{ marginLeft: '0.25rem' }}>{compactView ? '全量对比' : '仅改动'}</span>
-            </button>
-            <button
-              className="ghost-btn"
-              title={isFullScreen ? '退出全屏' : '全屏查看'}
-              onClick={() => setIsFullScreen((v) => !v)}
-              style={{ marginRight: '0.5rem' }}
-            >
-              <span className={`codicon ${isFullScreen ? 'codicon-screen-normal' : 'codicon-screen-full'}`} aria-hidden />
-              <span style={{ marginLeft: '0.25rem' }}>{isFullScreen ? '退出全屏' : '全屏'}</span>
-            </button>
             {(beforeTruncated || afterTruncated) && (
               <span className="diff-modal-note">
                 {[
@@ -182,15 +169,42 @@ function DiffModal({ diff, onClose, theme }) {
                   .join(' · ')}
               </span>
             )}
-            <button className="ghost-btn" onClick={onClose}>
-              关闭
+            {(path || (diff.files && diff.files.length > 0)) && onOpenDiffInWorkspace && (
+              <button
+                className="ghost-btn"
+                title="在编辑器打开 Diff 视图"
+                onClick={() => {
+                  onOpenDiffInWorkspace(diff);
+                }}
+              >
+                <span className="codicon codicon-diff" aria-hidden />
+                <span style={{ marginLeft: '0.35rem' }}>在编辑器查看</span>
+              </button>
+            )}
+            <button
+              className="ghost-btn"
+              title={compactView ? '切换为全量文件对比' : '仅显示改动块'}
+              onClick={() => setCompactView((v) => !v)}
+            >
+              <span className="codicon codicon-diff" aria-hidden />
+              <span style={{ marginLeft: '0.35rem' }}>{compactView ? '全量对比' : '仅改动'}</span>
+            </button>
+            <button
+              className="ghost-btn"
+              title={isFullScreen ? '退出全屏' : '全屏查看'}
+              onClick={() => setIsFullScreen((v) => !v)}
+            >
+              <span className={`codicon ${isFullScreen ? 'codicon-screen-normal' : 'codicon-screen-full'}`} aria-hidden />
+            </button>
+            <button className="ghost-btn" onClick={onClose} title="关闭">
+              <span className="codicon codicon-close" aria-hidden />
             </button>
           </div>
         </div>
         <div className="diff-modal-body">
             {diff.files && Array.isArray(diff.files) ? (
                 // Multi-file View
-                <div className="multi-diff-container" style={{ height: isFullScreen ? 'calc(92vh - 80px)' : '70vh', overflowY: 'auto' }}>
+                <div className="multi-diff-container" style={{ height: '100%', overflowY: 'auto' }}>
                     {diff.files.map((file, idx) => (
                         <FileDiffSection 
                             key={file.path} 
@@ -198,39 +212,46 @@ function DiffModal({ diff, onClose, theme }) {
                             theme={monacoTheme}
                             compactView={compactView}
                             index={idx}
+                            onOpenFile={onOpenFile}
+                            onOpenDiffInWorkspace={onOpenDiffInWorkspace}
+                            onCloseModal={onClose}
                         />
                     ))}
                 </div>
             ) : (
               // Single-file View
-              <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
-                <MonacoDiffEditor
-                  key={editorKey}
-                  height={isFullScreen ? 'calc(92vh - 80px)' : '70vh'}
-                  language={language}
-                  original={before}
-                  modified={after}
-                  theme={monacoTheme}
-                  onMount={handleMount}
-                  keepCurrentOriginalModel={true}
-                  keepCurrentModifiedModel={true}
-                  originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
-                  modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
-                  options={{
-                    renderSideBySide: true,
-                    readOnly: true,
-                    automaticLayout: true,
-                    wordWrap: 'off',
-                    diffWordWrap: 'off',
-                    minimap: { enabled: false },
-                    hideUnchangedRegions: compactView ? {
-                      enabled: true,
-                      revealLinePadding: 3,
-                      contextLineCount: 3
-                    } : { enabled: false }
-                  }}
-                />
-              </Suspense>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
+                  <MonacoDiffEditor
+                    key={editorKey}
+                    height="100%"
+                    language={language}
+                    original={before}
+                    modified={after}
+                    theme={monacoTheme}
+                    onMount={handleMount}
+                    keepCurrentOriginalModel={true}
+                    keepCurrentModifiedModel={true}
+                    originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
+                    modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
+                    options={{
+                      renderSideBySide: true,
+                      readOnly: true,
+                      automaticLayout: true,
+                      wordWrap: 'off',
+                      diffWordWrap: 'off',
+                      minimap: { enabled: false },
+                      scrollBeyondLastLine: false,
+                      padding: { top: 16, bottom: 16 },
+                      hideUnchangedRegions: compactView ? {
+                        enabled: true,
+                        revealLinePadding: 3,
+                        contextLineCount: 3
+                      } : { enabled: false }
+                    }}
+                  />
+                </Suspense>
+              </div>
             )}
         </div>
       </div>
@@ -238,36 +259,60 @@ function DiffModal({ diff, onClose, theme }) {
   );
 }
 
-const FileDiffSection = ({ file, theme, compactView, index }) => {
+const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDiffInWorkspace, onCloseModal }) => {
     const [expanded, setExpanded] = useState(true);
     const language = useMemo(() => inferLanguage(file.path || ''), [file.path]);
     
     // Lazy load logic: only render editor when expanded
     return (
-        <div className="diff-section" style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
+        <div className="diff-section">
             <div 
                 className="diff-section-header" 
                 onClick={() => setExpanded(!expanded)}
-                style={{
-                    padding: '8px 12px',
-                    background: 'var(--panel-header)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    borderBottom: expanded ? '1px solid var(--border)' : 'none',
-                    userSelect: 'none'
-                }}
+                style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center' }}
             >
-                <span style={{ marginRight: '8px', fontSize: '12px' }}>{expanded ? '▼' : '▶'}</span>
+                <span 
+                    className={`codicon codicon-${expanded ? 'chevron-down' : 'chevron-right'}`} 
+                    style={{ marginRight: '8px', fontSize: '14px', color: 'var(--muted)' }} 
+                />
                 <span style={{ 
                     color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')), 
                     fontWeight: 'bold', 
                     marginRight: '8px',
-                    width: '14px'
+                    fontSize: '13px',
+                    width: '16px',
+                    textAlign: 'center'
                 }}>
                     {file.status}
                 </span>
-                <span style={{ fontWeight: '500', fontSize: '13px' }}>{file.path}</span>
+                <span style={{ fontWeight: '500', fontSize: '13px', color: 'var(--text)', flex: 1 }}>{file.path}</span>
+                {onOpenDiffInWorkspace ? (
+                    <button 
+                        className="ghost-btn" 
+                        title="在编辑器打开 Diff 视图"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenDiffInWorkspace(file);
+                            if (onCloseModal) onCloseModal();
+                        }}
+                        style={{ padding: '2px 6px', height: '24px', fontSize: '12px' }}
+                    >
+                        <span className="codicon codicon-diff" />
+                    </button>
+                ) : (onOpenFile && (
+                    <button 
+                        className="ghost-btn" 
+                        title="在编辑器打开"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenFile(file.path);
+                            if (onCloseModal) onCloseModal();
+                        }}
+                        style={{ padding: '2px 6px', height: '24px', fontSize: '12px' }}
+                    >
+                        <span className="codicon codicon-go-to-file" />
+                    </button>
+                ))}
             </div>
             {expanded && (
                 <div style={{ height: '300px' }}>
@@ -289,6 +334,7 @@ const FileDiffSection = ({ file, theme, compactView, index }) => {
                                     automaticLayout: true,
                                     scrollBeyondLastLine: false,
                                     minimap: { enabled: false },
+                                    padding: { top: 8, bottom: 8 },
                                     hideUnchangedRegions: compactView ? {
                                       enabled: true,
                                       revealLinePadding: 3,
