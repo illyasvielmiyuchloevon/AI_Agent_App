@@ -2043,3 +2043,407 @@ input:focus, select:focus, textarea:focus {
 ::-webkit-scrollbar-thumb:hover {
   background-color: var(--muted) !important;
 }
+
+.activity-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+  box-shadow: 0 0 0 1.5px var(--sidebar);
+}
+
+/* --- SOURCE CONTROL PANEL STYLES (New) --- */
+.sc-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.sc-header {
+  height: 44px;
+  padding: 0 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid transparent; /* Keep layout stable */
+  flex-shrink: 0;
+}
+
+.sc-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.sc-header-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+}
+
+.sc-header:hover .sc-header-actions {
+  opacity: 1;
+}
+
+.sc-action-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sc-action-btn:hover {
+  background: var(--surface-hover);
+}
+
+.sc-input-area {
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.sc-input-wrapper {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.sc-input {
+  width: 100%;
+  height: 80px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  resize: none;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: block;
+  box-sizing: border-box;
+}
+
+.sc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--sidebar-active);
+}
+
+.sc-ai-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.2s;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.sc-ai-btn:hover {
+  opacity: 1;
+  background: var(--surface-hover);
+  transform: scale(1.1);
+}
+
+.sc-commit-btn {
+  width: 100%;
+  height: 32px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.sc-commit-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.sc-commit-btn:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.sc-lists {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 20px;
+}
+
+.sc-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-section-header {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px; /* Match input padding */
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  transition: background 0.1s;
+}
+
+.sc-section-header:hover {
+  background: var(--surface-hover);
+}
+
+.sc-section-icon {
+  margin-right: 6px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.sc-section-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sc-count-badge {
+  background: var(--pill-bg);
+  color: var(--accent);
+  border: 1px solid var(--pill-border);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 16px;
+  text-align: center;
+}
+
+.sc-section-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sc-section-header:hover .sc-section-actions {
+  opacity: 1;
+}
+
+.sc-file-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-file-item {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px 0 28px; /* Indented */
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+  position: relative;
+}
+
+.sc-file-item:hover {
+  background: var(--tree-hover);
+}
+
+.sc-status-icon {
+  width: 16px;
+  font-weight: 700;
+  font-size: 12px;
+  margin-right: 6px;
+  text-align: center;
+}
+
+.sc-file-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.sc-file-path {
+  color: var(--muted);
+  font-size: 0.85em;
+  margin-left: 6px;
+}
+
+.sc-file-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.sc-file-item:hover .sc-file-actions {
+  opacity: 1;
+}
+
+.sc-item-btn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.sc-item-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Timeline / Commits */
+.sc-commit-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 16px 8px 28px;
+  border-left: 2px solid var(--border);
+  margin-left: 16px;
+  position: relative;
+}
+
+.sc-commit-dot {
+  position: absolute;
+  left: -5px;
+  top: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid var(--muted);
+  box-sizing: border-box;
+}
+
+.sc-commit-item:hover .sc-commit-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.sc-commit-header {
+  cursor: pointer;
+}
+
+.sc-commit-msg {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 2px;
+  color: var(--text);
+}
+
+.sc-commit-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sc-commit-actions {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.sc-commit-item:hover .sc-commit-actions {
+  opacity: 1;
+}
+
+/* Remote Input */
+.sc-remote-form {
+  padding: 10px 16px;
+  background: var(--panel-sub);
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-input.small {
+  height: 32px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.sc-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.sc-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sc-btn.ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+}
+
+.sc-btn.ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sc-btn.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.sc-btn.primary:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}

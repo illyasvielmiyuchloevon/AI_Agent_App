@@ -24,6 +24,14 @@ const ChatIcon = () => (
   </svg>
 );
 
+const SourceControlIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="18" cy="18" r="3" />
+    <circle cx="6" cy="6" r="3" />
+    <path d="M6 21V9a9 9 0 0 0 9 9" />
+  </svg>
+);
+
 function NavSidebar({ 
     activeSidebar,
     sidebarCollapsed,
@@ -33,10 +41,12 @@ function NavSidebar({
     chatPanelCollapsed,
     onCreateSession,
     onToggleConfig,
-    apiStatus
+    apiStatus,
+    gitBadgeCount = 0
 }) {
     const isSessionsActive = activeSidebar === 'sessions' && !sidebarCollapsed;
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
+    const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
 
     return (
         <div className="activity-bar">
@@ -53,6 +63,17 @@ function NavSidebar({
                 title="Explorer（资源管理器）"
             >
                 <FolderIcon open={explorerOpen} />
+            </button>
+            <button 
+                className={`activity-item ${isGitActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('git')}
+                title="Source Control（源代码管理）"
+                style={{ position: 'relative' }}
+            >
+                <SourceControlIcon />
+                {gitBadgeCount > 0 && (
+                    <span className="activity-badge">{gitBadgeCount}</span>
+                )}
             </button>
             <button 
                 className="activity-item ghost" 

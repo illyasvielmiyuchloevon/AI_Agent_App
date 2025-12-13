@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } = require('electron');
 const path = require('path');
+const simpleGit = require('simple-git');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
@@ -66,6 +67,155 @@ app.whenReady().then(() => {
     nativeTheme.themeSource = nextTheme;
     applyOverlayTheme(win, nextTheme);
   });
+
+  // --- Git IPC Handlers ---
+  const handleGit = async (cwd, action) => {
+    try {
+      if (!cwd) throw new Error('No working directory specified');
+      console.log(`[Git] Executing in ${cwd}`);
+      const git = simpleGit(cwd);
+      return await action(git);
+    } catch (err) {
+      console.error('[Git] Error:', err);
+      return { success: false, error: err.message || String(err) };
+    }
+  };
+
+  ipcMain.handle('git:status', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    const status = await git.status();
+    return { success: true, status: JSON.parse(JSON.stringify(status)) };
+  }));
+
+  ipcMain.handle('git:getRemotes', (e, cwd) => handleGit(cwd, async (git) => {
+    const remotes = await git.getRemotes(true);
+    return { success: true, remotes: JSON.parse(JSON.stringify(remotes)) };
+  }));
+
+  ipcMain.handle('git:addRemote', (e, { cwd, name, url }) => handleGit(cwd, async (git) => {
+    await git.addRemote(name, url);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:stage', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    await git.add(files);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:unstage', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    if (files === '.') {
+      await git.reset(['HEAD']); // Unstage all
+    } else {
+      await git.reset(['HEAD', ...files]);
+    }
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:commit', (e, { cwd, message }) => handleGit(cwd, async (git) => {
+    const summary = await git.commit(message);
+    return { success: true, summary: JSON.parse(JSON.stringify(summary)) };
+  }));
+
+  ipcMain.handle('git:push', (e, cwd) => handleGit(cwd, async (git) => {
+    await git.push();
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:pull', (e, cwd) => handleGit(cwd, async (git) => {
+    await git.pull();
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:fetch', (e, cwd) => handleGit(cwd, async (git) => {
+    await git.fetch();
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:branch', (e, cwd) => handleGit(cwd, async (git) => {
+    const branches = await git.branchLocal();
+    return { success: true, branches: JSON.parse(JSON.stringify(branches)) };
+  }));
+
+  ipcMain.handle('git:checkout', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    await git.checkout(branch);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:log', (e, cwd) => handleGit(cwd, async (git) => {
+    const log = await git.log({ maxCount: 50 });
+    return { success: true, log: JSON.parse(JSON.stringify(log)) };
+  }));
+  
+  ipcMain.handle('git:diff', (e, { cwd, file }) => handleGit(cwd, async (git) => {
+     // If file is provided, get diff for that file. If not, get all.
+     // We want staged and unstaged changes usually.
+     const diff = await git.diff(file ? [file] : []);
+     return { success: true, diff: JSON.parse(JSON.stringify(diff)) };
+  }));
+
+  ipcMain.handle('git:getCommitDetails', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
+    // git show --name-status --pretty=format:"" <hash>
+    const raw = await git.raw(['show', '--name-status', '--pretty=format:', hash]);
+    const lines = raw.trim().split('\n').filter(Boolean);
+    const files = lines.map(line => {
+      const [status, ...pathParts] = line.split(/\s+/);
+      return { status, path: pathParts.join(' ') };
+    });
+    return { success: true, files };
+  }));
+
+  ipcMain.handle('git:getCommitFileDiffs', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
+      // 1. Get file list
+      const raw = await git.raw(['show', '--name-status', '--pretty=format:', hash]);
+      const lines = raw.trim().split('\n').filter(Boolean);
+      const files = lines.map(line => {
+        const [status, ...pathParts] = line.split(/\s+/);
+        return { status, path: pathParts.join(' ') };
+      });
+
+      // 2. Fetch diffs for each file
+      const results = [];
+      for (const file of files) {
+          try {
+              let before = '';
+              let after = '';
+              // For added files (A), before is empty.
+              // For deleted files (D), after is empty.
+              // For modified (M), both exist.
+              
+              if (file.status !== 'A') {
+                  try {
+                    before = await git.show([`${hash}~1:${file.path}`]);
+                  } catch (e) { /* ignore if not found */ }
+              }
+              if (file.status !== 'D') {
+                  try {
+                    after = await git.show([`${hash}:${file.path}`]);
+                  } catch (e) { /* ignore */ }
+              }
+              results.push({ ...file, before, after });
+          } catch (err) {
+              console.error(`Failed to fetch diff for ${file.path}`, err);
+              results.push({ ...file, error: err.message });
+          }
+      }
+      return { success: true, files: results };
+  }));
+
+  ipcMain.handle('git:getFileContent', (e, { cwd, hash, path }) => handleGit(cwd, async (git) => {
+      try {
+        const content = await git.show([`${hash}:${path}`]);
+        return { success: true, content };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+  }));
+
+  ipcMain.handle('git:init', (e, cwd) => handleGit(cwd, async (git) => {
+    await git.init();
+    return { success: true };
+  }));
 
   createWindow();
 

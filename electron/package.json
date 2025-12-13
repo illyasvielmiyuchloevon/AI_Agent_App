@@ -27,5 +27,8 @@
       "output": "dist"
     },
     "asar": true
+  },
+  "dependencies": {
+    "simple-git": "^3.30.0"
   }
 }

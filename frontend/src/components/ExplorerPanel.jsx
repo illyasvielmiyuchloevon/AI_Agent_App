@@ -67,11 +67,22 @@ const flattenTree = (nodes, collapsed) => {
 };
 
 const TreeRow = React.memo(({ index, style, data }) => {
-  const { rows, activeFile, updatedPaths, onToggle, onOpen, onContext, collapsed } = data;
+  const { rows, activeFile, updatedPaths, onToggle, onOpen, onContext, collapsed, gitStatusMap } = data;
   const node = rows[index];
   const isDir = node.type === 'dir';
   const isActive = activeFile === node.path;
   const isUpdated = updatedPaths.has(node.path);
+  
+  const gitState = gitStatusMap?.get(node.path);
+  const getGitColor = (s) => {
+      if (!s) return null;
+      if (s === 'M') return '#e2c08d';
+      if (s === 'A' || s === '?') return '#73c991';
+      if (s === 'D') return '#f14c4c';
+      return '#aaa'; 
+  };
+  const gitColor = getGitColor(gitState);
+
   return (
     <div
       style={{
@@ -87,20 +98,22 @@ const TreeRow = React.memo(({ index, style, data }) => {
           <i
             className={`codicon ${collapsed.has(node.path) ? 'codicon-chevron-right' : 'codicon-chevron-down'}`}
             aria-hidden
+            style={{ color: 'var(--muted)' }}
           />
         ) : (
-          <i className={`codicon ${getIconClass(node.path)}`} aria-hidden />
+          <i className={`codicon ${getIconClass(node.path)}`} aria-hidden style={{ color: gitColor || 'inherit' }} />
         )}
       </span>
-      <span title={node.path} className="tree-label">
+      <span title={node.path} className="tree-label" style={{ color: gitColor || 'inherit' }}>
         {node.name}
       </span>
-      {isUpdated && <span className="tree-dirty-dot" title="未保存更改" />}
+      {gitState && <span style={{marginLeft:'auto', fontSize:'10px', fontWeight:'bold', color: gitColor, marginRight:'8px'}}>{gitState === '?' ? 'U' : gitState}</span>}
+      {isUpdated && !gitState && <span className="tree-dirty-dot" title="未保存更改" />}
     </div>
   );
 }, (prevProps, nextProps) => {
-  const { rows: prevRows, activeFile: prevActive, updatedPaths: prevUpdated, collapsed: prevCollapsed } = prevProps.data;
-  const { rows: nextRows, activeFile: nextActive, updatedPaths: nextUpdated, collapsed: nextCollapsed } = nextProps.data;
+  const { rows: prevRows, activeFile: prevActive, updatedPaths: prevUpdated, collapsed: prevCollapsed, gitStatusMap: prevGit } = prevProps.data;
+  const { rows: nextRows, activeFile: nextActive, updatedPaths: nextUpdated, collapsed: nextCollapsed, gitStatusMap: nextGit } = nextProps.data;
   const prevNode = prevRows[prevProps.index];
   const nextNode = nextRows[nextProps.index];
   
@@ -110,7 +123,8 @@ const TreeRow = React.memo(({ index, style, data }) => {
     prevNode?.path === nextNode?.path &&
     prevActive === nextActive &&
     (prevNode?.path ? prevUpdated.has(prevNode.path) === nextUpdated.has(nextNode.path) : true) &&
-    (prevNode?.type === 'dir' ? prevCollapsed.has(prevNode.path) === nextCollapsed.has(nextNode.path) : true)
+    (prevNode?.type === 'dir' ? prevCollapsed.has(prevNode.path) === nextCollapsed.has(nextNode.path) : true) &&
+    (prevNode?.path ? prevGit?.get(prevNode.path) === nextGit?.get(nextNode.path) : true)
   );
 });
 
@@ -159,6 +173,7 @@ function ExplorerPanel({
   onRenamePath,
   onSyncStructure,
   hasWorkspace = false,
+  gitStatus = null
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [contextMenu, setContextMenu] = useState(null);
@@ -169,6 +184,16 @@ function ExplorerPanel({
     () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
     [files]
   );
+  
+  const gitStatusMap = useMemo(() => {
+      if (!gitStatus || !gitStatus.files) return new Map();
+      const map = new Map();
+      gitStatus.files.forEach(f => {
+          const status = f.working_dir !== ' ' ? f.working_dir : f.index;
+          map.set(f.path, status);
+      });
+      return map;
+  }, [gitStatus]);
 
   const nodes = useMemo(() => buildTree(fileTree), [fileTree]);
   const virtualRows = useMemo(() => flattenTree(nodes, collapsed), [nodes, collapsed]);
@@ -263,6 +288,7 @@ function ExplorerPanel({
               onOpen: onOpenFile,
               onContext: handleContextMenu,
               collapsed,
+              gitStatusMap
             }}
           >
             {({ index, style, data, key }) => (

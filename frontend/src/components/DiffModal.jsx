@@ -21,6 +21,28 @@ const inferLanguage = (path = '') => {
   return LANG_MAP[ext] || 'plaintext';
 };
 
+class EditorErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("Monaco Editor Error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div style={{ padding: '10px', color: 'var(--danger)' }}>Editor component crashed. Please retry.</div>;
+    }
+    return this.props.children;
+  }
+}
+
 const findFirstDiffLine = (before = '', after = '') => {
   const beforeLines = (before || '').split('\n');
   const afterLines = (after || '').split('\n');
@@ -166,44 +188,120 @@ function DiffModal({ diff, onClose, theme }) {
           </div>
         </div>
         <div className="diff-modal-body">
-          <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
-            <MonacoDiffEditor
-              key={editorKey}
-              height={isFullScreen ? 'calc(92vh - 80px)' : '70vh'}
-              language={language}
-              original={before}
-              modified={after}
-              theme={monacoTheme}
-              onMount={handleMount}
-              keepCurrentOriginalModel={true}
-              keepCurrentModifiedModel={true}
-              originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
-              modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
-              options={{
-                renderSideBySide: true,
-                readOnly: true,
-                automaticLayout: true,
-                wordWrap: 'off',
-                diffWordWrap: 'off',
-                minimap: { enabled: false },
-                // Try both flags to support different monaco versions
-                hideUnchangedRegions: compactView ? {
-                  enabled: true,
-                  revealLinePadding: 3,
-                  contextLineCount: 3
-                } : { enabled: false },
-                renderUnchangedRegions: compactView ? {
-                  enabled: true,
-                  revealLinePadding: 3,
-                  contextLineCount: 3
-                } : { enabled: false }
-              }}
-            />
-          </Suspense>
+            {diff.files && Array.isArray(diff.files) ? (
+                // Multi-file View
+                <div className="multi-diff-container" style={{ height: isFullScreen ? 'calc(92vh - 80px)' : '70vh', overflowY: 'auto' }}>
+                    {diff.files.map((file, idx) => (
+                        <FileDiffSection 
+                            key={file.path} 
+                            file={file} 
+                            theme={monacoTheme}
+                            compactView={compactView}
+                            index={idx}
+                        />
+                    ))}
+                </div>
+            ) : (
+              // Single-file View
+              <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
+                <MonacoDiffEditor
+                  key={editorKey}
+                  height={isFullScreen ? 'calc(92vh - 80px)' : '70vh'}
+                  language={language}
+                  original={before}
+                  modified={after}
+                  theme={monacoTheme}
+                  onMount={handleMount}
+                  keepCurrentOriginalModel={true}
+                  keepCurrentModifiedModel={true}
+                  originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
+                  modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
+                  options={{
+                    renderSideBySide: true,
+                    readOnly: true,
+                    automaticLayout: true,
+                    wordWrap: 'off',
+                    diffWordWrap: 'off',
+                    minimap: { enabled: false },
+                    hideUnchangedRegions: compactView ? {
+                      enabled: true,
+                      revealLinePadding: 3,
+                      contextLineCount: 3
+                    } : { enabled: false }
+                  }}
+                />
+              </Suspense>
+            )}
         </div>
       </div>
     </div>
   );
 }
+
+const FileDiffSection = ({ file, theme, compactView, index }) => {
+    const [expanded, setExpanded] = useState(true);
+    const language = useMemo(() => inferLanguage(file.path || ''), [file.path]);
+    
+    // Lazy load logic: only render editor when expanded
+    return (
+        <div className="diff-section" style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: '4px', overflow: 'hidden' }}>
+            <div 
+                className="diff-section-header" 
+                onClick={() => setExpanded(!expanded)}
+                style={{
+                    padding: '8px 12px',
+                    background: 'var(--panel-header)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    borderBottom: expanded ? '1px solid var(--border)' : 'none',
+                    userSelect: 'none'
+                }}
+            >
+                <span style={{ marginRight: '8px', fontSize: '12px' }}>{expanded ? '▼' : '▶'}</span>
+                <span style={{ 
+                    color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')), 
+                    fontWeight: 'bold', 
+                    marginRight: '8px',
+                    width: '14px'
+                }}>
+                    {file.status}
+                </span>
+                <span style={{ fontWeight: '500', fontSize: '13px' }}>{file.path}</span>
+            </div>
+            {expanded && (
+                <div style={{ height: '300px' }}>
+                    <EditorErrorBoundary>
+                        <Suspense fallback={<div className="monaco-fallback">Loading...</div>}>
+                            <MonacoDiffEditor
+                                height="300px"
+                                language={language}
+                                original={file.before || ''}
+                                modified={file.after || ''}
+                                theme={theme}
+                                originalModelPath={`original://${file.path}`}
+                                modifiedModelPath={`modified://${file.path}`}
+                                keepCurrentOriginalModel={true}
+                                keepCurrentModifiedModel={true}
+                                options={{
+                                    renderSideBySide: true,
+                                    readOnly: true,
+                                    automaticLayout: true,
+                                    scrollBeyondLastLine: false,
+                                    minimap: { enabled: false },
+                                    hideUnchangedRegions: compactView ? {
+                                      enabled: true,
+                                      revealLinePadding: 3,
+                                      contextLineCount: 3
+                                    } : { enabled: false }
+                                }}
+                            />
+                        </Suspense>
+                    </EditorErrorBoundary>
+                </div>
+            )}
+        </div>
+    );
+};
 
 export default DiffModal;

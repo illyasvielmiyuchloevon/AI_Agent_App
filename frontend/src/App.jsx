@@ -9,6 +9,8 @@ import TitleBar from './components/TitleBar';
 import Workspace from './components/Workspace';
 import { LocalWorkspaceDriver } from './utils/localWorkspaceDriver';
 import DiffModal from './components/DiffModal';
+import { GitDriver } from './utils/gitDriver';
+import SourceControlPanel from './components/SourceControlPanel';
 
 const DEBUG_SEPARATORS = false;
 
@@ -294,6 +296,13 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() => pickLayoutNumber('sidebarWidth', DEFAULT_PROJECT_CONFIG.sidebarWidth));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState('sessions');
+  
+  // --- Git State ---
+  const [gitStatus, setGitStatus] = useState(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitRemotes, setGitRemotes] = useState([]);
+  const [gitLog, setGitLog] = useState([]);
+
   const [chatPanelWidth, setChatPanelWidth] = useState(() => pickLayoutNumber('chatWidth', DEFAULT_PROJECT_CONFIG.chatPanelWidth));
   const [chatPanelCollapsed, setChatPanelCollapsed] = useState(false);
   const [activeResizeTarget, setActiveResizeTarget] = useState(null);
@@ -2093,6 +2102,157 @@ function App() {
       });
   }, [sidebarCollapsed]);
 
+  // --- Git Logic ---
+  const refreshGitStatus = useCallback(async () => {
+      if (!backendWorkspaceRoot || !GitDriver.isAvailable()) return;
+      setGitLoading(true);
+      const status = await GitDriver.status(backendWorkspaceRoot);
+      setGitStatus(status);
+      const remotes = await GitDriver.getRemotes(backendWorkspaceRoot);
+      setGitRemotes(remotes);
+      const log = await GitDriver.log(backendWorkspaceRoot);
+      setGitLog(log?.all || []);
+      setGitLoading(false);
+  }, [backendWorkspaceRoot]);
+
+  useEffect(() => {
+      if (backendBound && backendWorkspaceRoot) {
+          refreshGitStatus();
+          const timer = setInterval(refreshGitStatus, 5000);
+          return () => clearInterval(timer);
+      }
+  }, [backendBound, backendWorkspaceRoot, refreshGitStatus]);
+
+  const handleGitInit = async () => {
+      if (!backendWorkspaceRoot) {
+          promptBindBackendRoot();
+          return;
+      }
+      await GitDriver.init(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+
+  const handleGitAddRemote = async (name, url) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.addRemote(backendWorkspaceRoot, name, url);
+      refreshGitStatus();
+  };
+
+  const handleGitStage = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.stage(backendWorkspaceRoot, files);
+      refreshGitStatus();
+  };
+  const handleGitUnstage = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.unstage(backendWorkspaceRoot, files);
+      refreshGitStatus();
+  };
+  const handleGitStageAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.stage(backendWorkspaceRoot, ['.']);
+      refreshGitStatus();
+  };
+  const handleGitUnstageAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.unstage(backendWorkspaceRoot, '.');
+      refreshGitStatus();
+  };
+  const handleGitCommit = async (msg) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.commit(backendWorkspaceRoot, msg);
+      refreshGitStatus();
+  };
+  const handleGitSync = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.pull(backendWorkspaceRoot);
+      await GitDriver.push(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+  
+  const handleGenerateCommitMessage = async () => {
+      if (!gitStatus || !backendWorkspaceRoot) return '';
+      const diff = await GitDriver.diff(backendWorkspaceRoot);
+      if (!diff) return '';
+      const diffText = typeof diff === 'string' ? diff : JSON.stringify(diff);
+      const prompt = `Generate a concise git commit message (first line under 50 chars) for this diff:\n\n${diffText.slice(0, 2000)}`;
+      
+      if (!currentSessionId) return 'Error: Please open a chat session first.';
+      
+      try {
+           const res = await projectFetch(`/api/sessions/${currentSessionId}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: prompt, mode: 'chat' })
+          });
+          if (!res.body) return '';
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let result = '';
+          while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              result += decoder.decode(value, { stream: true });
+          }
+          return result.trim();
+      } catch (e) {
+          console.error(e);
+          return 'Error generating message';
+      }
+  };
+
+  const handleGetCommitDetails = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return [];
+      return await GitDriver.getCommitDetails(backendWorkspaceRoot, hash);
+  }, [backendWorkspaceRoot]);
+
+  const handleOpenCommitDiff = useCallback(async (hash, path) => {
+      if (!backendWorkspaceRoot) return;
+      try {
+          const before = await GitDriver.getFileContent(backendWorkspaceRoot, `${hash}~1`, path);
+          const after = await GitDriver.getFileContent(backendWorkspaceRoot, hash, path);
+          openDiffModal({ path, before, after });
+      } catch (e) {
+          console.error('Failed to open commit diff', e);
+      }
+  }, [backendWorkspaceRoot, openDiffModal]);
+
+  const handleOpenAllCommitDiffs = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return;
+      try {
+          const files = await GitDriver.getCommitFileDiffs(backendWorkspaceRoot, hash);
+          if (!files || files.length === 0) return;
+          openDiffModal({ files });
+      } catch (e) {
+          console.error('Failed to open all commit diffs', e);
+      }
+  }, [backendWorkspaceRoot, openDiffModal]);
+
+  const handleOpenWorkingCopyDiff = useCallback(async (path, staged = false) => {
+      if (!backendWorkspaceRoot || !workspaceDriver) return;
+      try {
+          let before = '';
+          let after = '';
+          
+          if (staged) {
+              // Staged: HEAD vs Index
+              before = await GitDriver.getFileContent(backendWorkspaceRoot, 'HEAD', path);
+              after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+          } else {
+              // Unstaged: Index vs Worktree
+              before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+              // For worktree, read directly from disk
+              const fileData = await workspaceDriver.readFile(path);
+              after = fileData.content || '';
+          }
+          openDiffModal({ path, before, after });
+      } catch (e) {
+          console.error('Failed to open working copy diff', e);
+          // Fallback to simple file open if diff fails
+          openFile(path);
+      }
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, openFile]);
+
   // --- Resizer Logic ---
   const startResize = useCallback((target) => (mouseDownEvent) => {
       mouseDownEvent.preventDefault();
@@ -2294,6 +2454,7 @@ function App() {
   const logStatus = lastLog ? { requestOk: !!lastLog.success, parseOk: lastLog.parsed_success !== false } : null;
   const workspaceVisible = ['canva', 'agent'].includes(currentMode) || !!workspaceState.activeFile;
   const workspaceShellVisible = workspaceVisible || showLogs;
+  const gitBranch = gitStatus?.current || '';
 
   // ✅ 使用受控渲染而非延迟值，避免闪烁
   // 直接传递最新状态，在 Workspace 组件内部使用 useMemo 优化
@@ -2445,7 +2606,31 @@ function App() {
                   onRenamePath={handleRenamePath}
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
                   hasWorkspace={!!workspaceDriver}
+                  gitStatus={gitStatus}
               />
+            )}
+            {!sidebarCollapsed && activeSidebarPanel === 'git' && (
+                <SourceControlPanel 
+                    gitStatus={gitStatus}
+                    gitRemotes={gitRemotes}
+                    gitLog={gitLog}
+                    onCommit={handleGitCommit}
+                    onStage={handleGitStage}
+                    onUnstage={handleGitUnstage}
+                    onStageAll={handleGitStageAll}
+                    onUnstageAll={handleGitUnstageAll}
+                    onSync={handleGitSync}
+                    onRefresh={refreshGitStatus}
+                    onGenerateCommitMessage={handleGenerateCommitMessage}
+                    onInit={handleGitInit}
+                    onAddRemote={handleGitAddRemote}
+                    onOpenFile={openFile}
+                    onDiff={handleOpenWorkingCopyDiff}
+                    onGetCommitDetails={handleGetCommitDetails}
+                    onOpenCommitDiff={handleOpenCommitDiff}
+                    onOpenAllDiffs={handleOpenAllCommitDiffs}
+                    loading={gitLoading}
+                />
             )}
           </div>
 
@@ -2584,6 +2769,42 @@ function App() {
               )}
           </div>
       </div>
+      
+      <div className="status-bar" style={{
+          height: '22px',
+          background: 'var(--accent)',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          fontSize: '11px',
+          cursor: 'default',
+          userSelect: 'none',
+          zIndex: 100
+      }}>
+          <div 
+            className="status-item" 
+            style={{ display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer', marginRight: '10px' }}
+            onClick={() => {
+                if (sidebarCollapsed) setSidebarCollapsed(false);
+                setActiveSidebarPanel('git');
+            }}
+            title="Switch Branch"
+          >
+              <span style={{ fontSize: '12px' }}>🕊️</span>
+              <span>{gitBranch || 'Git'}</span>
+              {gitStatus && (
+                  <span style={{ marginLeft: '4px' }}>
+                      {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
+                      {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
+                  </span>
+              )}
+          </div>
+          {workspaceBindingStatus === 'error' && (
+              <div style={{ background: 'var(--danger)', padding: '0 4px' }}>Connection Error</div>
+          )}
+      </div>
+
       {resizeTooltip && (
         <div style={{
             position: 'fixed',
