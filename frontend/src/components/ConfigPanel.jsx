@@ -95,7 +95,7 @@ const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit =
     );
 };
 
-function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage }) {
+function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage, appearanceMode = 'system', onChangeAppearanceMode, displayPreferences, onChangeDisplayPreference, onOpenInEditor, fullscreen, onToggleFullscreen, variant = 'modal' }) {
     const [activeTab, setActiveTab] = useState('general');
     const currentConfig = config[config.provider];
     const isFirstRun = useRef(true);
@@ -148,6 +148,100 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
             }
         }));
     };
+
+    const renderAppSettings = () => (
+        <>
+            <div className="config-section-title">App General</div>
+            <div className="config-field">
+                <label className="config-label">Global Settings</label>
+                <div style={{ fontSize: '12px', color: '#666' }}>
+                    Application level preferences such as theme and appearance are applied globally across all projects.
+                </div>
+            </div>
+            <div className="config-field">
+                <label className="config-label">Default View Location</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <div style={{ fontSize: '12px', marginBottom: '4px', color: '#666' }}>Settings Panel</div>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-settings"
+                            checked={displayPreferences?.settings === 'modal'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('settings', 'modal')}
+                        />
+                        <span>Use Modal Window</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-settings"
+                            checked={displayPreferences?.settings === 'editor'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('settings', 'editor')}
+                        />
+                        <span>Use Editor View</span>
+                    </label>
+
+                    <div style={{ fontSize: '12px', margin: '8px 0 4px', color: '#666' }}>Diff Viewer</div>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-diff"
+                            checked={displayPreferences?.diff === 'modal'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('diff', 'modal')}
+                        />
+                        <span>Use Modal Window</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-diff"
+                            checked={displayPreferences?.diff === 'editor'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('diff', 'editor')}
+                        />
+                        <span>Use Editor View</span>
+                    </label>
+                </div>
+            </div>
+        </>
+    );
+
+    const renderAppearanceSettings = () => (
+        <>
+            <div className="config-section-title">Theme & Appearance</div>
+            <div className="config-field">
+                <label className="config-label">Theme Mode</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'system'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('system')}
+                        />
+                        <span>Follow System</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'light'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('light')}
+                        />
+                        <span>Light</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'dark'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('dark')}
+                        />
+                        <span>Dark</span>
+                    </label>
+                </div>
+            </div>
+        </>
+    );
 
     const renderGeneralSettings = () => (
         <>
@@ -283,69 +377,121 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
         </>
     );
 
-    return (
-        <div className="config-modal-backdrop">
-            <div className="config-modal">
-                <div className="config-header">
-                    <h2 className="config-title">Configuration</h2>
+    const content = (
+        <>
+            <div className="config-header">
+                <h2 className="config-title">Global Settings</h2>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {variant === 'modal' && (
+                        <>
+                            <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={onOpenInEditor}
+                                style={{ height: 28, fontSize: '0.85rem' }}
+                            >
+                                在编辑器查看
+                            </button>
+                            <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={onToggleFullscreen}
+                                style={{ height: 28, fontSize: '0.85rem' }}
+                            >
+                                {fullscreen ? '退出全屏' : '全屏显示'}
+                            </button>
+                        </>
+                    )}
                     <button className="config-close" onClick={onClose} aria-label="关闭设置">×</button>
                 </div>
+            </div>
+            
+            <div className="config-layout">
+                <div className="config-sidebar">
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'app' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('app')}
+                    >
+                        App General
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'appearance' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('appearance')}
+                    >
+                        Theme & Appearance
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'general' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('general')}
+                    >
+                        LLM & Session
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'agent' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('agent')}
+                    >
+                        Agent Tools
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'canva' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('canva')}
+                    >
+                        Canva Tools
+                    </div>
+                </div>
                 
-                <div className="config-layout">
-                    <div className="config-sidebar">
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'general' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('general')}
-                        >
-                            General & LLM
-                        </div>
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'agent' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('agent')}
-                        >
-                            Agent Tools
-                        </div>
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'canva' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('canva')}
-                        >
-                            Canva Tools
-                        </div>
+                <div className="config-content">
+                    {activeTab === 'app' && renderAppSettings()}
+                    {activeTab === 'appearance' && renderAppearanceSettings()}
+                    {activeTab === 'general' && renderGeneralSettings()}
+                    {activeTab === 'agent' && renderToolSettings('agent', 'Agent Mode Tools')}
+                    {activeTab === 'canva' && renderToolSettings('canva', 'Canva Mode Tools')}
+                </div>
+            </div>
+
+            <div className="config-footer">
+                 <div className="config-actions" style={{ width: '100%' }}>
+                    <div className={`config-status ${apiStatus}`} style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
+                        {apiStatus !== 'unknown' && (
+                            <>
+                                <span className="dot" />
+                                {apiStatus === 'checking' ? 'Checking...' : (apiStatus === 'ok' ? 'Connected' : 'Connection Failed')}
+                            </>
+                        )}
+                        {apiMessage && (
+                            <span style={{ marginLeft: '10px', fontSize: '12px', color: apiStatus === 'ok' ? '#4caf50' : '#f44336' }}>
+                                {apiMessage}
+                            </span>
+                        )}
                     </div>
                     
-                    <div className="config-content">
-                        {activeTab === 'general' && renderGeneralSettings()}
-                        {activeTab === 'agent' && renderToolSettings('agent', 'Agent Mode Tools')}
-                        {activeTab === 'canva' && renderToolSettings('canva', 'Canva Mode Tools')}
+                    <div className="config-buttons">
+                         <button type="button" className="ghost-btn" onClick={checkApiStatus}>
+                            Test Connection
+                        </button>
+                        <button type="button" className="primary-btn" onClick={() => { onSave(); onClose(); }}>
+                            Save & Close
+                        </button>
                     </div>
-                </div>
+                 </div>
+            </div>
+        </>
+    );
 
-                <div className="config-footer">
-                     <div className="config-actions" style={{ width: '100%' }}>
-                        <div className={`config-status ${apiStatus}`} style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
-                            {apiStatus !== 'unknown' && (
-                                <>
-                                    <span className="dot" />
-                                    {apiStatus === 'checking' ? 'Checking...' : (apiStatus === 'ok' ? 'Connected' : 'Connection Failed')}
-                                </>
-                            )}
-                            {apiMessage && (
-                                <span style={{ marginLeft: '10px', fontSize: '12px', color: apiStatus === 'ok' ? '#4caf50' : '#f44336' }}>
-                                    {apiMessage}
-                                </span>
-                            )}
-                        </div>
-                        
-                        <div className="config-buttons">
-                             <button type="button" className="ghost-btn" onClick={checkApiStatus}>
-                                Test Connection
-                            </button>
-                            <button type="button" className="primary-btn" onClick={() => { onSave(); onClose(); }}>
-                                Save & Close
-                            </button>
-                        </div>
-                     </div>
+    if (variant === 'inline') {
+        return (
+            <div className="config-inline-shell" style={{ flex: 1, minHeight: 0 }}>
+                <div className="config-modal" style={{ width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', borderRadius: 0 }}>
+                    {content}
                 </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="config-modal-backdrop">
+            <div className="config-modal" style={fullscreen ? { width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh', borderRadius: 0 } : undefined}>
+                {content}
             </div>
         </div>
     );

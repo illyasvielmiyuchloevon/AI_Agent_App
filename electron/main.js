@@ -150,8 +150,19 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('git:log', (e, cwd) => handleGit(cwd, async (git) => {
-    const log = await git.log({ maxCount: 50 });
-    return { success: true, log: JSON.parse(JSON.stringify(log)) };
+    try {
+      const log = await git.log({ maxCount: 50 });
+      return { success: true, log: JSON.parse(JSON.stringify(log)) };
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      if (/does not have any commits yet/i.test(message)) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+      throw err;
+    }
   }));
   
   ipcMain.handle('git:diff', (e, { cwd, file }) => handleGit(cwd, async (git) => {

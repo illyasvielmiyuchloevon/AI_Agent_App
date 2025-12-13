@@ -217,12 +217,10 @@ function Workspace({
   theme,
   backendRoot,
   previewEntry = '',
-  diffData = null,
   onSelectFolder,
   onBindBackendRoot,
   onOpenFile,
   onCloseFile,
-  onCloseDiff,
   onFileChange,
   onActiveFileChange,
   onTabReorder,
@@ -233,6 +231,10 @@ function Workspace({
   onToggleView,
   onSyncStructure,
   onPreviewEntryChange,
+  settingsTabPath,
+  renderSettingsTab,
+  diffTabPrefix,
+  diffTabs,
 }) {
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
@@ -296,93 +298,15 @@ function Workspace({
 
   const editorPane = (
     <div className="workspace-editor">
-      {viewMode === 'diff' && diffData ? (
-        <>
-          <div className="tab-row" style={{ justifyContent: 'space-between', paddingRight: '1rem' }}>
-            <div className="tab active" style={{ borderBottom: '1px solid transparent' }}>
-              <button className="tab-main" type="button">
-                <span className="codicon codicon-diff" style={{ marginRight: '6px', color: 'var(--accent)' }} />
-                <span className="tab-text">Diff: {diffData.path}</span>
-              </button>
-              <button onClick={onCloseDiff} className="tab-close" title="Close Diff View">
-                <i className="codicon codicon-close" aria-hidden />
-              </button>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-                <button className="ghost-btn" onClick={onCloseDiff} style={{ fontSize: '0.85rem' }}>
-                    退出对比
-                </button>
-            </div>
-          </div>
-          <div className="monaco-shell">
-            <Suspense fallback={<div className="monaco-fallback">Loading Diff Editor…</div>}>
-              {diffData.files ? (
-                 <div style={{ height: '100%', overflowY: 'auto' }}>
-                    {diffData.files.map((file, idx) => (
-                        <div key={file.path} style={{ height: '300px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ 
-                                padding: '8px 16px', 
-                                background: 'var(--panel-sub)', 
-                                borderBottom: '1px solid var(--border)',
-                                fontSize: '13px',
-                                fontWeight: '600',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px'
-                            }}>
-                                <span style={{ 
-                                    color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')), 
-                                    fontWeight: 'bold',
-                                    width: '16px',
-                                    textAlign: 'center'
-                                }}>
-                                    {file.status}
-                                </span>
-                                {file.path}
-                            </div>
-                            <div style={{ flex: 1, minHeight: 0 }}>
-                                <MonacoDiffEditor
-                                    height="100%"
-                                    language={inferLanguage(file.path || '')}
-                                    original={file.before || ''}
-                                    modified={file.after || ''}
-                                    theme={monacoTheme}
-                                    options={{
-                                        ...monacoOptions,
-                                        readOnly: true,
-                                        renderSideBySide: true,
-                                        wordWrap: 'off',
-                                        minimap: { enabled: false },
-                                        scrollBeyondLastLine: false,
-                                        padding: { top: 8, bottom: 8 }
-                                    }}
-                                />
-                            </div>
-                        </div>
-                    ))}
-                 </div>
-              ) : (
-                  <MonacoDiffEditor
-                    height="100%"
-                    language={inferLanguage(diffData.path || '')}
-                    original={diffData.before || ''}
-                    modified={diffData.after || ''}
-                    theme={monacoTheme}
-                    options={{
-                      ...monacoOptions,
-                      readOnly: true,
-                      renderSideBySide: true,
-                      wordWrap: 'off'
-                    }}
-                  />
-              )}
-            </Suspense>
-          </div>
-        </>
-      ) : (
-        <>
           <div className="tab-row">
-            {openTabs.map((path, idx) => (
+            {openTabs.map((path, idx) => {
+              const isSettingsTab = settingsTabPath && path === settingsTabPath;
+              const isDiffTab = diffTabPrefix && path.startsWith(diffTabPrefix);
+              const diff = isDiffTab && diffTabs ? diffTabs[path] : null;
+              const diffLabel = diff
+                ? (diff.path ? `Diff: ${diff.path}` : (diff.files ? 'Diff (multi-file)' : 'Diff'))
+                : 'Diff';
+              return (
               // VS Code tab styling: icon + title, dirty dot, close button on hover
               <div
                 key={path}
@@ -402,22 +326,26 @@ function Workspace({
                   title={path}
                   type="button"
                 >
-                  <span className="tab-text">{path.split('/').pop()}</span>
+                  <span className="tab-text">
+                    {isSettingsTab
+                      ? 'Settings'
+                      : (isDiffTab ? diffLabel : path.split('/').pop())}
+                  </span>
                   {updatedPaths.has(path) && <span className="tab-dirty codicon codicon-circle-filled" aria-label="未保存更改" />}
                 </button>
                 <button onClick={() => onCloseFile(path)} className="tab-close" title="Close tab">
                   <i className="codicon codicon-close" aria-hidden />
                 </button>
               </div>
-            ))}
+            );})}
           </div>
           <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
-            {activeFile && workspaceRootLabel && (
+            {activeFile && workspaceRootLabel && activeFile !== settingsTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
               <span className="breadcrumb-root">
                 {workspaceRootLabel}
               </span>
             )}
-            {activeFile && breadcrumbParts.map((part, idx) => (
+            {activeFile && activeFile !== settingsTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && breadcrumbParts.map((part, idx) => (
               <span key={`${part}-${idx}`} className="breadcrumb-part">
                 <i className="codicon codicon-chevron-right" aria-hidden />
                 <span>{part}</span>
@@ -426,23 +354,91 @@ function Workspace({
           </div>
           <div className="monaco-shell">
             {activeFile ? (
-                <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
-                <MonacoEditor
-                  key={`editor-${activeFile}`}
-                  height="100%"
-                  language={inferLanguage(activeFile)}
-                  theme={monacoTheme}
-                  value={activeContent}
-                  options={monacoOptions}
-                  onChange={(value) => onFileChange(activeFile, value ?? '')}
-                />
-              </Suspense>
+                settingsTabPath && activeFile === settingsTabPath && renderSettingsTab
+                  ? renderSettingsTab()
+                  : (diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix) && diffTabs && diffTabs[activeFile]
+                      ? (
+                        <Suspense fallback={<div className="monaco-fallback">Loading Diff Editor…</div>}>
+                          {diffTabs[activeFile].files ? (
+                            <div style={{ height: '100%', overflowY: 'auto' }}>
+                              {diffTabs[activeFile].files.map((file) => (
+                                <div key={file.path} style={{ height: '300px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+                                  <div style={{ 
+                                      padding: '8px 16px', 
+                                      background: 'var(--panel-sub)', 
+                                      borderBottom: '1px solid var(--border)',
+                                      fontSize: '13px',
+                                      fontWeight: '600',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px'
+                                  }}>
+                                      <span style={{ 
+                                          color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')), 
+                                          fontWeight: 'bold',
+                                          width: '16px',
+                                          textAlign: 'center'
+                                      }}>
+                                          {file.status}
+                                      </span>
+                                      {file.path}
+                                  </div>
+                                  <div style={{ flex: 1, minHeight: 0 }}>
+                                      <MonacoDiffEditor
+                                          height="100%"
+                                          language={inferLanguage(file.path || '')}
+                                          original={file.before || ''}
+                                          modified={file.after || ''}
+                                          theme={monacoTheme}
+                                          options={{
+                                              ...monacoOptions,
+                                              readOnly: true,
+                                              renderSideBySide: true,
+                                              wordWrap: 'off',
+                                              minimap: { enabled: false },
+                                              scrollBeyondLastLine: false,
+                                              padding: { top: 8, bottom: 8 }
+                                          }}
+                                      />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <MonacoDiffEditor
+                              height="100%"
+                              language={inferLanguage(diffTabs[activeFile].path || '')}
+                              original={diffTabs[activeFile].before || ''}
+                              modified={diffTabs[activeFile].after || ''}
+                              theme={monacoTheme}
+                              options={{
+                                ...monacoOptions,
+                                readOnly: true,
+                                renderSideBySide: true,
+                                wordWrap: 'off'
+                              }}
+                            />
+                          )}
+                        </Suspense>
+                      )
+                      : (
+                        <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
+                          <MonacoEditor
+                            key={`editor-${activeFile}`}
+                            height="100%"
+                            language={inferLanguage(activeFile)}
+                            theme={monacoTheme}
+                            value={activeContent}
+                            options={monacoOptions}
+                            onChange={(value) => onFileChange(activeFile, value ?? '')}
+                          />
+                        </Suspense>
+                      )
+                    )
             ) : (
               <div className="monaco-empty" aria-label="No file open" />
             )}
           </div>
-        </>
-      )}
     </div>
   );
 

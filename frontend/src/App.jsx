@@ -39,6 +39,29 @@ const persistThemeChoice = (value) => {
 const SESSION_STORAGE_KEY = 'ai_agent_sessions_ping';
 const LAYOUT_STORAGE_KEY = 'ai_agent_layout_state';
 
+const GLOBAL_CONFIG_STORAGE_KEY = 'ai_agent_global_llm_config_v1';
+
+const readGlobalConfig = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+      const raw = window.localStorage.getItem(GLOBAL_CONFIG_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+  } catch {
+      return null;
+  }
+};
+
+const persistGlobalConfig = (value) => {
+  if (typeof window === 'undefined') return;
+  try {
+      const payload = value || {};
+      window.localStorage.setItem(GLOBAL_CONFIG_STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+      console.warn('Persist global config failed', err);
+  }
+};
+
 const MODE_OPTIONS = [
   { key: 'chat', label: 'Chat', description: '纯聊天，无任何工具' },
   { key: 'plan', label: 'Plan', description: '结构化计划/路标/甘特图/TODO 输出' },
@@ -175,7 +198,11 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       api_key: snapshot.api_key || '',
       model: snapshot.model || '',
       base_url: snapshot.base_url || '',
-      check_model: snapshot.check_model || ''
+      check_model: snapshot.check_model || '',
+      context_max_length: snapshot.context_max_length,
+      output_max_tokens: snapshot.output_max_tokens,
+      temperature: snapshot.temperature,
+      context_independent: snapshot.context_independent
   };
   const openai = { ...(fallback.openai || DEFAULT_PROJECT_CONFIG.openai), ...(provider === 'openai' ? shared : {}) };
   const anthropic = { ...(fallback.anthropic || DEFAULT_PROJECT_CONFIG.anthropic), ...(provider === 'anthropic' ? shared : {}) };
@@ -233,6 +260,9 @@ const initialWorkspaceState = {
   previewEntry: '',
 };
 
+const SETTINGS_TAB_PATH = '__system__/settings';
+const DIFF_TAB_PREFIX = '__diff__/';
+
 function App() {
   const mergeToolSettings = (incoming) => ({
       agent: { ...DEFAULT_TOOL_SETTINGS.agent, ...(incoming?.agent || {}) },
@@ -241,10 +271,25 @@ function App() {
   const storedThemePreference = readStoredTheme();
   // --- Config State ---
   const [projectConfig, setProjectConfig] = useState(DEFAULT_PROJECT_CONFIG);
-  const [config, setConfig] = useState({ 
-    provider: DEFAULT_PROJECT_CONFIG.provider, 
-    openai: { ...DEFAULT_PROJECT_CONFIG.openai },
-    anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic }
+  const [config, setConfig] = useState(() => {
+    const stored = readGlobalConfig();
+    if (stored) {
+      const provider = stored.provider || DEFAULT_PROJECT_CONFIG.provider;
+      return {
+        provider,
+        openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(stored.openai || {}) },
+        anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(stored.anthropic || {}) }
+      };
+    }
+    return {
+      provider: DEFAULT_PROJECT_CONFIG.provider,
+      openai: { ...DEFAULT_PROJECT_CONFIG.openai },
+      anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic }
+    };
+  });
+  const [uiDisplayPreferences, setUiDisplayPreferences] = useState(() => {
+    const stored = readGlobalConfig();
+    return stored?.uiDisplayPreferences || { settings: 'modal', diff: 'modal' };
   });
   const [showConfig, setShowConfig] = useState(false);
   const [configured, setConfigured] = useState(false);
@@ -263,7 +308,7 @@ function App() {
   const [loadingSessions, setLoadingSessions] = useState(new Set());
   const [currentMode, setCurrentMode] = useState('chat');
   const [workspaceState, setWorkspaceState] = useState(initialWorkspaceState);
-  const [workspaceDiffData, setWorkspaceDiffData] = useState(null);
+  const [diffTabs, setDiffTabs] = useState({});
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceDriver, setWorkspaceDriver] = useState(null);
   const [workspaceBindingStatus, setWorkspaceBindingStatus] = useState('idle'); // idle | checking | ready | error
@@ -271,7 +316,10 @@ function App() {
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('');
   const [backendWorkspaceRoot, setBackendWorkspaceRoot] = useState('');
   const [hotReloadToken, setHotReloadToken] = useState(0);
-  const [toolSettings, setToolSettings] = useState(DEFAULT_TOOL_SETTINGS);
+  const [toolSettings, setToolSettings] = useState(() => {
+    const stored = readGlobalConfig();
+    return mergeToolSettings(stored?.toolSettings || DEFAULT_TOOL_SETTINGS);
+  });
   const [theme, setTheme] = useState(() => storedThemePreference || DEFAULT_PROJECT_CONFIG.theme || detectSystemTheme());
   const abortControllerRef = useRef(null);
   const saveTimersRef = useRef({});
@@ -283,11 +331,14 @@ function App() {
   const workspaceInitializedRef = useRef(false);
   const taskSnapshotRef = useRef(null);
   const configHydratedRef = useRef(false);
+  const globalConfigHydratedRef = useRef(!!readGlobalConfig());
   const userThemePreferenceRef = useRef(!!storedThemePreference);
+  const diffTabCounterRef = useRef(0);
 
   // --- Modal State ---
   const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', onConfirm: () => {}, onClose: () => {} });
   const [diffModal, setDiffModal] = useState(null);
+  const [configFullscreen, setConfigFullscreen] = useState(false);
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -532,6 +583,19 @@ function App() {
           }));
           setWorkspaceBindingError('');
           setWorkspaceBindingStatus('ready');
+          if (GitDriver.isAvailable()) {
+              try {
+                  setGitLoading(true);
+                  const status = await GitDriver.status(applied);
+                  setGitStatus(status);
+                  const remotes = await GitDriver.getRemotes(applied);
+                  setGitRemotes(remotes);
+                  const log = await GitDriver.log(applied);
+                  setGitLog(log?.all || []);
+              } finally {
+                  setGitLoading(false);
+              }
+          }
       } catch (err) {
           console.error('Bind backend workspace failed', err);
           setWorkspaceBindingStatus('error');
@@ -553,13 +617,19 @@ function App() {
 
   const applyConfigToState = useCallback((cfg, driver = null) => {
       setProjectConfig(cfg);
-      setConfig({
-          provider: cfg.provider,
-          openai: { ...cfg.openai },
-          anthropic: { ...cfg.anthropic }
-      });
-      setConfigured(!!cfg?.[cfg.provider]?.api_key);
-      setToolSettings(mergeToolSettings(cfg.toolSettings));
+      if (!globalConfigHydratedRef.current) {
+          const provider = cfg.provider || DEFAULT_PROJECT_CONFIG.provider;
+          setConfig({
+              provider,
+              openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(cfg.openai || {}) },
+              anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(cfg.anthropic || {}) }
+          });
+          setToolSettings((prev) => mergeToolSettings(cfg.toolSettings || prev));
+          globalConfigHydratedRef.current = true;
+      }
+      const effectiveProvider = (config && config.provider) || cfg.provider || DEFAULT_PROJECT_CONFIG.provider;
+      const activeConfig = (config && config[config.provider]) || cfg[effectiveProvider] || {};
+      setConfigured(!!activeConfig.api_key);
       const storedTheme = readStoredTheme();
       const nextTheme = storedTheme || cfg.theme || detectSystemTheme();
       setTheme(nextTheme);
@@ -579,7 +649,7 @@ function App() {
       const initialBackendRoot = isAbsolutePath(cfg.backendRoot) ? cfg.backendRoot : (isAbsolutePath(cfg.projectPath) ? cfg.projectPath : '');
       setBackendWorkspaceRoot(initialBackendRoot);
       setWorkspaceRootLabel(initialBackendRoot || cfg.projectPath || driver?.pathLabel || driver?.rootName || '');
-  }, [mergeToolSettings, userThemePreferenceRef]);
+  }, [mergeToolSettings, userThemePreferenceRef, config]);
 
   const loadProjectConfigFromDisk = useCallback(async (driver) => {
       if (!driver) return normalizeProjectConfig(DEFAULT_PROJECT_CONFIG);
@@ -858,34 +928,43 @@ function App() {
       }
   }, [currentSessionId, projectFetch]);
 
+  const openDiffTabInWorkspace = useCallback((diff) => {
+      if (!diff) return;
+      const index = diffTabCounterRef.current++;
+      const idBase = diff.diff_id !== undefined ? String(diff.diff_id) : (diff.id !== undefined ? String(diff.id) : (diff.path || 'diff'));
+      const tabId = `${DIFF_TAB_PREFIX}${idBase}#${index}`;
+      setDiffTabs((prev) => ({ ...prev, [tabId]: diff }));
+      setWorkspaceState((prev) => {
+          const exists = prev.openTabs.includes(tabId);
+          const nextTabs = exists ? prev.openTabs : [...prev.openTabs, tabId];
+          return { ...prev, openTabs: nextTabs, activeFile: tabId, view: 'code' };
+      });
+  }, []);
+
   const handleOpenDiff = useCallback(async (payload = {}) => {
       const diffId = payload?.diff_id || payload?.id;
       const path = payload?.path;
       const direct = payload && payload.before !== undefined && payload.after !== undefined ? payload : null;
       const latest = await fetchDiffSnapshot({ diffId, path });
-      if (latest && latest.before !== undefined && latest.after !== undefined) {
-          openDiffModal(latest);
-          return;
-      }
-      if (direct) {
-          openDiffModal(direct);
+      const diff = latest && latest.before !== undefined && latest.after !== undefined ? latest : direct;
+      if (diff) {
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
           return;
       }
       alert('未找到可用的 diff 快照（请确认已触发文件写入操作）');
-  }, [fetchDiffSnapshot, openDiffModal]);
+  }, [fetchDiffSnapshot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   const closeDiffModal = useCallback(() => setDiffModal(null), []);
 
   const handleOpenDiffInWorkspace = useCallback((diff) => {
-      setWorkspaceDiffData(diff);
-      setWorkspaceState(prev => ({ ...prev, view: 'diff' }));
+      openDiffTabInWorkspace(diff);
       setDiffModal(null);
-  }, []);
-
-  const handleCloseDiffInWorkspace = useCallback(() => {
-      setWorkspaceDiffData(null);
-      setWorkspaceState(prev => ({ ...prev, view: 'code' }));
-  }, []);
+  }, [openDiffTabInWorkspace]);
 
   const collectRunKeys = (run) => {
       const keys = [];
@@ -1474,6 +1553,16 @@ function App() {
   }, [backendWorkspaceRoot]);
 
   useEffect(() => {
+      persistGlobalConfig({
+          provider: config.provider,
+          openai: { ...config.openai },
+          anthropic: { ...config.anthropic },
+          toolSettings,
+          uiDisplayPreferences
+      });
+  }, [config, toolSettings, uiDisplayPreferences]);
+
+  useEffect(() => {
       setProjectConfig((prev) => {
           const sameProvider = prev.provider === config.provider;
           const sameOpenai = JSON.stringify(prev.openai) === JSON.stringify(config.openai);
@@ -1643,7 +1732,12 @@ function App() {
     const enabledTools = getEnabledTools(currentMode);
     if (!configured || apiStatus !== 'ok') {
         alert('请先完成设置并确保后端已连接（点击左侧齿轮进入设置）。');
-        setShowConfig(true);
+        if (uiDisplayPreferences.settings === 'editor') {
+            handleOpenConfigInEditor();
+        } else {
+            setConfigFullscreen(false);
+            setShowConfig(true);
+        }
         return;
     }
     if ((!cleanedText.trim()) && safeAttachments.length === 0) return;
@@ -1938,6 +2032,14 @@ function App() {
           const nextActive = prev.activeFile === path ? (nextTabs[nextTabs.length - 1] || '') : prev.activeFile;
           return { ...prev, openTabs: nextTabs, activeFile: nextActive, previewEntry: nextActive || prev.previewEntry };
       });
+      if (path && path.startsWith(DIFF_TAB_PREFIX)) {
+          setDiffTabs((prev) => {
+              if (!prev || !prev[path]) return prev;
+              const next = { ...prev };
+              delete next[path];
+              return next;
+          });
+      }
   };
 
   const handleFileChange = (path, content) => {
@@ -2070,6 +2172,41 @@ function App() {
       setHotReloadToken(now);
       setWorkspaceState((prev) => ({ ...prev, livePreview: `${now}` }));
   };
+
+  const handleChangeDisplayPreference = useCallback((key, mode) => {
+      setUiDisplayPreferences((prev) => {
+          const next = { ...prev, [key]: mode };
+          return next;
+      });
+  }, []);
+
+  const handleOpenConfigInEditor = useCallback(() => {
+      setConfigFullscreen(false);
+      setShowConfig(false);
+      setWorkspaceState((prev) => {
+          const exists = prev.openTabs.includes(SETTINGS_TAB_PATH);
+          const nextTabs = exists ? prev.openTabs : [...prev.openTabs, SETTINGS_TAB_PATH];
+          return { ...prev, openTabs: nextTabs, activeFile: SETTINGS_TAB_PATH, view: 'code' };
+      });
+  }, []);
+
+  const handleThemeModeChange = useCallback((mode) => {
+      if (mode === 'system') {
+          userThemePreferenceRef.current = false;
+          if (typeof window !== 'undefined') {
+              try {
+                  window.localStorage.removeItem(THEME_STORAGE_KEY);
+              } catch {
+              }
+          }
+          const systemTheme = detectSystemTheme();
+          setTheme(systemTheme);
+          return;
+      }
+      userThemePreferenceRef.current = true;
+      const nextTheme = mode === 'dark' ? 'dark' : 'light';
+      setTheme(nextTheme);
+  }, []);
 
   const handleToggleTheme = useCallback(() => {
       userThemePreferenceRef.current = true;
@@ -2291,22 +2428,34 @@ function App() {
       try {
           const before = await GitDriver.getFileContent(backendWorkspaceRoot, `${hash}~1`, path);
           const after = await GitDriver.getFileContent(backendWorkspaceRoot, hash, path);
-          openDiffModal({ path, before, after });
+          const diff = { path, before, after };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
       } catch (e) {
           console.error('Failed to open commit diff', e);
       }
-  }, [backendWorkspaceRoot, openDiffModal]);
+  }, [backendWorkspaceRoot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   const handleOpenAllCommitDiffs = useCallback(async (hash) => {
       if (!backendWorkspaceRoot) return;
       try {
           const files = await GitDriver.getCommitFileDiffs(backendWorkspaceRoot, hash);
           if (!files || files.length === 0) return;
-          openDiffModal({ files });
+          const diff = { files };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
       } catch (e) {
           console.error('Failed to open all commit diffs', e);
       }
-  }, [backendWorkspaceRoot, openDiffModal]);
+  }, [backendWorkspaceRoot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   const handleOpenWorkingCopyDiff = useCallback(async (path, staged = false) => {
       if (!backendWorkspaceRoot || !workspaceDriver) return;
@@ -2325,13 +2474,19 @@ function App() {
               const fileData = await workspaceDriver.readFile(path);
               after = fileData.content || '';
           }
-          openDiffModal({ path, before, after });
+          const diff = { path, before, after };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
       } catch (e) {
           console.error('Failed to open working copy diff', e);
           // Fallback to simple file open if diff fails
           openFile(path);
       }
-  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, openFile]);
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, openFile, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   const handleOpenBatchDiffs = useCallback(async (files, type = 'unstaged') => {
       if (!backendWorkspaceRoot || !workspaceDriver || !files || files.length === 0) return;
@@ -2350,11 +2505,17 @@ function App() {
               }
               return { path, before, after };
           }));
-          openDiffModal({ files: diffs });
+          const diff = { files: diffs };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
       } catch (e) {
           console.error('Failed to open batch diffs', e);
       }
-  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal]);
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   // --- Resizer Logic ---
   const startResize = useCallback((target) => (mouseDownEvent) => {
@@ -2555,9 +2716,20 @@ function App() {
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const lastLog = logs && logs.length > 0 ? logs[0] : null;
   const logStatus = lastLog ? { requestOk: !!lastLog.success, parseOk: lastLog.parsed_success !== false } : null;
-  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || !!workspaceState.activeFile;
+  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || !!workspaceState.activeFile || Object.keys(diffTabs).length > 0;
   const workspaceShellVisible = workspaceVisible || showLogs;
   const gitBranch = gitStatus?.current || '';
+  const gitBadgeCount = useMemo(() => {
+      const files = gitStatus?.files || [];
+      if (!Array.isArray(files) || files.length === 0) return 0;
+      return files.filter((f) => {
+          const wd = f.working_dir || '';
+          const idx = f.index || '';
+          const hasWorkingChange = ['A', 'M', 'D', 'R', '?'].includes(wd);
+          const hasIndexChange = ['A', 'M', 'D', 'R'].includes(idx);
+          return hasWorkingChange || hasIndexChange;
+      }).length;
+  }, [gitStatus]);
 
   // ✅ 使用受控渲染而非延迟值，避免闪烁
   // 直接传递最新状态，在 Workspace 组件内部使用 useMemo 优化
@@ -2645,15 +2817,23 @@ function App() {
           toolSettings={toolSettings}
           onToolSettingsChange={persistToolSettings}
           onSave={handleConfigSubmit}
-          onClose={() => setShowConfig(false)}
+          onClose={() => { setConfigFullscreen(false); setShowConfig(false); }}
           checkApiStatus={checkApiStatus}
           apiStatus={apiStatus}
           apiMessage={apiMessage}
+          appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
+          onChangeAppearanceMode={handleThemeModeChange}
+          displayPreferences={uiDisplayPreferences}
+          onChangeDisplayPreference={handleChangeDisplayPreference}
+          onOpenInEditor={handleOpenConfigInEditor}
+          fullscreen={configFullscreen}
+          onToggleFullscreen={() => setConfigFullscreen((prev) => !prev)}
+          variant="modal"
         />
       )}
 
       <div className="app-body">
-          <NavSidebar 
+            <NavSidebar 
             activeSidebar={activeSidebarPanel}
             sidebarCollapsed={sidebarCollapsed}
             explorerOpen={!sidebarCollapsed && activeSidebarPanel === 'explorer'}
@@ -2661,8 +2841,16 @@ function App() {
             onToggleChatPanel={toggleChatPanel}
             chatPanelCollapsed={chatPanelCollapsed}
             onCreateSession={createSession}
-            onToggleConfig={() => setShowConfig(true)}
+            onToggleConfig={() => {
+              if (uiDisplayPreferences.settings === 'editor') {
+                  handleOpenConfigInEditor();
+              } else {
+                  setConfigFullscreen(false);
+                  setShowConfig(true);
+              }
+            }}
             apiStatus={apiStatus}
+            gitBadgeCount={gitBadgeCount}
           />
 
           <div
@@ -2839,7 +3027,6 @@ function App() {
                   openTabs={workspaceProps.openTabs}
                   activeFile={workspaceState.activeFile}
                   viewMode={workspaceState.view}
-                  diffData={workspaceDiffData}
                   livePreviewContent={workspaceState.livePreview}
                   entryCandidates={workspaceState.entryCandidates}
                   loading={workspaceLoading}
@@ -2854,7 +3041,6 @@ function App() {
                   onBindBackendRoot={promptBindBackendRoot}
                   onOpenFile={openFile}
                   onCloseFile={closeFile}
-                  onCloseDiff={handleCloseDiffInWorkspace}
                   onFileChange={handleFileChange}
                   onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path || prev.previewEntry }))} 
                   onTabReorder={handleTabReorder}
@@ -2870,6 +3056,30 @@ function App() {
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
                   previewEntry={workspaceState.previewEntry}
                   onPreviewEntryChange={(value) => setWorkspaceState((prev) => ({ ...prev, previewEntry: value }))}
+                  settingsTabPath={SETTINGS_TAB_PATH}
+                  renderSettingsTab={() => (
+                    <ConfigPanel
+                      config={config}
+                      setConfig={setConfig}
+                      toolSettings={toolSettings}
+                      onToolSettingsChange={persistToolSettings}
+                      onSave={handleConfigSubmit}
+                      onClose={() => closeFile(SETTINGS_TAB_PATH)}
+                      checkApiStatus={checkApiStatus}
+                      apiStatus={apiStatus}
+                      apiMessage={apiMessage}
+                      appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
+                      onChangeAppearanceMode={handleThemeModeChange}
+                      displayPreferences={uiDisplayPreferences}
+                      onChangeDisplayPreference={handleChangeDisplayPreference}
+                      onOpenInEditor={handleOpenConfigInEditor}
+                      fullscreen={false}
+                      onToggleFullscreen={() => {}}
+                      variant="inline"
+                    />
+                  )}
+                  diffTabPrefix={DIFF_TAB_PREFIX}
+                  diffTabs={diffTabs}
                 />
               )}
               {showLogs && (
@@ -2902,7 +3112,7 @@ function App() {
             }}
             title="Switch Branch"
           >
-              <span style={{ fontSize: '12px' }}>🕊️</span>
+              <span className="codicon codicon-git-branch" aria-hidden style={{ fontSize: '13px' }} />
               <span>{gitBranch || 'Git'}</span>
               {gitStatus && (
                   <span style={{ marginLeft: '4px' }}>
