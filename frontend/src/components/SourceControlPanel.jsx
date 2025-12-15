@@ -35,8 +35,29 @@ const SourceControlPanel = ({
     const [isAddingRemote, setIsAddingRemote] = useState(false);
     const [newRemoteName, setNewRemoteName] = useState('origin');
     const [newRemoteUrl, setNewRemoteUrl] = useState('');
-    const [viewMode, setViewMode] = useState('list'); // 'list' | 'tree'
+    const [addRemoteError, setAddRemoteError] = useState('');
+    const [addingRemote, setAddingRemote] = useState(false);
+    const [viewMode, setViewMode] = useState('list');
     const [selectedFile, setSelectedFile] = useState(null);
+    const [sectionOrder, setSectionOrder] = useState(() => {
+        if (typeof window !== 'undefined') {
+            try {
+                const stored = window.localStorage.getItem('sc-section-order-v1');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (Array.isArray(parsed) && parsed.length) {
+                        const allowed = ['changes', 'repositories', 'graph'];
+                        const filtered = parsed.filter(id => allowed.includes(id));
+                        const missing = allowed.filter(id => !filtered.includes(id));
+                        const next = [...filtered, ...missing];
+                        if (next.length) return next;
+                    }
+                }
+            } catch {
+            }
+        }
+        return ['changes', 'repositories', 'graph'];
+    });
     const [layout, setLayout] = useState(() => {
         if (typeof window !== 'undefined') {
             try {
@@ -57,6 +78,7 @@ const SourceControlPanel = ({
         return { changes: 260, repositories: 180, graph: 260 };
     });
     const [dragTarget, setDragTarget] = useState(null);
+    const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
 
     // Hover state management
@@ -111,47 +133,41 @@ const SourceControlPanel = ({
     }, [layout]);
 
     useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.localStorage.setItem('sc-section-order-v1', JSON.stringify(sectionOrder));
+        } catch {
+        }
+    }, [sectionOrder]);
+
+    useEffect(() => {
         if (!dragTarget) return;
         const handleMove = (e) => {
+            if (draggingSection) return;
             const delta = e.movementY || 0;
             if (!delta) return;
             setLayout(prev => {
                 const minHeight = 96;
-                if (dragTarget === 'changes-repo') {
-                    let changes = prev.changes + delta;
-                    let repositories = prev.repositories - delta;
-                    const total = changes + repositories;
-                    if (changes < minHeight) {
-                        changes = minHeight;
-                        repositories = total - minHeight;
-                    } else if (repositories < minHeight) {
-                        repositories = minHeight;
-                        changes = total - minHeight;
-                    }
-                    return {
-                        ...prev,
-                        changes,
-                        repositories: Math.max(repositories, minHeight)
-                    };
+                const topId = dragTarget.top;
+                const bottomId = dragTarget.bottom;
+                if (!topId || !bottomId || !(topId in prev) || !(bottomId in prev)) {
+                    return prev;
                 }
-                if (dragTarget === 'repo-graph') {
-                    let repositories = prev.repositories + delta;
-                    let graph = prev.graph - delta;
-                    const total = repositories + graph;
-                    if (repositories < minHeight) {
-                        repositories = minHeight;
-                        graph = total - minHeight;
-                    } else if (graph < minHeight) {
-                        graph = minHeight;
-                        repositories = total - minHeight;
-                    }
-                    return {
-                        ...prev,
-                        repositories: Math.max(repositories, minHeight),
-                        graph: Math.max(graph, minHeight)
-                    };
+                let topHeight = prev[topId] + delta;
+                let bottomHeight = prev[bottomId] - delta;
+                const total = topHeight + bottomHeight;
+                if (topHeight < minHeight) {
+                    topHeight = minHeight;
+                    bottomHeight = total - minHeight;
+                } else if (bottomHeight < minHeight) {
+                    bottomHeight = minHeight;
+                    topHeight = total - minHeight;
                 }
-                return prev;
+                return {
+                    ...prev,
+                    [topId]: Math.max(topHeight, minHeight),
+                    [bottomId]: Math.max(bottomHeight, minHeight)
+                };
             });
         };
         const handleUp = () => {
@@ -172,7 +188,7 @@ const SourceControlPanel = ({
                 document.body.style.userSelect = '';
             }
         };
-    }, [dragTarget]);
+    }, [dragTarget, draggingSection]);
 
     const handleCommitMouseLeave = () => {
         if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
@@ -216,11 +232,46 @@ const SourceControlPanel = ({
     };
 
     const handleAddRemoteSubmit = async () => {
-        if (!newRemoteName || !newRemoteUrl) return;
-        await onAddRemote(newRemoteName, newRemoteUrl);
-        setIsAddingRemote(false);
-        setNewRemoteName('origin');
-        setNewRemoteUrl('');
+        if (addingRemote) return;
+        const name = newRemoteName.trim();
+        const url = newRemoteUrl.trim();
+        if (!name) {
+            setAddRemoteError('远程名称不能为空');
+            return;
+        }
+        if (!url) {
+            setAddRemoteError('远程地址不能为空');
+            return;
+        }
+        const isHttp = /^https?:\/\//i.test(url);
+        const isSsh = /^git@[^:]+:[^/]+\/.+/i.test(url);
+        if (!isHttp && !isSsh) {
+            setAddRemoteError('远程地址格式不正确，请使用 https 或 ssh URL');
+            return;
+        }
+        setAddingRemote(true);
+        setAddRemoteError('');
+        try {
+            await onAddRemote(name, url);
+            setIsAddingRemote(false);
+            setNewRemoteName('origin');
+            setNewRemoteUrl('');
+            if (onRefresh) {
+                onRefresh();
+            }
+        } catch (e) {
+            const raw = e && e.message ? String(e.message) : String(e || '');
+            const lower = raw.toLowerCase();
+            let next = '添加远程仓库失败，请检查配置后重试。';
+            if (lower.includes('exists') || lower.includes('already')) {
+                next = '远程名称已存在，请使用其他名称。';
+            } else if (lower.includes('url') || lower.includes('invalid')) {
+                next = '远程地址无效，请检查 URL 是否正确。';
+            }
+            setAddRemoteError(next);
+        } finally {
+            setAddingRemote(false);
+        }
     };
 
     const handleAiGenerate = async () => {
@@ -239,6 +290,488 @@ const SourceControlPanel = ({
     }, [message]);
 
     const canCommit = !!message.trim() && staged.length > 0;
+
+    const handleDiscardAllClick = () => {
+        if (!onDiscardAll) return;
+        if (totalChanges === 0) return;
+        onDiscardAll();
+    };
+
+    const handleStageAllClick = () => {
+        if (!onStageAll) return;
+        if (changes.length === 0) return;
+        onStageAll();
+    };
+
+    const handleUnstageAllClick = () => {
+        if (!onUnstageAll) return;
+        if (staged.length === 0) return;
+        onUnstageAll();
+    };
+
+    const handleSectionDragStart = (id) => (e) => {
+        setDragTarget(null);
+        setDraggingSection(id);
+        if (e.dataTransfer) {
+            try {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', id);
+            } catch {
+            }
+        }
+    };
+
+    const handleSectionDragOver = (targetId) => (e) => {
+        e.preventDefault();
+        if (!draggingSection || draggingSection === targetId) return;
+        setSectionOrder(prev => {
+            const fromIndex = prev.indexOf(draggingSection);
+            const toIndex = prev.indexOf(targetId);
+            if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return prev;
+            const next = prev.slice();
+            next.splice(fromIndex, 1);
+            next.splice(toIndex, 0, draggingSection);
+            return next;
+        });
+    };
+
+    const handleSectionDragEnd = () => {
+        setDraggingSection(null);
+    };
+
+    const renderSection = (id) => {
+        if (id === 'changes') {
+            return (
+                <div className="sc-section" style={{ minHeight: Math.max(layout.changes, 96) }} onDragOver={handleSectionDragOver('changes')} onDrop={handleSectionDragEnd}>
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, changes: !p.changes }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('changes')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整更改分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.changes ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            更改 <span className="sc-count-badge">{totalChanges}</span>
+                        </div>
+                        <div className="sc-section-actions">
+                            <button
+                                className="sc-action-btn"
+                                onClick={(e) => { e.stopPropagation(); onRefresh(); }}
+                                title="刷新更改"
+                                aria-label="刷新更改"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                    {expanded.changes && (
+                        <div className="sc-section-body">
+                            <div className="sc-commit-block">
+                                <div className="sc-commit-row">
+                                    <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
+                                        <textarea
+                                            ref={messageRef}
+                                            className="sc-commit-input sc-commit-textarea"
+                                            placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
+                                            value={message}
+                                            onChange={e => setMessage(e.target.value)}
+                                            onKeyDown={handleKeyDown}
+                                        />
+                                        <button
+                                            className="sc-commit-status-btn"
+                                            onClick={handleAiGenerate}
+                                            title="生成提交说明"
+                                            type="button"
+                                        >
+                                            ✨
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="sc-commit-actions-row">
+                                    <div className="sc-commit-buttons">
+                                        <button
+                                            className="sc-commit-primary"
+                                            onClick={handleCommit}
+                                            disabled={!canCommit}
+                                            type="button"
+                                        >
+                                            提交
+                                            <span className="sc-commit-kbd">Ctrl+Enter</span>
+                                        </button>
+                                        <button
+                                            className="sc-commit-dropdown"
+                                            type="button"
+                                            title="更多提交选项"
+                                        >
+                                            ▾
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="sc-subsection">
+                                <div
+                                    className="sc-section-header sc-subsection-header"
+                                    onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
+                                >
+                                    <div className="sc-section-icon">{expanded.staged ? '▼' : '▶'}</div>
+                                    <div className="sc-section-label">
+                                        暂存的更改
+                                        <span className="sc-count-badge">{staged.length}</span>
+                                    </div>
+                                    <div className="sc-section-actions sc-section-actions-inline">
+                                        <button
+                                            className="sc-action-btn"
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleUnstageAllClick();
+                                            }}
+                                            disabled={staged.length === 0}
+                                            title="取消全部暂存"
+                                            aria-label="取消全部暂存"
+                                        >
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <line x1="5" y1="12" x2="19" y2="12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                {expanded.staged && (
+                                    <div className="sc-file-list">
+                                        {staged.map(file => (
+                                            <FileItem
+                                                key={`staged-${file.path}`}
+                                                file={file}
+                                                onAction={() => onUnstage([file.path])}
+                                                actionIcon="-"
+                                                onOpen={() => onOpenFile(file.path)}
+                                                onDiff={() => onDiff(file.path, true)}
+                                                onDiscard={null}
+                                                selected={selectedFile === file.path}
+                                                onSelect={() => setSelectedFile(file.path)}
+                                            />
+                                        ))}
+                                        {staged.length === 0 && (
+                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                                当前没有暂存的更改。
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="sc-subsection">
+                                <div
+                                    className="sc-section-header sc-subsection-header"
+                                    onClick={() => setExpanded(p => ({ ...p, unstaged: !p.unstaged }))}
+                                >
+                                    <div className="sc-section-icon">{expanded.unstaged ? '▼' : '▶'}</div>
+                                    <div className="sc-section-label">
+                                        更改
+                                        <span className="sc-count-badge">{changes.length}</span>
+                                    </div>
+                                    <div className="sc-section-actions sc-section-actions-inline">
+                                        <button
+                                            className="sc-action-btn"
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleStageAllClick();
+                                            }}
+                                            disabled={changes.length === 0}
+                                            title="全部暂存"
+                                            aria-label="全部暂存"
+                                        >
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <line x1="12" y1="5" x2="12" y2="19" />
+                                                <line x1="5" y1="12" x2="19" y2="12" />
+                                            </svg>
+                                        </button>
+                                        <button
+                                            className="sc-action-btn"
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDiscardAllClick();
+                                            }}
+                                            disabled={changes.length === 0 || !onDiscardAll}
+                                            title="全部丢弃更改"
+                                            aria-label="全部丢弃更改"
+                                        >
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M9 14 4 9l5-5" />
+                                                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                {expanded.unstaged && (
+                                    <div className="sc-file-list">
+                                        {changes.map(file => (
+                                            <FileItem
+                                                key={`change-${file.path}`}
+                                                file={file}
+                                                onAction={() => onStage([file.path])}
+                                                actionIcon="+"
+                                                onDiscard={() => onDiscard && onDiscard([file.path])}
+                                                onOpen={() => onOpenFile(file.path)}
+                                                onDiff={() => onDiff(file.path, false)}
+                                                selected={selectedFile === file.path}
+                                                onSelect={() => setSelectedFile(file.path)}
+                                            />
+                                        ))}
+                                        {changes.length === 0 && (
+                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                                当前没有未暂存的更改。
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="sc-bulk-actions-bar">
+                                <button
+                                    className="sc-action-btn"
+                                    type="button"
+                                    onClick={handleStageAllClick}
+                                    disabled={changes.length === 0}
+                                    title="全部暂存"
+                                    aria-label="全部暂存"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="12" y1="5" x2="12" y2="19" />
+                                        <line x1="5" y1="12" x2="19" y2="12" />
+                                    </svg>
+                                </button>
+                                <button
+                                    className="sc-action-btn"
+                                    type="button"
+                                    onClick={handleUnstageAllClick}
+                                    disabled={staged.length === 0}
+                                    title="取消全部暂存"
+                                    aria-label="取消全部暂存"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="5" y1="12" x2="19" y2="12" />
+                                    </svg>
+                                </button>
+                                <button
+                                    className="sc-action-btn"
+                                    type="button"
+                                    onClick={handleDiscardAllClick}
+                                    disabled={totalChanges === 0 || !onDiscardAll}
+                                    title="全部丢弃更改"
+                                    aria-label="全部丢弃更改"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9 14 4 9l5-5" />
+                                        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        if (id === 'repositories') {
+            return (
+                <div className="sc-section" style={{ minHeight: Math.max(layout.repositories, 96) }} onDragOver={handleSectionDragOver('repositories')} onDrop={handleSectionDragEnd}>
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, repositories: !p.repositories }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('repositories')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整存储库分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.repositories ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            存储库 <span className="sc-count-badge">{gitRemotes.length}</span>
+                        </div>
+                        <div className="sc-section-actions">
+                            <button onClick={(e) => { e.stopPropagation(); setAddRemoteError(''); setIsAddingRemote(true); }} className="sc-action-btn" title="添加远程仓库" aria-label="添加远程仓库">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                    {expanded.repositories && (
+                        <>
+                            <div className="sc-repo-section">
+                                <div className="sc-repo-item">
+                                    <div className="sc-repo-main">
+                                        <div className="sc-repo-name">
+                                            {repositoryLabel || '未选择工作区'}
+                                        </div>
+                                        <div className="sc-repo-meta">
+                                            <span>{gitStatus?.current || '无分支'}</span>
+                                            {gitStatus?.tracking && (
+                                                <span className="sc-repo-badge">{gitStatus.tracking}</span>
+                                            )}
+                                            {(gitStatus?.ahead > 0 || gitStatus?.behind > 0) && (
+                                                <span className="sc-repo-sync">
+                                                    {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
+                                                    {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="sc-repo-actions">
+                                        <span className="sc-repo-mode">GIT 集成</span>
+                                        <button
+                                            className="sc-item-btn"
+                                            onClick={(e) => { e.stopPropagation(); onSync && onSync(); }}
+                                            title="同步"
+                                            type="button"
+                                            aria-label="同步"
+                                        >
+                                            ⟳
+                                        </button>
+                                        <button
+                                            className="sc-item-btn"
+                                            onClick={(e) => { e.stopPropagation(); }}
+                                            title="更多"
+                                            type="button"
+                                            aria-label="更多"
+                                        >
+                                            <span className="codicon codicon-ellipsis" aria-hidden />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            {isAddingRemote && (
+                                <div className="sc-remote-form">
+                                    <div className="sc-remote-header">
+                                        <div className="sc-remote-title">添加远程仓库</div>
+                                        <div className="sc-remote-subtitle">推荐使用 https 或 ssh 地址，添加后可用于推送和拉取。</div>
+                                    </div>
+                                    <div className="sc-remote-field">
+                                        <div className="sc-remote-label">远程名称</div>
+                                        <input
+                                            className="sc-input small"
+                                            value={newRemoteName}
+                                            onChange={e => setNewRemoteName(e.target.value)}
+                                            placeholder="例如：origin"
+                                        />
+                                        <div className="sc-remote-hint">一般使用 origin 作为默认远程名称。</div>
+                                    </div>
+                                    <div className="sc-remote-field">
+                                        <div className="sc-remote-label">远程地址</div>
+                                        <input
+                                            className="sc-input small"
+                                            value={newRemoteUrl}
+                                            onChange={e => setNewRemoteUrl(e.target.value)}
+                                            placeholder="例如：https://github.com/user/repo.git 或 git@github.com:user/repo.git"
+                                        />
+                                    </div>
+                                    {addRemoteError && (
+                                        <div className="sc-remote-error">
+                                            {addRemoteError}
+                                        </div>
+                                    )}
+                                    <div className="sc-remote-actions">
+                                        <button
+                                            className="sc-btn ghost"
+                                            type="button"
+                                            onClick={() => {
+                                                setIsAddingRemote(false);
+                                                setAddRemoteError('');
+                                            }}
+                                        >
+                                            取消
+                                        </button>
+                                        <button
+                                            className="sc-btn primary"
+                                            type="button"
+                                            onClick={handleAddRemoteSubmit}
+                                            disabled={addingRemote}
+                                        >
+                                            添加
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            {gitRemotes.length > 0 && (
+                                <div className="sc-remote-list">
+                                    {gitRemotes.map(remote => (
+                                        <div key={remote.name} className="sc-file-item" style={{ height: 'auto', padding: '6px 16px', alignItems: 'flex-start' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ fontWeight: 'bold' }}>{remote.name}</div>
+                                                <div style={{ opacity: 0.7, fontSize: '11px' }}>{remote.refs.fetch}</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            );
+        }
+
+        if (id === 'graph') {
+            return (
+                <div className="sc-section" style={{ minHeight: Math.max(layout.graph, 96) }} onDragOver={handleSectionDragOver('graph')} onDrop={handleSectionDragEnd}>
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, graph: !p.graph }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('graph')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整图形分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.graph ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            图形 <span className="sc-count-badge">{gitLog.length}</span>
+                        </div>
+                        <div className="sc-section-actions">
+                            <button
+                                className="sc-action-btn"
+                                onClick={(e) => { e.stopPropagation(); setViewMode(m => m === 'list' ? 'tree' : 'list'); }}
+                                title={viewMode === 'list' ? '切换为树形视图' : '切换为列表视图'}
+                                aria-label={viewMode === 'list' ? '切换为树形视图' : '切换为列表视图'}
+                            >
+                                <span
+                                    className={`codicon ${viewMode === 'list' ? 'codicon-list-tree' : 'codicon-list-flat'}`}
+                                    aria-hidden
+                                    style={{ fontSize: '18px' }}
+                                />
+                            </button>
+                        </div>
+                    </div>
+                    {expanded.graph && (
+                        <div style={{ paddingBottom: '10px' }}>
+                            {gitLog.map(commit => (
+                                <CommitItem
+                                    key={commit.hash}
+                                    commit={commit}
+                                    expanded={!!expandedCommits[commit.hash]}
+                                    loading={!!loadingCommits[commit.hash]}
+                                    files={expandedCommits[commit.hash]}
+                                    onToggle={toggleCommit}
+                                    onOpenAllDiffs={onOpenAllDiffs}
+                                    onOpenCommitDiff={onOpenCommitDiff}
+                                    onMouseEnter={(e) => handleCommitMouseEnter(commit, e.currentTarget)}
+                                    onMouseLeave={handleCommitMouseLeave}
+                                    isHovered={hoveredCommit?.commit?.hash === commit.hash}
+                                    viewMode={viewMode}
+                                />
+                            ))}
+                            {gitLog.length === 0 && (
+                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>暂无提交记录，在上方完成一次提交后即可看到提交图形。</div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        return null;
+    };
 
     return (
         <div className="sc-panel">
@@ -261,355 +794,38 @@ const SourceControlPanel = ({
             </div>
 
             <div className="sc-lists">
-                <div className="sc-section" style={{ height: layout.changes, minHeight: 96 }}>
-                     <div 
-                        className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, changes: !p.changes }))}
-                     >
-                        <div className="sc-section-icon">{expanded.changes ? '▼' : '▶'}</div>
-                        <div className="sc-section-label">
-                            更改 <span className="sc-count-badge">{totalChanges}</span>
-                        </div>
-                        <div className="sc-section-actions">
-                            <button 
-                                className="sc-action-btn" 
-                                onClick={(e) => { e.stopPropagation(); onRefresh(); }} 
-                                title="刷新更改"
-                            >
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-                            </button>
-                        </div>
-                     </div>
-                     {expanded.changes && (
-                        <div className="sc-section-body">
-                            <div className="sc-commit-block">
-                                <div className="sc-commit-row">
-                                    <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
-                                        <textarea
-                                            ref={messageRef}
-                                            className="sc-commit-input sc-commit-textarea"
-                                            placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
-                                            value={message}
-                                            onChange={e => setMessage(e.target.value)}
-                                            onKeyDown={handleKeyDown}
-                                        />
-                                        <button 
-                                            className="sc-commit-status-btn"
-                                            onClick={handleAiGenerate}
-                                            title="生成提交说明"
-                                            type="button"
-                                        >
-                                            ✨
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="sc-commit-actions-row">
-                                    <div className="sc-commit-buttons">
-                                        <button 
-                                            className="sc-commit-primary" 
-                                            onClick={handleCommit}
-                                            disabled={!canCommit}
-                                            type="button"
-                                        >
-                                            提交
-                                            <span className="sc-commit-kbd">Ctrl+Enter</span>
-                                        </button>
-                                        <button 
-                                            className="sc-commit-dropdown" 
-                                            type="button"
-                                            title="更多提交选项"
-                                        >
-                                            ▾
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="sc-subsection">
-                                <div 
-                                    className="sc-section-header sc-subsection-header" 
-                                    onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
-                                >
-                                    <div className="sc-section-icon">{expanded.staged ? '▼' : '▶'}</div>
-                                    <div className="sc-section-label">
-                                        暂存的更改
-                                        <span className="sc-count-badge">{staged.length}</span>
-                                    </div>
-                                    <div className="sc-section-actions sc-section-actions-inline">
-                                        <button 
-                                            className="sc-bulk-link" 
-                                            type="button"
-                                            onClick={(e) => { 
-                                                e.stopPropagation(); 
-                                                if (staged.length > 0) onUnstageAll(); 
-                                            }}
-                                            disabled={staged.length === 0}
-                                        >
-                                            取消全部暂存
-                                        </button>
-                                    </div>
-                                </div>
-                                {expanded.staged && (
-                                    <div className="sc-file-list">
-                                        {staged.map(file => (
-                                            <FileItem 
-                                                key={`staged-${file.path}`} 
-                                                file={file} 
-                                                onAction={() => onUnstage([file.path])} 
-                                                actionIcon="-"
-                                                onOpen={() => onOpenFile(file.path)}
-                                                onDiff={() => onDiff(file.path, true)}
-                                                onDiscard={null}
-                                                selected={selectedFile === file.path}
-                                                onSelect={() => setSelectedFile(file.path)}
-                                            />
-                                        ))}
-                                        {staged.length === 0 && (
-                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
-                                                当前没有暂存的更改。
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="sc-subsection">
-                                <div 
-                                    className="sc-section-header sc-subsection-header" 
-                                    onClick={() => setExpanded(p => ({ ...p, unstaged: !p.unstaged }))}
-                                >
-                                    <div className="sc-section-icon">{expanded.unstaged ? '▼' : '▶'}</div>
-                                    <div className="sc-section-label">
-                                        更改
-                                        <span className="sc-count-badge">{changes.length}</span>
-                                    </div>
-                                    <div className="sc-section-actions sc-section-actions-inline">
-                                        <button 
-                                            className="sc-bulk-link" 
-                                            type="button"
-                                            onClick={(e) => { 
-                                                e.stopPropagation(); 
-                                                if (changes.length > 0) onStageAll(); 
-                                            }}
-                                            disabled={changes.length === 0}
-                                        >
-                                            全部暂存
-                                        </button>
-                                        <button 
-                                            className="sc-bulk-link" 
-                                            type="button"
-                                            onClick={(e) => { 
-                                                e.stopPropagation(); 
-                                                if (changes.length > 0 && onDiscardAll) onDiscardAll(); 
-                                            }}
-                                            disabled={changes.length === 0 || !onDiscardAll}
-                                        >
-                                            全部丢弃
-                                        </button>
-                                    </div>
-                                </div>
-                                {expanded.unstaged && (
-                                    <div className="sc-file-list">
-                                        {changes.map(file => (
-                                            <FileItem 
-                                                key={`change-${file.path}`} 
-                                                file={file} 
-                                                onAction={() => onStage([file.path])} 
-                                                actionIcon="+"
-                                                onDiscard={() => onDiscard && onDiscard([file.path])}
-                                                onOpen={() => onOpenFile(file.path)}
-                                                onDiff={() => onDiff(file.path, false)}
-                                                selected={selectedFile === file.path}
-                                                onSelect={() => setSelectedFile(file.path)}
-                                            />
-                                        ))}
-                                        {changes.length === 0 && (
-                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
-                                                当前没有未暂存的更改。
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="sc-bulk-actions-bar">
-                                <button 
-                                    className="sc-bulk-btn" 
-                                    type="button"
-                                    onClick={onStageAll}
-                                    disabled={changes.length === 0}
-                                >
-                                    全部暂存
-                                </button>
-                                <button 
-                                    className="sc-bulk-btn" 
-                                    type="button"
-                                    onClick={onUnstageAll}
-                                    disabled={staged.length === 0}
-                                >
-                                    取消全部暂存
-                                </button>
-                                <button 
-                                    className="sc-bulk-btn" 
-                                    type="button"
-                                    onClick={onDiscardAll}
-                                    disabled={totalChanges === 0 || !onDiscardAll}
-                                >
-                                    全部丢弃
-                                </button>
-                            </div>
-                        </div>
-                     )}
-                </div>
-
-                <div 
-                    className="sc-splitter" 
-                    onMouseDown={() => setDragTarget('changes-repo')}
+                {sectionOrder.map((id, index) => (
+                    <React.Fragment key={id}>
+                        {renderSection(id)}
+                        {index < sectionOrder.length - 1 && (
+                            <div
+                                className="sc-splitter"
+                                onMouseDown={(e) => {
+                                    if (draggingSection) return;
+                                    const topId = id;
+                                    const bottomId = sectionOrder[index + 1];
+                                    setDragTarget({ top: topId, bottom: bottomId });
+                                }}
+                            />
+                        )}
+                    </React.Fragment>
+                ))}
+                <div
+                    className="sc-dropzone-bottom"
+                    onDragOver={(e) => {
+                        e.preventDefault();
+                        if (!draggingSection) return;
+                        setSectionOrder(prev => {
+                            const fromIndex = prev.indexOf(draggingSection);
+                            if (fromIndex === -1 || fromIndex === prev.length - 1) return prev;
+                            const next = prev.slice();
+                            next.splice(fromIndex, 1);
+                            next.push(draggingSection);
+                            return next;
+                        });
+                    }}
+                    onDrop={handleSectionDragEnd}
                 />
-
-                <div className="sc-section" style={{ height: layout.repositories, minHeight: 96 }}>
-                     <div 
-                        className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, repositories: !p.repositories }))}
-                     >
-                        <div className="sc-section-icon">{expanded.repositories ? '▼' : '▶'}</div>
-                        <div className="sc-section-label">
-                            存储库 <span className="sc-count-badge">{gitRemotes.length}</span>
-                        </div>
-                        <div className="sc-section-actions">
-                             <button onClick={(e) => { e.stopPropagation(); setIsAddingRemote(true); }} className="sc-action-btn" title="添加远程仓库">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                             </button>
-                        </div>
-                     </div>
-                     {expanded.repositories && (
-                        <div className="sc-repo-section">
-                            <div className="sc-repo-item">
-                                <div className="sc-repo-main">
-                                    <div className="sc-repo-name">
-                                        {repositoryLabel || '未选择工作区'}
-                                    </div>
-                                    <div className="sc-repo-meta">
-                                        <span>{gitStatus?.current || '无分支'}</span>
-                                        {gitStatus?.tracking && (
-                                            <span className="sc-repo-badge">{gitStatus.tracking}</span>
-                                        )}
-                                        {(gitStatus?.ahead > 0 || gitStatus?.behind > 0) && (
-                                            <span className="sc-repo-sync">
-                                                {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
-                                                {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className="sc-repo-actions">
-                                    <span className="sc-repo-mode">GIT 集成</span>
-                                    <button 
-                                        className="sc-item-btn" 
-                                        onClick={(e) => { e.stopPropagation(); onSync && onSync(); }} 
-                                        title="同步"
-                                        type="button"
-                                    >
-                                        ⟳
-                                    </button>
-                                    <button 
-                                        className="sc-item-btn" 
-                                        onClick={(e) => { e.stopPropagation(); }} 
-                                        title="更多"
-                                        type="button"
-                                    >
-                                        <span className="codicon codicon-ellipsis" aria-hidden />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                     )}
-                     {expanded.repositories && (
-                        <div className="sc-remote-form">
-                            {isAddingRemote && (
-                                <div style={{ marginBottom: '10px' }}>
-                                    <input 
-                                        className="sc-input small"
-                                        value={newRemoteName} 
-                                        onChange={e => setNewRemoteName(e.target.value)} 
-                                        placeholder="Remote Name (e.g. origin)"
-                                    />
-                                    <input 
-                                        className="sc-input small"
-                                        value={newRemoteUrl} 
-                                        onChange={e => setNewRemoteUrl(e.target.value)} 
-                                        placeholder="URL (https://...)"
-                                    />
-                                    <div className="sc-form-actions">
-                                        <button className="sc-btn ghost" onClick={() => setIsAddingRemote(false)}>取消</button>
-                                        <button className="sc-btn primary" onClick={handleAddRemoteSubmit}>添加</button>
-                                    </div>
-                                </div>
-                            )}
-                            {gitRemotes.map(remote => (
-                                <div key={remote.name} className="sc-file-item" style={{ height: 'auto', padding: '6px 16px', alignItems: 'flex-start' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <div style={{ fontWeight: 'bold' }}>{remote.name}</div>
-                                        <div style={{ opacity: 0.7, fontSize: '11px' }}>{remote.refs.fetch}</div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                     )}
-                </div>
-
-                <div 
-                    className="sc-splitter" 
-                    onMouseDown={() => setDragTarget('repo-graph')}
-                />
-
-                <div className="sc-section" style={{ height: layout.graph, minHeight: 96 }}>
-                     <div 
-                        className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, graph: !p.graph }))}
-                     >
-                        <div className="sc-section-icon">{expanded.graph ? '▼' : '▶'}</div>
-                        <div className="sc-section-label">
-                            图形 <span className="sc-count-badge">{gitLog.length}</span>
-                        </div>
-                        <div className="sc-section-actions">
-                            <button 
-                                className="sc-action-btn" 
-                                onClick={(e) => { e.stopPropagation(); setViewMode(m => m === 'list' ? 'tree' : 'list'); }}
-                                title={viewMode === 'list' ? "切换为树形视图" : "切换为列表视图"}
-                            >
-                                <span
-                                    className={`codicon ${viewMode === 'list' ? 'codicon-list-tree' : 'codicon-list-flat'}`}
-                                    aria-hidden
-                                    style={{ fontSize: '18px' }}
-                                />
-                            </button>
-                        </div>
-                     </div>
-                     {expanded.graph && (
-                        <div style={{ paddingBottom: '10px' }}>
-                            {gitLog.map(commit => (
-                                <CommitItem 
-                                    key={commit.hash}
-                                    commit={commit}
-                                    expanded={!!expandedCommits[commit.hash]}
-                                    loading={!!loadingCommits[commit.hash]}
-                                    files={expandedCommits[commit.hash]}
-                                    onToggle={toggleCommit}
-                                    onOpenAllDiffs={onOpenAllDiffs}
-                                    onOpenCommitDiff={onOpenCommitDiff}
-                                    onMouseEnter={(e) => handleCommitMouseEnter(commit, e.currentTarget)}
-                                    onMouseLeave={handleCommitMouseLeave}
-                                    isHovered={hoveredCommit?.commit?.hash === commit.hash}
-                                    viewMode={viewMode}
-                                />
-                            ))}
-                            {gitLog.length === 0 && (
-                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>暂无提交记录，在上方完成一次提交后即可看到提交图形。</div>
-                            )}
-                        </div>
-                     )}
-                </div>
             </div>
 
             {/* Hover Popup */}

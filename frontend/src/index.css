@@ -2384,6 +2384,7 @@ input:focus, select:focus, textarea:focus {
 .sc-section {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .sc-section-header {
@@ -2578,22 +2579,20 @@ input:focus, select:focus, textarea:focus {
 
 /* Remote Input */
 .sc-remote-form {
-  padding: 10px 16px;
+  margin: 8px 16px 12px;
+  padding: 10px 12px;
   background: var(--panel-sub);
-  border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .sc-input.small {
   height: 32px;
   padding: 6px 10px;
   margin-bottom: 8px;
-}
-
-.sc-form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
 }
 
 .sc-btn {
@@ -2631,6 +2630,53 @@ input:focus, select:focus, textarea:focus {
 .sc-btn.primary:hover {
   filter: brightness(1.08);
   transform: translateY(-1px);
+}
+
+.sc-remote-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sc-remote-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sc-remote-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sc-remote-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-remote-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.sc-remote-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sc-remote-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.sc-remote-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sc-remote-list {
+  margin: 0 16px 8px;
 }
 
 .sc-section-body {
@@ -2839,6 +2885,11 @@ input:focus, select:focus, textarea:focus {
 
 .sc-splitter:hover::before {
   background: var(--accent);
+}
+
+.sc-dropzone-bottom {
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .sc-repo-section {
