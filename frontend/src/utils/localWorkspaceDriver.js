@@ -8,6 +8,17 @@ const createId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? cry
 const loadRegistry = async () => (await get(REGISTRY_KEY)) || [];
 const saveRegistry = async (registry) => set(REGISTRY_KEY, registry);
 
+const removeRegistryEntry = async (id) => {
+  if (!id) return;
+  const registry = await loadRegistry();
+  const next = registry.filter((entry) => entry && entry.id !== id);
+  await saveRegistry(next);
+  const last = await get(LAST_PROJECT_KEY);
+  if (last === id) {
+    await del(LAST_PROJECT_KEY);
+  }
+};
+
 const persistHandleToRegistry = async (handle, meta = {}) => {
   const registry = await loadRegistry();
   let existing = null;
@@ -72,11 +83,11 @@ const denyEscapes = (path) => {
   return path.replace(/^\.\/+/, '').replace(/\\/g, '/');
 };
 
-const ensurePermission = async (handle) => {
+const ensurePermission = async (handle, { allowPrompt = true } = {}) => {
   if (!handle) return false;
   const status = await handle.queryPermission({ mode: 'readwrite' });
   if (status === 'granted') return true;
-  if (status === 'prompt') {
+  if (status === 'prompt' && allowPrompt) {
     const res = await handle.requestPermission({ mode: 'readwrite' });
     return res === 'granted';
   }
@@ -132,7 +143,7 @@ export class LocalWorkspaceDriver {
     this.gitignore = [];
   }
 
-  static async fromPersisted(projectId = null) {
+  static async fromPersisted(projectId = null, { allowPrompt = true } = {}) {
     if (typeof window === 'undefined') return null;
     try {
       const registry = (await loadRegistry()).filter(Boolean).sort((a, b) => (b?.lastOpened || 0) - (a?.lastOpened || 0));
@@ -142,14 +153,12 @@ export class LocalWorkspaceDriver {
         candidate = registry[0];
       }
       if (!candidate?.handle) return null;
-      const ok = await ensurePermission(candidate.handle);
+      const ok = await ensurePermission(candidate.handle, { allowPrompt });
       if (!ok) {
         const remaining = registry.filter((r) => r.id !== candidate.id);
         await saveRegistry(remaining);
         return null;
       }
-      await updateRegistryEntry(candidate.id, { lastOpened: Date.now() });
-      await set(LAST_PROJECT_KEY, candidate.id);
       const driver = new LocalWorkspaceDriver(candidate.handle, candidate);
       await driver._loadGitignore();
       return driver;
@@ -163,18 +172,43 @@ export class LocalWorkspaceDriver {
       throw new Error('当前浏览器不支持 File System Access API');
     }
     const handle = await window.showDirectoryPicker({ id: 'ai-agent-workspace' });
-    const ok = await ensurePermission(handle);
+    const ok = await ensurePermission(handle, { allowPrompt: true });
     if (!ok) {
       throw new Error('未授予读写权限，无法绑定工作区');
     }
-    const entry = await persistHandleToRegistry(handle);
-    const driver = new LocalWorkspaceDriver(handle, entry);
+    const driver = new LocalWorkspaceDriver(handle, { id: null, pathLabel: handle?.name || 'workspace' });
     await driver._loadGitignore();
     return driver;
   }
 
   static async listRecent() {
     return listRecentProjects();
+  }
+
+  static async removeRecent(projectId) {
+    await removeRegistryEntry(projectId);
+    return true;
+  }
+
+  async touchRecent({ pathLabel } = {}) {
+    if (!this.rootHandle) return null;
+
+    const nextPathLabel = (pathLabel || this.pathLabel || this.rootName || '').trim();
+
+    if (!this.projectId) {
+      const entry = await persistHandleToRegistry(this.rootHandle, { pathLabel: nextPathLabel });
+      this.projectId = entry.id || this.projectId;
+      this.pathLabel = entry.pathLabel || this.pathLabel;
+      return entry;
+    }
+
+    const updated = await updateRegistryEntry(this.projectId, (prev) => ({
+      ...prev,
+      pathLabel: nextPathLabel || prev?.pathLabel || '',
+      lastOpened: Date.now(),
+    }));
+    await set(LAST_PROJECT_KEY, this.projectId);
+    return updated;
   }
 
   async _loadGitignore() {

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } = require('electron');
 const path = require('path');
 const simpleGit = require('simple-git');
+const { registerIpcHandlers } = require('./main/ipcHandlers');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
@@ -52,6 +53,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerIpcHandlers();
+
   ipcMain.handle('open-folder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory'],

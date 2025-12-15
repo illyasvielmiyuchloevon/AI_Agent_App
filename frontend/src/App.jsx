@@ -6,11 +6,17 @@ import ChatArea from './components/ChatArea';
 import LogPanel from './components/LogPanel';
 import ConfigPanel from './components/ConfigPanel';
 import TitleBar from './components/TitleBar';
-import Workspace from './components/Workspace';
+import EditorArea from './workbench/layout/EditorArea';
+import WorkbenchShell from './workbench/WorkbenchShell';
 import { LocalWorkspaceDriver } from './utils/localWorkspaceDriver';
 import DiffModal from './components/DiffModal';
 import { GitDriver } from './utils/gitDriver';
 import SourceControlPanel from './components/SourceControlPanel';
+import WelcomeEditor from './workbench/editors/WelcomeEditor';
+import { WELCOME_TAB_PATH } from './workbench/constants';
+import { useWorkbenchStateMachine, WorkbenchStates } from './workbench/workbenchStateMachine';
+import { createWorkspaceServices } from './workbench/workspace/workspaceServices';
+import { createWorkspaceController } from './workbench/workspace/workspaceController';
 
 const DEBUG_SEPARATORS = false;
 
@@ -271,6 +277,15 @@ function App() {
   const storedThemePreference = readStoredTheme();
   // --- Config State ---
   const [projectConfig, setProjectConfig] = useState(DEFAULT_PROJECT_CONFIG);
+  const workbench = useWorkbenchStateMachine();
+  const workspaceServices = useMemo(() => createWorkspaceServices(), []);
+  const {
+    model: workbenchModel,
+    boot: workbenchBoot,
+    syncFromLegacy: syncWorkbenchFromLegacy,
+    openRequested: workbenchOpenRequested,
+    closeRequested: workbenchCloseRequested,
+  } = workbench;
   const [config, setConfig] = useState(() => {
     const stored = readGlobalConfig();
     if (stored) {
@@ -560,46 +575,56 @@ function App() {
       }
       try {
           setWorkspaceBindingStatus('checking');
-          const res = await fetch('/api/workspace/bind-root', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
-              body: JSON.stringify({ root: trimmed })
-          });
-          let data = {};
+          const abort = new AbortController();
+          let timeoutId = null;
           try {
-              data = await res.json();
-          } catch {
-              data = {};
-          }
-          if (!res.ok) {
-              throw new Error(data.detail || res.statusText || '绑定后端工作区失败');
-          }
-          const applied = data.root || trimmed;
-          setBackendWorkspaceRoot(applied);
-          setProjectConfig((cfg) => ({
-              ...cfg,
-              backendRoot: applied,
-              projectPath: cfg.projectPath || applied
-          }));
-          setWorkspaceBindingError('');
-          setWorkspaceBindingStatus('ready');
-          if (GitDriver.isAvailable()) {
+              timeoutId = setTimeout(() => abort.abort(), 15000);
+              const res = await fetch('/api/workspace/bind-root', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
+                  body: JSON.stringify({ root: trimmed }),
+                  signal: abort.signal,
+              });
+              let data = {};
               try {
-                  setGitLoading(true);
-                  const status = await GitDriver.status(applied);
-                  setGitStatus(status);
-                  const remotes = await GitDriver.getRemotes(applied);
-                  setGitRemotes(remotes);
-                  const log = await GitDriver.log(applied);
-                  setGitLog(log?.all || []);
-              } finally {
-                  setGitLoading(false);
+                  data = await res.json();
+              } catch {
+                  data = {};
               }
+              if (!res.ok) {
+                  throw new Error(data.detail || res.statusText || '绑定后端工作区失败');
+              }
+              const applied = data.root || trimmed;
+              setBackendWorkspaceRoot(applied);
+              setProjectConfig((cfg) => ({
+                  ...cfg,
+                  backendRoot: applied,
+                  projectPath: cfg.projectPath || applied
+              }));
+              setWorkspaceBindingError('');
+              setWorkspaceBindingStatus('ready');
+              if (GitDriver.isAvailable()) {
+                  try {
+                      setGitLoading(true);
+                      const status = await GitDriver.status(applied);
+                      setGitStatus(status);
+                      const remotes = await GitDriver.getRemotes(applied);
+                      setGitRemotes(remotes);
+                      const log = await GitDriver.log(applied);
+                      setGitLog(log?.all || []);
+                  } finally {
+                      setGitLoading(false);
+                  }
+              }
+              return;
+          } finally {
+              if (timeoutId) clearTimeout(timeoutId);
           }
       } catch (err) {
           console.error('Bind backend workspace failed', err);
           setWorkspaceBindingStatus('error');
-          setWorkspaceBindingError(err?.message || '绑定后端工作区失败');
+          const isAbort = err?.name === 'AbortError';
+          setWorkspaceBindingError(isAbort ? '绑定后端工作区超时：请确认后端服务已启动' : (err?.message || '绑定后端工作区失败'));
           if (!silent) {
               console.warn(`绑定后端工作区失败：${err.message || err}`);
           }
@@ -608,12 +633,47 @@ function App() {
 
   const refreshRecentProjects = useCallback(async () => {
       try {
-          const list = await LocalWorkspaceDriver.listRecent();
-          setRecentProjects(list);
+          const [list, electronRecent] = await Promise.all([
+              LocalWorkspaceDriver.listRecent(),
+              (async () => {
+                  try {
+                      const api = typeof window !== 'undefined' ? window.electronAPI?.recent : null;
+                      if (!api?.list) return [];
+                      const res = await api.list();
+                      return res?.ok ? (res.items || []) : [];
+                  } catch {
+                      return [];
+                  }
+              })(),
+          ]);
+
+          const electronById = new Map((electronRecent || []).map((e) => [e.id, e]));
+          const merged = (list || []).map((proj) => {
+              const extra = electronById.get(proj.id) || null;
+              return extra ? { ...proj, ...extra } : proj;
+          });
+          setRecentProjects(merged);
       } catch {
           setRecentProjects([]);
       }
   }, []);
+
+  const removeRecentProject = useCallback(async (proj) => {
+      const id = proj?.id;
+      if (!id) return;
+      try {
+          await LocalWorkspaceDriver.removeRecent(id);
+      } catch (err) {
+          console.warn('Remove recent (LocalWorkspaceDriver) failed', err);
+      }
+      try {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.recent : null;
+          await api?.remove?.(id);
+      } catch (err) {
+          console.warn('Remove recent (electron) failed', err);
+      }
+      refreshRecentProjects();
+  }, [refreshRecentProjects]);
 
   const applyConfigToState = useCallback((cfg, driver = null) => {
       setProjectConfig(cfg);
@@ -817,7 +877,7 @@ function App() {
       if (!driver) return;
       setWorkspaceBindingStatus('checking');
       configHydratedRef.current = false;
-      setWorkspaceState(initialWorkspaceState);
+      setWorkspaceState({ ...initialWorkspaceState, openTabs: [WELCOME_TAB_PATH], activeFile: WELCOME_TAB_PATH, view: 'code' });
       setSessions([]);
       setMessages([]);
       setToolRuns({});
@@ -1298,21 +1358,60 @@ function App() {
       return '';
   }, []);
 
+  const workspaceController = useMemo(() => createWorkspaceController({
+      workbenchOpenRequested,
+      workbenchCloseRequested,
+      workspaceServices,
+      abortControllerRef,
+      initialWorkspaceState,
+      welcomeTabPath: WELCOME_TAB_PATH,
+      LocalWorkspaceDriver,
+      requestElectronFolderPath,
+      hydrateProject,
+      refreshRecentProjects,
+      setWorkspaceState,
+      setWorkspaceDriver,
+      setWorkspaceBindingStatus,
+      setWorkspaceBindingError,
+      setWorkspaceRootLabel,
+      setBackendWorkspaceRoot,
+      setProjectMeta,
+      setSessions,
+      setMessages,
+      setToolRuns,
+      setLogs,
+      setTaskReview,
+      setShowLogs,
+      setCurrentSessionId,
+      setDiffTabs,
+  }), [
+      abortControllerRef,
+      hydrateProject,
+      refreshRecentProjects,
+      requestElectronFolderPath,
+      setBackendWorkspaceRoot,
+      setCurrentSessionId,
+      setDiffTabs,
+      setLogs,
+      setMessages,
+      setProjectMeta,
+      setSessions,
+      setShowLogs,
+      setTaskReview,
+      setToolRuns,
+      setWorkspaceBindingError,
+      setWorkspaceBindingStatus,
+      setWorkspaceDriver,
+      setWorkspaceRootLabel,
+      setWorkspaceState,
+      workbenchCloseRequested,
+      workbenchOpenRequested,
+      workspaceServices,
+  ]);
+
   const handleSelectWorkspace = useCallback(async (projectId = null) => {
-      setWorkspaceBindingError('');
-      try {
-          setWorkspaceBindingStatus('checking');
-          const driver = projectId ? await LocalWorkspaceDriver.fromPersisted(projectId) : await LocalWorkspaceDriver.pickFolder();
-          if (!driver) {
-              throw new Error('未找到可用的项目文件夹');
-          }
-          const electronPath = await requestElectronFolderPath();
-          const cfg = await hydrateProject(driver, electronPath);
-      } catch (err) {
-          setWorkspaceBindingStatus('error');
-          setWorkspaceBindingError(err?.message || '选择文件夹失败');
-      }
-  }, [hydrateProject, requestElectronFolderPath]);
+      await workspaceController.openWorkspace(projectId);
+  }, [workspaceController]);
 
   const promptBindBackendRoot = useCallback(() => {
       const suggestion = backendWorkspaceRoot || projectConfig.backendRoot || projectConfig.projectPath || '';
@@ -1592,10 +1691,11 @@ function App() {
   }, [applyStoredConfig, fetchPersistedBackendConfig, getBackendConfig, backendBound]);
 
   useEffect(() => {
+      if (!workspaceDriver) return;
       if (backendWorkspaceRoot) {
           bindBackendWorkspaceRoot(backendWorkspaceRoot, { silent: true });
       }
-  }, [backendWorkspaceRoot, bindBackendWorkspaceRoot]);
+  }, [backendWorkspaceRoot, bindBackendWorkspaceRoot, workspaceDriver]);
 
   useEffect(() => {
       // ✅ 仅在挂载时执行一次，避免循环依赖
@@ -1605,9 +1705,9 @@ function App() {
       let cancelled = false;
       (async () => {
           try {
-              setWorkspaceBindingStatus('checking');
+              setWorkspaceBindingStatus('idle');
               await refreshRecentProjects();
-              const driver = await LocalWorkspaceDriver.fromPersisted();
+              const driver = await LocalWorkspaceDriver.fromPersisted(null, { allowPrompt: false });
               if (cancelled) return;
               if (driver) {
                   await hydrateProject(driver);
@@ -1625,6 +1725,52 @@ function App() {
           cancelled = true;
       };
   }, []);
+
+  useEffect(() => {
+      workbenchBoot();
+  }, [workbenchBoot]);
+
+  useEffect(() => {
+      syncWorkbenchFromLegacy({ workspaceDriver, workspaceBindingStatus, workspaceBindingError });
+  }, [syncWorkbenchFromLegacy, workspaceBindingError, workspaceBindingStatus, workspaceDriver]);
+
+  const closeWorkspaceToWelcome = useCallback(async () => {
+      await workspaceController.closeWorkspaceToWelcome({ recentTouchRef });
+  }, [workspaceController]);
+
+  // Default editor on boot: Welcome tab (Editor Area), not a blocking full-screen page.
+  useEffect(() => {
+      workspaceController.effectEnsureWelcomeTabWhenNoWorkspace({ workspaceDriver });
+  }, [workspaceController, workspaceDriver]);
+
+  // If a workspace becomes ready, auto-close Welcome to preserve the current editing feel (it can be reopened).
+  useEffect(() => {
+      workspaceController.effectAutoCloseWelcomeTabOnReady({ workspaceDriver, workspaceBindingStatus });
+  }, [workspaceBindingStatus, workspaceController, workspaceDriver]);
+
+  const workspaceServicesKeyRef = useRef('');
+  useEffect(() => {
+      workspaceController.effectSyncWorkspaceServices({
+          isReady: workbenchModel.state === WorkbenchStates.WORKSPACE_READY,
+          backendWorkspaceRoot,
+          workspaceRootLabel,
+          workspaceDriver,
+          projectMeta,
+          workspaceServicesKeyRef,
+      });
+  }, [backendWorkspaceRoot, projectMeta, workbenchModel.state, workspaceController, workspaceDriver, workspaceRootLabel]);
+
+  const recentTouchRef = useRef({ id: null, fsPath: null });
+  useEffect(() => {
+      return workspaceController.effectSyncRecentsOnReady({
+          workspaceDriver,
+          workspaceBindingStatus,
+          backendWorkspaceRoot,
+          workspaceRootLabel,
+          projectMeta,
+          recentTouchRef,
+      });
+  }, [backendWorkspaceRoot, projectMeta, refreshRecentProjects, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceRootLabel]);
 
   useEffect(() => {
       // 仅用于跨标签页同步
@@ -2716,7 +2862,7 @@ function App() {
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const lastLog = logs && logs.length > 0 ? logs[0] : null;
   const logStatus = lastLog ? { requestOk: !!lastLog.success, parseOk: lastLog.parsed_success !== false } : null;
-  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || !!workspaceState.activeFile || Object.keys(diffTabs).length > 0;
+  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || workspaceState.openTabs.length > 0 || Object.keys(diffTabs).length > 0 || !workspaceDriver || workspaceBindingStatus === 'checking' || workspaceBindingStatus === 'error';
   const workspaceShellVisible = workspaceVisible || showLogs;
   const gitBranch = gitStatus?.current || '';
   const gitBadgeCount = useMemo(() => {
@@ -2739,49 +2885,13 @@ function App() {
     openTabs: workspaceState.openTabs,
   }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs]);
 
-  if (!workspaceDriver) {
-      return (
-          <div className="welcome-shell" data-theme={theme}>
-              <div className="welcome-card">
-                  <div className="welcome-title">请先选择项目文件夹</div>
-                  <p className="welcome-subtitle">每个项目独立保存会话、配置和真实文件，完全隔离。</p>
-                  <button className="primary-btn jumbo" onClick={() => handleSelectWorkspace()}>
-                      📁 选择项目文件夹
-                  </button>
-              </div>
-              <div className="recent-list">
-                  <div className="recent-header">最近项目</div>
-                  {recentProjects.length === 0 && <div className="recent-empty">暂无记录</div>}
-                  {recentProjects.map((proj) => (
-                      <button key={proj.id} className="recent-item" onClick={() => handleSelectWorkspace(proj.id)}>
-                          <div className="recent-name">{proj.name || '未命名项目'}</div>
-                          <div className="recent-path">{proj.pathLabel || '未记录路径'}</div>
-                      </button>
-                  ))}
-              </div>
-          </div>
-      );
-  }
-
-  if (!projectReady) {
-      return (
-          <div className="welcome-shell" data-theme={theme}>
-              <div className="welcome-card">
-                  <div className="welcome-title">已绑定项目：{projectMeta.name || '未命名'}</div>
-                  <p className="welcome-subtitle">正在初始化项目工作区…</p>
-                  <div className="welcome-actions">
-                      <button className="primary-btn" onClick={() => handleSelectWorkspace()}>重新选择项目</button>
-                  </div>
-              </div>
-          </div>
-      );
-  }
-
   return (
-    <div className="app-frame" data-theme={theme}>
+    <WorkbenchShell theme={theme}>
       <TitleBar 
           projectMeta={projectMeta}
           onSelectProject={handleSelectWorkspace}
+          onOpenWelcome={() => workspaceController.openWelcomeTab({ focus: true })}
+          onCloseWorkspace={closeWorkspaceToWelcome}
           onBindBackend={promptBindBackendRoot}
           onToggleTheme={handleToggleTheme}
           theme={theme}
@@ -3022,7 +3132,7 @@ function App() {
               overflow: 'hidden'
           }}>
               {workspaceVisible && (
-                <Workspace
+                <EditorArea
                   files={workspaceProps.files}
                   openTabs={workspaceProps.openTabs}
                   activeFile={workspaceState.activeFile}
@@ -3033,19 +3143,33 @@ function App() {
                   hasWorkspace={!!workspaceDriver}
                   workspaceRootLabel={workspaceRootLabel}
                   bindingStatus={workspaceBindingStatus}
-                  bindingError={workspaceBindingError}
-                  hotReloadToken={hotReloadToken}
-                  theme={theme}
-                  backendRoot={backendWorkspaceRoot}
-                  onSelectFolder={handleSelectWorkspace}
-                  onBindBackendRoot={promptBindBackendRoot}
-                  onOpenFile={openFile}
-                  onCloseFile={closeFile}
-                  onFileChange={handleFileChange}
-                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path || prev.previewEntry }))} 
-                  onTabReorder={handleTabReorder}
-                  onAddFile={handleAddFile}
-                  onAddFolder={handleAddFolder}
+                   bindingError={workspaceBindingError}
+                   hotReloadToken={hotReloadToken}
+                    theme={theme}
+                    backendRoot={backendWorkspaceRoot}
+                    welcomeTabPath={WELCOME_TAB_PATH}
+                    onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
+                    renderWelcomeTab={() => (
+                      <WelcomeEditor
+                        theme={theme}
+                        bindingStatus={workspaceBindingStatus}
+                        bindingError={workspaceBindingError}
+                        recentProjects={recentProjects}
+                        onOpenFolder={() => handleSelectWorkspace()}
+                        onCancelOpen={() => closeWorkspaceToWelcome()}
+                        onOpenRecent={(proj) => handleSelectWorkspace(proj?.id)}
+                        onRemoveRecent={(proj) => removeRecentProject(proj)}
+                      />
+                    )}
+                   onSelectFolder={handleSelectWorkspace}
+                   onBindBackendRoot={promptBindBackendRoot}
+                   onOpenFile={openFile}
+                   onCloseFile={closeFile}
+                   onFileChange={handleFileChange}
+                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path && path !== WELCOME_TAB_PATH ? path : prev.previewEntry }))} 
+                   onTabReorder={handleTabReorder}
+                   onAddFile={handleAddFile}
+                   onAddFolder={handleAddFolder}
                   onRefreshPreview={handleRefreshPreview}
                   onToggleTheme={handleToggleTheme}
                   onToggleView={() => setWorkspaceState((prev) => {
@@ -3160,7 +3284,7 @@ function App() {
           onConfirm={inputModal.onConfirm}
           onClose={inputModal.onClose}
       />
-    </div>
+    </WorkbenchShell>
   );
 }
 

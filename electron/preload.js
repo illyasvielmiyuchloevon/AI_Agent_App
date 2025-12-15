@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openFolder: () => ipcRenderer.invoke('open-folder'),
+  recent: {
+    list: () => ipcRenderer.invoke('recent:list'),
+    remove: (id) => ipcRenderer.invoke('recent:remove', id),
+  },
+  workspace: {
+    pickFolder: () => ipcRenderer.invoke('workspace:pickFolder'),
+    open: (payload) => ipcRenderer.invoke('workspace:open', payload),
+    close: () => ipcRenderer.invoke('workspace:close'),
+  },
   setTitlebarTheme: (theme) => ipcRenderer.send('renderer-theme-updated', theme),
   git: {
     status: (cwd) => ipcRenderer.invoke('git:status', cwd),

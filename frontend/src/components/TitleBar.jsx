@@ -95,6 +95,8 @@ const Icon = ({ name }) => {
 const TitleBar = ({
     projectMeta,
     onSelectProject,
+    onOpenWelcome,
+    onCloseWorkspace,
     onBindBackend,
     onToggleTheme,
     theme,
@@ -137,6 +139,7 @@ const TitleBar = ({
             { label: 'New Folder', action: onAddFolder, shortcut: 'Ctrl+Shift+N', disabled: !hasDriver },
             { type: 'separator' },
             { label: 'Open Folder', action: () => onSelectProject(), shortcut: 'Ctrl+O' },
+            { label: 'Close Folder', action: onCloseWorkspace, disabled: !hasDriver },
             { label: 'Save', action: onSync, shortcut: 'Ctrl+S', disabled: !hasDriver },
             { type: 'separator' },
             { label: 'Exit', action: () => window.close() }
@@ -160,7 +163,7 @@ const TitleBar = ({
             { label: 'Close', action: () => window.close() }
         ],
         Help: [
-            { label: 'Welcome', action: () => console.log('Welcome') },
+            { label: 'Welcome', action: onOpenWelcome },
             { label: 'Documentation', action: () => console.log('Docs') },
             { label: 'About', action: () => console.log('About') }
         ]
