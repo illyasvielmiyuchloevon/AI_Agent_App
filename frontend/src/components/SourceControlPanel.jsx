@@ -31,7 +31,22 @@ const SourceControlPanel = ({
     onSetUpstream
 }) => {
     const [message, setMessage] = useState('');
-    const [expanded, setExpanded] = useState({ changes: true, repositories: true, graph: true, staged: true, unstaged: true });
+    const [expanded, setExpanded] = useState(() => {
+        if (typeof window !== 'undefined') {
+            try {
+                const stored = window.localStorage.getItem('sc-expanded-v1');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed && typeof parsed === 'object') {
+                        const defaults = { changes: true, repositories: true, graph: true, staged: true, unstaged: true };
+                        return { ...defaults, ...parsed };
+                    }
+                }
+            } catch {
+            }
+        }
+        return { changes: true, repositories: true, graph: true, staged: true, unstaged: true };
+    });
     const [expandedCommits, setExpandedCommits] = useState({});
     const [loadingCommits, setLoadingCommits] = useState({});
     const [isAddingRemote, setIsAddingRemote] = useState(false);
@@ -79,9 +94,9 @@ const SourceControlPanel = ({
         }
         return { changes: 260, repositories: 180, graph: 260 };
     });
-    const [dragTarget, setDragTarget] = useState(null);
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
+    const listsRef = useRef(null);
     const [syncHint, setSyncHint] = useState(null);
 
     // Hover state management
@@ -138,60 +153,18 @@ const SourceControlPanel = ({
     useEffect(() => {
         if (typeof window === 'undefined') return;
         try {
+            window.localStorage.setItem('sc-expanded-v1', JSON.stringify(expanded));
+        } catch {
+        }
+    }, [expanded]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
             window.localStorage.setItem('sc-section-order-v1', JSON.stringify(sectionOrder));
         } catch {
         }
     }, [sectionOrder]);
-
-    useEffect(() => {
-        if (!dragTarget) return;
-        const handleMove = (e) => {
-            if (draggingSection) return;
-            const delta = e.movementY || 0;
-            if (!delta) return;
-            setLayout(prev => {
-                const minHeight = 96;
-                const topId = dragTarget.top;
-                const bottomId = dragTarget.bottom;
-                if (!topId || !bottomId || !(topId in prev) || !(bottomId in prev)) {
-                    return prev;
-                }
-                let topHeight = prev[topId] + delta;
-                let bottomHeight = prev[bottomId] - delta;
-                const total = topHeight + bottomHeight;
-                if (topHeight < minHeight) {
-                    topHeight = minHeight;
-                    bottomHeight = total - minHeight;
-                } else if (bottomHeight < minHeight) {
-                    bottomHeight = minHeight;
-                    topHeight = total - minHeight;
-                }
-                return {
-                    ...prev,
-                    [topId]: Math.max(topHeight, minHeight),
-                    [bottomId]: Math.max(bottomHeight, minHeight)
-                };
-            });
-        };
-        const handleUp = () => {
-            setDragTarget(null);
-            if (typeof document !== 'undefined') {
-                document.body.style.userSelect = '';
-            }
-        };
-        window.addEventListener('mousemove', handleMove);
-        window.addEventListener('mouseup', handleUp);
-        if (typeof document !== 'undefined') {
-            document.body.style.userSelect = 'none';
-        }
-        return () => {
-            window.removeEventListener('mousemove', handleMove);
-            window.removeEventListener('mouseup', handleUp);
-            if (typeof document !== 'undefined') {
-                document.body.style.userSelect = '';
-            }
-        };
-    }, [dragTarget, draggingSection]);
 
     const handleCommitMouseLeave = () => {
         if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
@@ -313,7 +286,6 @@ const SourceControlPanel = ({
     };
 
     const handleSectionDragStart = (id) => (e) => {
-        setDragTarget(null);
         setDraggingSection(id);
         if (e.dataTransfer) {
             try {
@@ -342,6 +314,67 @@ const SourceControlPanel = ({
         setDraggingSection(null);
     };
 
+    const startResize = (topId, bottomId) => (e) => {
+        if (draggingSection) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const pointerId = e.pointerId;
+        const target = e.currentTarget;
+        if (target && typeof target.setPointerCapture === 'function') {
+            try {
+                target.setPointerCapture(pointerId);
+            } catch {
+            }
+        }
+        if (typeof document !== 'undefined') {
+            document.body.style.userSelect = 'none';
+        }
+        let lastY = e.clientY;
+        const handleMove = (event) => {
+            if (event.pointerId !== pointerId) return;
+            const delta = event.clientY - lastY;
+            if (!delta) return;
+            lastY = event.clientY;
+            setLayout(prev => {
+                const minHeight = 96;
+                if (!topId || !bottomId || !(topId in prev) || !(bottomId in prev)) {
+                    return prev;
+                }
+                let topHeight = prev[topId] + delta;
+                let bottomHeight = prev[bottomId] - delta;
+                const total = topHeight + bottomHeight;
+                if (topHeight < minHeight) {
+                    topHeight = minHeight;
+                    bottomHeight = total - minHeight;
+                } else if (bottomHeight < minHeight) {
+                    bottomHeight = minHeight;
+                    topHeight = total - minHeight;
+                }
+                return {
+                    ...prev,
+                    [topId]: Math.max(topHeight, minHeight),
+                    [bottomId]: Math.max(bottomHeight, minHeight)
+                };
+            });
+        };
+        const handleUp = (event) => {
+            if (event.pointerId !== pointerId) return;
+            if (target && typeof target.releasePointerCapture === 'function') {
+                try {
+                    target.releasePointerCapture(pointerId);
+                } catch {
+                }
+            }
+            if (typeof document !== 'undefined') {
+                document.body.style.userSelect = '';
+            }
+            window.removeEventListener('pointermove', handleMove);
+            window.removeEventListener('pointerup', handleUp);
+        };
+        window.addEventListener('pointermove', handleMove);
+        window.addEventListener('pointerup', handleUp);
+    };
+
     const handleSyncClick = (e) => {
         e.stopPropagation();
         if (!onSync) return;
@@ -357,6 +390,80 @@ const SourceControlPanel = ({
             return;
         }
         onSync();
+    };
+
+    const handlePullClick = (e) => {
+        e.stopPropagation();
+        const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
+        const hasUpstream = !!gitStatus?.tracking;
+        if (!hasRemote) {
+            setSyncHint('noRemote');
+            setIsAddingRemote(true);
+            return;
+        }
+        if (!hasUpstream) {
+            setSyncHint('noUpstream');
+            return;
+        }
+        if (onPull) {
+            onPull();
+        }
+    };
+
+    const handlePushClick = (e) => {
+        e.stopPropagation();
+        const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
+        const hasUpstream = !!gitStatus?.tracking;
+        if (!hasRemote) {
+            setSyncHint('noRemote');
+            setIsAddingRemote(true);
+            return;
+        }
+        if (!hasUpstream) {
+            setSyncHint('noUpstream');
+            return;
+        }
+        if (onPush) {
+            onPush();
+        }
+    };
+
+    const handleToggleGraph = () => {
+        setExpanded(prev => {
+            const wasExpanded = prev.graph;
+            const next = { ...prev, graph: !prev.graph };
+            if (!wasExpanded) {
+                setLayout(prevLayout => {
+                    const minHeight = 96;
+                    const container = listsRef.current;
+                    const containerHeight = container ? container.clientHeight : 0;
+                    let targetHeight = prevLayout.graph;
+                    if (containerHeight > 0) {
+                        const half = containerHeight * 0.5;
+                        let remaining = half;
+                        if (sectionOrder[sectionOrder.length - 1] === 'graph') {
+                            const others = sectionOrder
+                                .filter(id => id !== 'graph')
+                                .reduce((sum, id) => sum + (prevLayout[id] || minHeight), 0);
+                            remaining = Math.max(containerHeight - others, half);
+                        }
+                        targetHeight = Math.max(remaining, minHeight);
+                    } else {
+                        targetHeight = Math.max(prevLayout.graph, 260);
+                    }
+                    return {
+                        ...prevLayout,
+                        graph: targetHeight
+                    };
+                });
+            } else {
+                setLayout(prevLayout => ({
+                    ...prevLayout,
+                    graph: Math.max(96, prevLayout.graph || 96)
+                }));
+            }
+            return next;
+        });
     };
 
     const renderSection = (id) => {
@@ -781,7 +888,7 @@ const SourceControlPanel = ({
                 <div className="sc-section" style={{ minHeight: Math.max(layout.graph, 96) }} onDragOver={handleSectionDragOver('graph')} onDrop={handleSectionDragEnd}>
                     <div
                         className="sc-section-header"
-                        onClick={() => setExpanded(p => ({ ...p, graph: !p.graph }))}
+                        onClick={handleToggleGraph}
                         draggable
                         onDragStart={handleSectionDragStart('graph')}
                         onDragEnd={handleSectionDragEnd}
@@ -841,10 +948,10 @@ const SourceControlPanel = ({
             <div className="sc-header">
                 <span className="sc-title">源代码管理</span>
                 <div className="sc-header-actions">
-                     <button className="sc-action-btn" onClick={onPull} title="拉取">
+                     <button className="sc-action-btn" onClick={handlePullClick} title="拉取">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
                      </button>
-                     <button className="sc-action-btn" onClick={onPush} title="推送">
+                     <button className="sc-action-btn" onClick={handlePushClick} title="推送">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
                      </button>
                      <button className="sc-action-btn" onClick={onRefresh} title="刷新">
@@ -856,19 +963,14 @@ const SourceControlPanel = ({
                 </div>
             </div>
 
-            <div className="sc-lists">
+            <div className="sc-lists" ref={listsRef}>
                 {sectionOrder.map((id, index) => (
                     <React.Fragment key={id}>
                         {renderSection(id)}
                         {index < sectionOrder.length - 1 && (
                             <div
                                 className="sc-splitter"
-                                onMouseDown={(e) => {
-                                    if (draggingSection) return;
-                                    const topId = id;
-                                    const bottomId = sectionOrder[index + 1];
-                                    setDragTarget({ top: topId, bottom: bottomId });
-                                }}
+                                onPointerDown={startResize(id, sectionOrder[index + 1])}
                             />
                         )}
                     </React.Fragment>
