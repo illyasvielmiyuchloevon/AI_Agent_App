@@ -854,13 +854,13 @@ const SourceControlPanel = ({
                 ref={listsRef}
                 style={draggingSection ? { overflowY: 'hidden' } : undefined}
             >
-            <div className="sc-commit-block">
+                <div className="sc-commit-block">
                     <div className="sc-commit-row">
-                        <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
+                        <div className="sc-commit-input-wrapper">
                             <textarea
                                 ref={messageRef}
-                                className="sc-commit-input sc-commit-textarea"
-                                placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
+                                className="sc-commit-input sc-commit-textarea sc-commit-textarea-main"
+                                placeholder="Message (Ctrl+Enter to commit)"
                                 value={message}
                                 onChange={e => setMessage(e.target.value)}
                                 onKeyDown={handleKeyDown}
@@ -875,25 +875,15 @@ const SourceControlPanel = ({
                             </button>
                         </div>
                     </div>
-                    <div className="sc-commit-actions-row">
-                        <div className="sc-commit-buttons">
-                            <button
-                                className="sc-commit-primary"
-                                onClick={handleCommit}
-                                disabled={!canCommit}
-                                type="button"
-                            >
-                                提交
-                                <span className="sc-commit-kbd">Ctrl+Enter</span>
-                            </button>
-                            <button
-                                className="sc-commit-dropdown"
-                                type="button"
-                                title="更多提交选项"
-                            >
-                                ▾
-                            </button>
-                        </div>
+                    <div className="sc-commit-actions-row sc-commit-actions-row-full">
+                        <button
+                            className="sc-commit-primary sc-commit-primary-full"
+                            onClick={handleCommit}
+                            disabled={!canCommit}
+                            type="button"
+                        >
+                            Commit
+                        </button>
                     </div>
                     <div className="sc-bulk-actions-bar">
                         <button

@@ -2708,22 +2708,9 @@ input:focus, select:focus, textarea:focus {
   padding: 8px 16px 4px;
 }
 
-.sc-commit-input-shell {
+.sc-commit-input-wrapper {
   flex: 1;
-  display: flex;
-  align-items: center;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0 8px;
-  height: 28px;
-}
-
-.sc-commit-input-shell-multiline {
-  align-items: flex-start;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  height: auto;
+  position: relative;
 }
 
 .sc-commit-input {
@@ -2742,7 +2729,20 @@ input:focus, select:focus, textarea:focus {
   line-height: 18px;
 }
 
+.sc-commit-textarea-main {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  padding: 8px 32px 8px 10px;
+  box-sizing: border-box;
+}
+
 .sc-commit-status-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   border: none;
   background: transparent;
   cursor: pointer;
@@ -2750,7 +2750,9 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 4px;
+  padding: 0;
+  width: 20px;
+  height: 20px;
   border-radius: 4px;
 }
 
@@ -2769,6 +2771,11 @@ input:focus, select:focus, textarea:focus {
   padding: 4px 16px 4px;
 }
 
+.sc-commit-actions-row.sc-commit-actions-row-full {
+  display: block;
+  padding: 8px 16px 4px;
+}
+
 .sc-commit-primary {
   display: inline-flex;
   align-items: center;
@@ -2783,6 +2790,11 @@ input:focus, select:focus, textarea:focus {
   font-weight: 500;
   cursor: pointer;
   gap: 6px;
+}
+
+.sc-commit-primary.sc-commit-primary-full {
+  width: 100%;
+  border-radius: 6px;
 }
 
 .sc-commit-primary:disabled {
