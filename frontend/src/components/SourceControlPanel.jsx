@@ -26,7 +26,9 @@ const SourceControlPanel = ({
     onDiscard,
     onDiscardAll,
     loading,
-    repositoryLabel
+    repositoryLabel,
+    onPublishBranch,
+    onSetUpstream
 }) => {
     const [message, setMessage] = useState('');
     const [expanded, setExpanded] = useState({ changes: true, repositories: true, graph: true, staged: true, unstaged: true });
@@ -80,6 +82,7 @@ const SourceControlPanel = ({
     const [dragTarget, setDragTarget] = useState(null);
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
+    const [syncHint, setSyncHint] = useState(null);
 
     // Hover state management
     const [hoveredCommit, setHoveredCommit] = useState(null); // { commit, rect }
@@ -337,6 +340,23 @@ const SourceControlPanel = ({
 
     const handleSectionDragEnd = () => {
         setDraggingSection(null);
+    };
+
+    const handleSyncClick = (e) => {
+        e.stopPropagation();
+        if (!onSync) return;
+        const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
+        const hasUpstream = !!gitStatus?.tracking;
+        if (!hasRemote) {
+            setSyncHint('noRemote');
+            setIsAddingRemote(true);
+            return;
+        }
+        if (!hasUpstream) {
+            setSyncHint('noUpstream');
+            return;
+        }
+        onSync();
     };
 
     const renderSection = (id) => {
@@ -601,6 +621,49 @@ const SourceControlPanel = ({
                     </div>
                     {expanded.repositories && (
                         <>
+                            {syncHint === 'noRemote' && (
+                                <div className="sc-remote-error">
+                                    当前仓库未配置远程，请先添加远程或发布仓库后再同步。
+                                </div>
+                            )}
+                            {syncHint === 'noUpstream' && gitStatus?.current && (
+                                <div className="sc-remote-error">
+                                    <div style={{ marginBottom: '8px' }}>当前分支未设置上游分支：{gitStatus.current}</div>
+                                    <div className="sc-remote-actions">
+                                        {onPublishBranch && (
+                                            <button
+                                                className="sc-btn primary"
+                                                type="button"
+                                                onClick={() => {
+                                                    onPublishBranch(gitStatus.current);
+                                                    setSyncHint(null);
+                                                }}
+                                            >
+                                                发布分支
+                                            </button>
+                                        )}
+                                        {onSetUpstream && (
+                                            <button
+                                                className="sc-btn ghost"
+                                                type="button"
+                                                onClick={() => {
+                                                    onSetUpstream(gitStatus.current);
+                                                    setSyncHint(null);
+                                                }}
+                                            >
+                                                仅设置上游
+                                            </button>
+                                        )}
+                                        <button
+                                            className="sc-btn ghost"
+                                            type="button"
+                                            onClick={() => setSyncHint(null)}
+                                        >
+                                            关闭
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             <div className="sc-repo-section">
                                 <div className="sc-repo-item">
                                     <div className="sc-repo-main">
@@ -624,7 +687,7 @@ const SourceControlPanel = ({
                                         <span className="sc-repo-mode">GIT 集成</span>
                                         <button
                                             className="sc-item-btn"
-                                            onClick={(e) => { e.stopPropagation(); onSync && onSync(); }}
+                                            onClick={handleSyncClick}
                                             title="同步"
                                             type="button"
                                             aria-label="同步"

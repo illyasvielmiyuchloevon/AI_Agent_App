@@ -92,6 +92,36 @@ export const GitDriver = {
         }
     },
 
+    async publishBranch(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        if (typeof window.electronAPI.git.publishBranch !== 'function') {
+            console.error('Git publishBranch is not available');
+            return false;
+        }
+        try {
+            const res = await window.electronAPI.git.publishBranch(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git publishBranch failed', e);
+            return false;
+        }
+    },
+
+    async setUpstream(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        if (typeof window.electronAPI.git.setUpstream !== 'function') {
+            console.error('Git setUpstream is not available');
+            return false;
+        }
+        try {
+            const res = await window.electronAPI.git.setUpstream(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git setUpstream failed', e);
+            return false;
+        }
+    },
+
     async diff(cwd, file) {
         if (!this.isAvailable()) return null;
         try {

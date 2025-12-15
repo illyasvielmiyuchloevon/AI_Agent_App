@@ -34,5 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCommitStats: (cwd, hash) => ipcRenderer.invoke('git:getCommitStats', { cwd, hash }),
     getCommitFileDiffs: (cwd, hash) => ipcRenderer.invoke('git:getCommitFileDiffs', { cwd, hash }),
     getFileContent: (cwd, hash, path) => ipcRenderer.invoke('git:getFileContent', { cwd, hash, path }),
+    publishBranch: (cwd, branch) => ipcRenderer.invoke('git:publishBranch', { cwd, branch }),
+    setUpstream: (cwd, branch) => ipcRenderer.invoke('git:setUpstream', { cwd, branch }),
   }
 });

@@ -2809,6 +2809,20 @@ function App() {
       await GitDriver.push(backendWorkspaceRoot);
       refreshGitStatus();
   };
+  const handleGitPublishBranch = async (branch) => {
+      if (!backendWorkspaceRoot) return;
+      const target = branch || gitStatus?.current;
+      if (!target) return;
+      await GitDriver.publishBranch(backendWorkspaceRoot, target);
+      refreshGitStatus();
+  };
+  const handleGitSetUpstream = async (branch) => {
+      if (!backendWorkspaceRoot) return;
+      const target = branch || gitStatus?.current;
+      if (!target) return;
+      await GitDriver.setUpstream(backendWorkspaceRoot, target);
+      refreshGitStatus();
+  };
   const handleGitSync = async () => {
       if (!backendWorkspaceRoot) return;
       await GitDriver.pull(backendWorkspaceRoot);
@@ -3313,6 +3327,8 @@ function App() {
                     onSync={handleGitSync}
                     onPull={handleGitPull}
                     onPush={handleGitPush}
+                    onPublishBranch={handleGitPublishBranch}
+                    onSetUpstream={handleGitSetUpstream}
                     onRefresh={refreshGitStatus}
                     onGenerateCommitMessage={handleGenerateCommitMessage}
                     onInit={handleGitInit}

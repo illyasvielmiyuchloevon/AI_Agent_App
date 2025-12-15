@@ -80,8 +80,17 @@ app.whenReady().then(() => {
       const git = simpleGit(cwd);
       return await action(git);
     } catch (err) {
-      console.error('[Git] Error:', err);
-      return { success: false, error: err.message || String(err) };
+      const message = err && err.message ? String(err.message) : String(err);
+      const lower = message.toLowerCase();
+      const isExpectedState =
+        lower.includes('no tracking information for the current branch') ||
+        lower.includes('no configured push destination');
+      if (isExpectedState) {
+        console.warn('[Git] Expected state:', message);
+      } else {
+        console.error('[Git] Error:', message);
+      }
+      return { success: false, error: message };
     }
   };
 
@@ -201,7 +210,7 @@ app.whenReady().then(() => {
   ipcMain.handle('git:pull', (e, cwd) => handleGit(cwd, async (git) => {
     const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };
-    await git.pull();
+    await git.pull({ '--rebase': 'true' });
     return { success: true };
   }));
 
@@ -247,6 +256,24 @@ app.whenReady().then(() => {
       }
       throw err;
     }
+  }));
+
+  ipcMain.handle('git:publishBranch', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    const targetBranch = String(branch || '').trim();
+    if (!targetBranch) return { success: false, error: 'No branch specified' };
+    await git.raw(['push', '-u', 'origin', targetBranch]);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:setUpstream', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    const targetBranch = String(branch || '').trim();
+    if (!targetBranch) return { success: false, error: 'No branch specified' };
+    await git.raw(['branch', '--set-upstream-to', `origin/${targetBranch}`, targetBranch]);
+    return { success: true };
   }));
   
   ipcMain.handle('git:diff', (e, { cwd, file }) => handleGit(cwd, async (git) => {
