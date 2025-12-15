@@ -211,6 +211,7 @@ function Workspace({
   loading,
   hasWorkspace,
   workspaceRootLabel,
+  workspaceRoots,
   bindingStatus,
   bindingError,
   hotReloadToken,
@@ -299,6 +300,14 @@ function Workspace({
     return activeFile.split('/').filter(Boolean);
   }, [activeFile]);
 
+  const projectLabel = useMemo(() => {
+    if (workspaceRoots && Array.isArray(workspaceRoots) && workspaceRoots.length > 1) {
+      const names = workspaceRoots.map((r) => (r && (r.name || r.path)) || '').filter(Boolean);
+      if (names.length > 0) return names.join(' • ');
+    }
+    return workspaceRootLabel;
+  }, [workspaceRootLabel, workspaceRoots]);
+
   const editorPane = (
     <div className="workspace-editor">
           <div className="tab-row">
@@ -344,9 +353,9 @@ function Workspace({
             );})}
           </div>
           <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
-            {activeFile && workspaceRootLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
+            {activeFile && projectLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
               <span className="breadcrumb-root">
-                {workspaceRootLabel}
+                {projectLabel}
               </span>
             )}
             {activeFile && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && breadcrumbParts.map((part, idx) => (

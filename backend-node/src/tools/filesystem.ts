@@ -3,6 +3,7 @@ import path from 'path';
 import { BaseToolImplementation } from '../core/base_tool';
 import { getWorkspaceRoot } from '../context';
 import { takeSnapshot, persistDiffSafely, emptySnapshot } from '../diffs';
+import { workspaceManager } from '../workspace/manager';
 
 function isLikelyText(content: string): boolean {
     return content.indexOf('\0') === -1;
@@ -64,8 +65,7 @@ function offsetToLineCol(offsets: number[], index: number) {
     return { line: offsets.length, column: 1 };
 }
 
-// Helper for recursive walk
-async function walkDir(dir: string, root: string, entries: any[]) {
+async function walkDir(dir: string, root: string, entries: any[], folderIndex = 0, folderName?: string) {
     const list = await fs.readdir(dir, { withFileTypes: true });
     for (const item of list) {
         const fullPath = path.join(dir, item.name);
@@ -76,11 +76,24 @@ async function walkDir(dir: string, root: string, entries: any[]) {
         if (item.name.startsWith('.')) continue; // ignore hidden files/dirs by default for now
 
         if (item.isDirectory()) {
-            entries.push({ path: relPath, type: 'dir' });
-            await walkDir(fullPath, root, entries);
+            entries.push({
+                path: relPath,
+                type: 'dir',
+                workspace_root: root,
+                workspace_folder_index: folderIndex,
+                workspace_folder: folderName
+            });
+            await walkDir(fullPath, root, entries, folderIndex, folderName);
         } else {
             const stats = await fs.stat(fullPath);
-            entries.push({ path: relPath, type: 'file', size: stats.size });
+            entries.push({
+                path: relPath,
+                type: 'file',
+                size: stats.size,
+                workspace_root: root,
+                workspace_folder_index: folderIndex,
+                workspace_folder: folderName
+            });
         }
     }
 }
@@ -88,11 +101,22 @@ async function walkDir(dir: string, root: string, entries: any[]) {
 export async function getProjectStructure(root: string): Promise<any> {
     console.log(`[Filesystem] getting structure for ${root}`);
     const entries: any[] = [];
-    try {
-        await walkDir(root, root, entries);
-    } catch (e: any) {
-        console.error(`[Filesystem] walkDir error: ${e.message}`);
-        // ignore access errors
+    const roots: { path: string, name?: string }[] = [];
+    const handle = workspaceManager.getWorkspaceByRoot(root);
+    const folders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
+        ? handle.descriptor.folders
+        : [{ path: root }];
+
+    for (let index = 0; index < folders.length; index++) {
+        const folder = folders[index];
+        const folderRoot = path.resolve(folder.path);
+        const folderName = folder.name || path.basename(folderRoot) || folderRoot;
+        roots.push({ path: folderRoot, name: folderName });
+        try {
+            await walkDir(folderRoot, folderRoot, entries, index, folderName);
+        } catch (e: any) {
+            console.error(`[Filesystem] walkDir error: ${e.message}`);
+        }
     }
     
     // Simple candidates logic
@@ -106,9 +130,73 @@ export async function getProjectStructure(root: string): Promise<any> {
 
     return {
         root,
+        roots,
         entries,
         entry_candidates: candidates
     };
+}
+
+export async function resolveWorkspaceFilePath(hintRoot: string, relativePath: string, options: { mustExist?: boolean; preferExistingParent?: boolean } = {}): Promise<{ fullPath: string; rootPath: string }> {
+    const rel = String(relativePath || '');
+    const normalizedRel = rel.replace(/^[\\/]+/, '');
+
+    const handle = workspaceManager.getWorkspaceByRoot(hintRoot);
+    const candidateFolders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
+        ? handle.descriptor.folders
+        : [{ path: hintRoot }];
+
+    const candidateRoots = candidateFolders.map(f => path.resolve(f.path));
+
+    if (options.mustExist) {
+        for (const rootCandidate of candidateRoots) {
+            const rootPath = rootCandidate.replace(/[\\\/]+$/, '');
+            const fullPath = path.resolve(rootPath, normalizedRel);
+            const rootLower = rootPath.toLowerCase();
+            const fullLower = fullPath.toLowerCase();
+            const prefix = rootLower.endsWith(path.sep) ? rootLower : `${rootLower}${path.sep}`;
+            if (!(fullLower === rootLower || fullLower.startsWith(prefix))) {
+                continue;
+            }
+            try {
+                await fs.stat(fullPath);
+                return { fullPath, rootPath };
+            } catch {
+            }
+        }
+        throw new Error("Path does not exist in any workspace folder.");
+    }
+
+    if (options.preferExistingParent) {
+        for (const rootCandidate of candidateRoots) {
+            const rootPath = rootCandidate.replace(/[\\\/]+$/, '');
+            const fullPath = path.resolve(rootPath, normalizedRel);
+            const rootLower = rootPath.toLowerCase();
+            const fullLower = fullPath.toLowerCase();
+            const prefix = rootLower.endsWith(path.sep) ? rootLower : `${rootLower}${path.sep}`;
+            if (!(fullLower === rootLower || fullLower.startsWith(prefix))) {
+                continue;
+            }
+            const parentDir = path.dirname(fullPath);
+            try {
+                const stats = await fs.stat(parentDir);
+                if (stats.isDirectory()) {
+                    return { fullPath, rootPath };
+                }
+            } catch {
+            }
+        }
+    }
+
+    const fallbackRoot = candidateRoots[0] || path.resolve(String(hintRoot || ''));
+    const rootPath = fallbackRoot.replace(/[\\\/]+$/, '');
+    const fullPath = path.resolve(rootPath, normalizedRel);
+    const rootLower = rootPath.toLowerCase();
+    const fullLower = fullPath.toLowerCase();
+    const prefix = rootLower.endsWith(path.sep) ? rootLower : `${rootLower}${path.sep}`;
+    if (!(fullLower === rootLower || fullLower.startsWith(prefix))) {
+        throw new Error("Access denied");
+    }
+    return { fullPath, rootPath };
 }
 
 export class ReadFileTool extends BaseToolImplementation {
@@ -125,15 +213,8 @@ export class ReadFileTool extends BaseToolImplementation {
     async execute(args: { path: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] ReadFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
-        const fullPath = path.resolve(root, args.path);
-        
-        // Security check
-        if (!fullPath.startsWith(root)) {
-            console.error(`[Filesystem] Access denied: ${fullPath} is outside ${root}`);
-            throw new Error("Access denied: Cannot read files outside workspace.");
-        }
-
         try {
+            const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             const content = await fs.readFile(fullPath, 'utf-8');
             console.log(`[Filesystem] Read success: ${args.path} (${content.length} chars)`);
             return content;
@@ -164,14 +245,9 @@ export class WriteFileTool extends BaseToolImplementation {
     async execute(args: { path: string, content: string, create_directories?: boolean }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] WriteFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
-        const fullPath = path.resolve(root, args.path);
-        
-        if (!fullPath.startsWith(root)) {
-            console.error(`[Filesystem] Access denied: ${fullPath} is outside ${root}`);
-            throw new Error("Access denied: Cannot write files outside workspace.");
-        }
 
         try {
+            const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
             if (args.create_directories !== false) {
                 await fs.mkdir(path.dirname(fullPath), { recursive: true });
             }
@@ -258,13 +334,8 @@ export class EditFileTool extends BaseToolImplementation {
     async execute(args: { path: string, edits?: any, search?: string, replace?: string, description?: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] EditFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
-        const fullPath = path.resolve(root, args.path);
-
-        if (!fullPath.startsWith(root)) {
-             throw new Error("Access denied: Cannot edit files outside workspace.");
-        }
-
         try {
+            const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             const beforeSnapshot = await takeSnapshot(args.path);
             let content = await fs.readFile(fullPath, 'utf-8');
             const { edits, warnings } = this.normalizeEdits(args);
@@ -460,30 +531,35 @@ export class ListFilesTool extends BaseToolImplementation {
     async execute(args: { path?: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] ListFilesTool: ${args.path || '.'}`);
         const root = getWorkspaceRoot();
-        const targetPath = args.path ? path.resolve(root, args.path) : root;
-        
-        if (!targetPath.startsWith(root)) {
-             console.error(`[Filesystem] Access denied: ${targetPath} is outside ${root}`);
-             throw new Error("Access denied.");
-        }
+        const handle = workspaceManager.getWorkspaceByRoot(root);
+        const folders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
+            ? handle.descriptor.folders
+            : [{ path: root }];
 
         try {
             const entries: any[] = [];
-            // Reuse walkDir helper
-            await walkDir(targetPath, root, entries);
+            if (args.path) {
+                const { fullPath, rootPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
+                const folder = folders[0];
+                const folderName = folder ? (folder.name || path.basename(path.resolve(folder.path)) || folder.path) : rootPath;
+                await walkDir(fullPath, rootPath, entries, 0, folderName);
+            } else {
+                for (let index = 0; index < folders.length; index++) {
+                    const folder = folders[index];
+                    const folderRoot = path.resolve(folder.path);
+                    const folderName = folder.name || path.basename(folderRoot) || folderRoot;
+                    await walkDir(folderRoot, folderRoot, entries, index, folderName);
+                }
+            }
             console.log(`[Filesystem] List success: ${entries.length} items found`);
-            
-            // Format to match Python output if possible, or just return entries
-            // Python returns a list of objects with path, type, size.
-            // walkDir returns similar structure.
             return {
                 status: "ok",
                 items: entries.map(e => e.path),
                 tree: entries
             };
         } catch (e: any) {
-             console.error(`[Filesystem] List error: ${e.message}`);
-             return `Error listing files: ${e.message}`;
+            console.error(`[Filesystem] List error: ${e.message}`);
+            return `Error listing files: ${e.message}`;
         }
     }
 }
@@ -502,13 +578,8 @@ export class CreateFolderTool extends BaseToolImplementation {
     async execute(args: { path: string }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] CreateFolderTool: ${args.path}`);
         const root = getWorkspaceRoot();
-        const fullPath = path.resolve(root, args.path);
-        
-        if (!fullPath.startsWith(root)) {
-            throw new Error("Access denied: Cannot create folder outside workspace.");
-        }
-
         try {
+            const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
             await fs.mkdir(fullPath, { recursive: true });
             return { status: "ok", path: args.path, created: true };
         } catch (e: any) {
@@ -532,13 +603,8 @@ export class DeleteFileTool extends BaseToolImplementation {
     async execute(args: { path: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] DeleteFileTool: ${args.path}`);
         const root = getWorkspaceRoot();
-        const fullPath = path.resolve(root, args.path);
-        
-        if (!fullPath.startsWith(root)) {
-            throw new Error("Access denied: Cannot delete files outside workspace.");
-        }
-
         try {
+            const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             let shouldCapture = false;
             try {
                 const stats = await fs.stat(fullPath);
@@ -579,14 +645,15 @@ export class RenameFileTool extends BaseToolImplementation {
     async execute(args: { old_path: string, new_path: string }, context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] RenameFileTool: ${args.old_path} -> ${args.new_path}`);
         const root = getWorkspaceRoot();
-        const oldFullPath = path.resolve(root, args.old_path);
-        const newFullPath = path.resolve(root, args.new_path);
-        
-        if (!oldFullPath.startsWith(root) || !newFullPath.startsWith(root)) {
-             throw new Error("Access denied: Cannot rename files outside workspace.");
-        }
-
         try {
+            const { fullPath: oldFullPath, rootPath } = await resolveWorkspaceFilePath(root, args.old_path, { mustExist: true });
+            const newFullPath = path.resolve(rootPath, args.new_path);
+            const rootLower = rootPath.toLowerCase();
+            const newLower = newFullPath.toLowerCase();
+            const prefix = rootLower.endsWith(path.sep) ? rootLower : `${rootLower}${path.sep}`;
+            if (!(newLower === rootLower || newLower.startsWith(prefix))) {
+                throw new Error("Access denied: Cannot rename files outside workspace.");
+            }
             let isFile = false;
             let beforeSnapshot = emptySnapshot();
             try {
@@ -639,10 +706,6 @@ export class SearchInFilesTool extends BaseToolImplementation {
     async execute(args: { query: string, path?: string, paths?: string[], files?: string[], file_globs?: string[], regex?: boolean, case_sensitive?: boolean, context_lines?: number, max_results?: number }, _context: { sessionId?: string } = {}): Promise<any> {
         console.log(`[Filesystem] SearchInFilesTool: ${args.query} in ${args.path || args.paths?.join(',') || args.files?.join(',') || '.'}`);
         const root = getWorkspaceRoot();
-        const searchRoots = (args.paths && args.paths.length > 0)
-            ? args.paths.map(p => path.resolve(root, p))
-            : [args.path ? path.resolve(root, args.path) : root];
-
         try {
             const results: any[] = [];
             const MAX_RESULTS = args.max_results || 200;
@@ -650,34 +713,56 @@ export class SearchInFilesTool extends BaseToolImplementation {
             const isRegex = !!args.regex;
             const flags = args.case_sensitive ? 'g' : 'gi';
             const pattern = isRegex ? new RegExp(args.query, flags) : new RegExp(escapeRegex(args.query), flags);
+            const handle = workspaceManager.getWorkspaceByRoot(root);
+            const folders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
+                ? handle.descriptor.folders
+                : [{ path: root }];
 
-            const candidateFiles: string[] = [];
+            const candidateFiles: { root: string, path: string }[] = [];
 
             if (args.files && args.files.length > 0) {
                 for (const f of args.files) {
-                    const full = path.resolve(root, f);
-                    if (full.startsWith(root)) candidateFiles.push(path.relative(root, full).replace(/\\/g, '/'));
+                    try {
+                        const { fullPath, rootPath } = await resolveWorkspaceFilePath(root, f, { mustExist: true });
+                        const relPath = path.relative(rootPath, fullPath).replace(/\\/g, '/');
+                        candidateFiles.push({ root: rootPath, path: relPath });
+                    } catch {
+                    }
                 }
             }
 
-            for (const r of searchRoots) {
-                if (!r.startsWith(root)) {
-                    throw new Error("Access denied: Cannot search outside workspace.");
+            if (args.paths && args.paths.length > 0) {
+                for (const p of args.paths) {
+                    const { fullPath, rootPath } = await resolveWorkspaceFilePath(root, p, { mustExist: false, preferExistingParent: true });
+                    const entries: any[] = [];
+                    await walkDir(fullPath, rootPath, entries, 0);
+                    entries.filter(e => e.type === 'file').forEach(e => candidateFiles.push({ root: e.workspace_root || rootPath, path: e.path }));
                 }
+            } else if (args.path) {
+                const { fullPath, rootPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
                 const entries: any[] = [];
-                await walkDir(r, root, entries);
-                entries.filter(e => e.type === 'file').forEach(e => candidateFiles.push(e.path));
+                await walkDir(fullPath, rootPath, entries, 0);
+                entries.filter(e => e.type === 'file').forEach(e => candidateFiles.push({ root: e.workspace_root || rootPath, path: e.path }));
+            } else {
+                for (let index = 0; index < folders.length; index++) {
+                    const folder = folders[index];
+                    const folderRoot = path.resolve(folder.path);
+                    const entries: any[] = [];
+                    await walkDir(folderRoot, folderRoot, entries, index, folder.name || path.basename(folderRoot) || folderRoot);
+                    entries.filter(e => e.type === 'file').forEach(e => candidateFiles.push({ root: e.workspace_root || folderRoot, path: e.path }));
+                }
             }
 
             const seen = new Set<string>();
-            for (const relPath of candidateFiles) {
+            for (const file of candidateFiles) {
                 if (results.length >= MAX_RESULTS) break;
-                if (seen.has(relPath)) continue;
-                seen.add(relPath);
-                if (!matchGlob(args.file_globs, relPath)) continue;
+                const key = `${file.root}:${file.path}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                if (!matchGlob(args.file_globs, file.path)) continue;
 
                 try {
-                    const fullPath = path.resolve(root, relPath);
+                    const fullPath = path.resolve(file.root, file.path);
                     const content = await fs.readFile(fullPath, 'utf-8');
                     if (!isLikelyText(content)) continue;
 
@@ -691,7 +776,8 @@ export class SearchInFilesTool extends BaseToolImplementation {
                         const endLine = Math.min(lines.length, line + context);
                         const snippet = lines.slice(startLine - 1, endLine).join('\n');
                         results.push({
-                            path: relPath,
+                            path: file.path,
+                            workspace_root: file.root,
                             line,
                             column,
                             match: match[0],
@@ -737,14 +823,23 @@ export class ProjectStructureTool extends BaseToolImplementation {
                 const filesWithContent: any[] = [];
                 const textFiles = structure.entries.filter((e: any) => e.type === 'file');
                 for (const file of textFiles) {
-                     try {
-                        const fullPath = path.resolve(root, file.path);
+                    try {
+                        const baseRoot = typeof file.workspace_root === 'string' && file.workspace_root
+                            ? file.workspace_root
+                            : root;
+                        const fullPath = path.resolve(baseRoot, file.path);
                         const content = await fs.readFile(fullPath, 'utf-8');
-                        // Basic binary check (null bytes)
                         if (content.indexOf('\0') === -1 && content.length < 100000) {
-                             filesWithContent.push({ path: file.path, content });
+                            filesWithContent.push({
+                                path: file.path,
+                                content,
+                                workspace_root: baseRoot,
+                                workspace_folder_index: file.workspace_folder_index,
+                                workspace_folder: file.workspace_folder
+                            });
                         }
-                     } catch(e) {}
+                    } catch (e) {
+                    }
                 }
                 structure.files = filesWithContent;
             }

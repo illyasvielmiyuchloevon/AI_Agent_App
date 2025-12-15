@@ -107,6 +107,7 @@ export default function WelcomeEditor({
   bindingStatus,
   bindingError,
   recentProjects,
+  backendWorkspaces,
   onOpenFolder,
   onOpenFile,
   onNewFile,
@@ -117,6 +118,7 @@ export default function WelcomeEditor({
   onCancelOpen,
   onOpenRecent,
   onRemoveRecent,
+  onOpenBackendWorkspace,
 }) {
   const opening = bindingStatus === 'checking';
   const rootRef = useRef(null);
@@ -136,6 +138,7 @@ export default function WelcomeEditor({
   const [templateName, setTemplateName] = useState('');
   const [templateDest, setTemplateDest] = useState('');
   const [templateBusy, setTemplateBusy] = useState(false);
+  const activeWorkspaces = useMemo(() => (Array.isArray(backendWorkspaces) ? backendWorkspaces : []), [backendWorkspaces]);
 
   const filteredRecents = useMemo(() => {
     const list = Array.isArray(recentProjects) ? recentProjects : [];
@@ -713,8 +716,41 @@ export default function WelcomeEditor({
                 </span>
                 {statusText ? <span>{statusText}</span> : <span />}
               </div>
-            </div>
-          </section>
+      </div>
+    </section>
+
+    {activeWorkspaces.length ? (
+      <section className={styles.section} aria-label="Active Workspaces">
+        <div className={styles.sectionHeader}>
+          <div className={styles.sectionTitle}>Active Workspaces</div>
+        </div>
+        <div className={styles.sectionBody}>
+          <div className={styles.recentList} role="listbox" aria-label="Active workspaces">
+            {activeWorkspaces.map((ws, idx) => {
+              const firstFolder = Array.isArray(ws.folders) && ws.folders[0] ? ws.folders[0].path : '';
+              const name = ws.name || firstFolder || ws.id || `workspace-${idx}`;
+              const secondary = firstFolder || ws.id || '';
+              return (
+                <button
+                  key={ws.id || firstFolder || name}
+                  type="button"
+                  className={styles.recentItem}
+                  onClick={() => onOpenBackendWorkspace?.(ws)}
+                  title={secondary}
+                >
+                  <span className={styles.recentMain}>
+                    <span className={styles.recentNameRow}>
+                      <span className={styles.recentName}>{name}</span>
+                    </span>
+                    <span className={styles.recentPath}>{secondary || '—'}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+    ) : null}
 
           <section className={styles.section} aria-label="Recent">
             <div className={styles.sectionHeader}>

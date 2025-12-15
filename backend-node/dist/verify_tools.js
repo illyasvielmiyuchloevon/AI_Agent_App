@@ -32,7 +32,7 @@ async function runTests() {
     ];
     tools.forEach(t => registry.register(t));
     registry.debugMode = true;
-    await context_1.workspaceContext.run({ root: testDir }, async () => {
+    await context_1.workspaceContext.run({ id: testDir, root: testDir }, async () => {
         try {
             // 1. Write File
             const filePath = 'test.txt';

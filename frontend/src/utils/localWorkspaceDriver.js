@@ -41,6 +41,8 @@ const persistHandleToRegistry = async (handle, meta = {}) => {
     handle,
     lastOpened: Date.now(),
     pathLabel: meta.pathLabel || existing?.pathLabel || handle.name || '',
+    workspaceId: meta.workspaceId || existing?.workspaceId || '',
+    backendRoot: meta.backendRoot || existing?.backendRoot || '',
   };
   const next = [entry, ...registry.filter((r) => r && r.id !== id)].slice(0, 10);
   await saveRegistry(next);
@@ -69,6 +71,8 @@ const listRecentProjects = async () => {
       name: entry.name,
       pathLabel: entry.pathLabel || '',
       lastOpened: entry.lastOpened,
+      workspaceId: entry.workspaceId || '',
+      backendRoot: entry.backendRoot || '',
     }));
 };
 
@@ -190,13 +194,13 @@ export class LocalWorkspaceDriver {
     return true;
   }
 
-  async touchRecent({ pathLabel } = {}) {
+  async touchRecent({ pathLabel, workspaceId, backendRoot } = {}) {
     if (!this.rootHandle) return null;
 
     const nextPathLabel = (pathLabel || this.pathLabel || this.rootName || '').trim();
 
     if (!this.projectId) {
-      const entry = await persistHandleToRegistry(this.rootHandle, { pathLabel: nextPathLabel });
+      const entry = await persistHandleToRegistry(this.rootHandle, { pathLabel: nextPathLabel, workspaceId, backendRoot });
       this.projectId = entry.id || this.projectId;
       this.pathLabel = entry.pathLabel || this.pathLabel;
       return entry;
@@ -206,6 +210,8 @@ export class LocalWorkspaceDriver {
       ...prev,
       pathLabel: nextPathLabel || prev?.pathLabel || '',
       lastOpened: Date.now(),
+      workspaceId: workspaceId || prev?.workspaceId || '',
+      backendRoot: backendRoot || prev?.backendRoot || '',
     }));
     await set(LAST_PROJECT_KEY, this.projectId);
     return updated;

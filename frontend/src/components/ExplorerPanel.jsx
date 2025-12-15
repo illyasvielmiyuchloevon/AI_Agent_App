@@ -18,7 +18,7 @@ const getIconClass = (path) => {
   return EXT_ICONS[ext] || 'codicon-file';
 };
 
-const buildTree = (entries = []) => {
+const buildFolderTree = (entries = []) => {
   const root = { path: '', name: '', type: 'dir', children: [] };
   const map = new Map([['', root]]);
   entries.forEach((entry) => {
@@ -44,6 +44,38 @@ const buildTree = (entries = []) => {
     });
   });
   return root.children;
+};
+
+const buildTree = (entries = [], workspaceRoots = []) => {
+  const groupsMap = new Map();
+  entries.forEach((entry) => {
+    const index = typeof entry.workspace_folder_index === 'number' ? entry.workspace_folder_index : 0;
+    const rootPath = entry.workspace_root || '';
+    const folderName = entry.workspace_folder || '';
+    const key = String(index);
+    let group = groupsMap.get(key);
+    if (!group) {
+      const meta = Array.isArray(workspaceRoots) ? workspaceRoots.find((r, i) => i === index || (rootPath && r.path === rootPath)) : null;
+      const name = folderName || (meta && (meta.name || meta.path)) || '';
+      group = { index, name, entries: [] };
+      groupsMap.set(key, group);
+    }
+    group.entries.push(entry);
+  });
+  const groups = Array.from(groupsMap.values()).sort((a, b) => a.index - b.index);
+  if (groups.length <= 1) {
+    return buildFolderTree(entries);
+  }
+  return groups.map((group) => {
+    const children = buildFolderTree(group.entries);
+    const label = group.name || `Root ${group.index + 1}`;
+    return {
+      path: label,
+      name: label,
+      type: 'dir',
+      children,
+    };
+  });
 };
 
 const flattenTree = (nodes, collapsed) => {
@@ -173,7 +205,8 @@ function ExplorerPanel({
   onRenamePath,
   onSyncStructure,
   hasWorkspace = false,
-  gitStatus = null
+  gitStatus = null,
+  workspaceRoots = [],
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [contextMenu, setContextMenu] = useState(null);
@@ -195,8 +228,16 @@ function ExplorerPanel({
       return map;
   }, [gitStatus]);
 
-  const nodes = useMemo(() => buildTree(fileTree), [fileTree]);
+  const nodes = useMemo(() => buildTree(fileTree, workspaceRoots), [fileTree, workspaceRoots]);
   const virtualRows = useMemo(() => flattenTree(nodes, collapsed), [nodes, collapsed]);
+
+  const headerLabel = useMemo(() => {
+    if (Array.isArray(workspaceRoots) && workspaceRoots.length > 1) {
+      const names = workspaceRoots.map((r) => (r && (r.name || r.path)) || '').filter(Boolean);
+      if (names.length > 0) return names.join(' • ');
+    }
+    return projectLabel;
+  }, [projectLabel, workspaceRoots]);
 
   useEffect(() => {
     if (!treeRef.current) return;
@@ -272,7 +313,7 @@ function ExplorerPanel({
         onContextMenu={(e) => handleContextMenu(e, null)}
       >
         <div className="tree-header">
-          <div>Files {projectLabel ? `· ${projectLabel}` : ''}</div>
+          <div>Files {headerLabel ? `· ${headerLabel}` : ''}</div>
           {loading && <span className="tree-badge">同步中...</span>}
         </div>
         {virtualRows.length > 0 ? (

@@ -150,6 +150,7 @@ const DEFAULT_PROJECT_CONFIG = {
   projectName: '',
   projectPath: '',
   backendRoot: '',
+  workspaceId: '',
   provider: 'openai',
   openai: { api_key: '', model: '', base_url: '', check_model: '' },
   anthropic: { api_key: '', model: '', base_url: '', check_model: '' },
@@ -305,6 +306,7 @@ const initialWorkspaceState = {
   view: 'code',
   entryCandidates: [],
   previewEntry: '',
+  workspaceRoots: [],
 };
 
 const SETTINGS_TAB_PATH = '__system__/settings';
@@ -371,6 +373,8 @@ function App() {
   const [workspaceBindingError, setWorkspaceBindingError] = useState('');
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('');
   const [backendWorkspaceRoot, setBackendWorkspaceRoot] = useState('');
+  const [backendWorkspaceId, setBackendWorkspaceId] = useState('');
+  const [activeWorkspaces, setActiveWorkspaces] = useState([]);
   const [hotReloadToken, setHotReloadToken] = useState(0);
   const [toolSettings, setToolSettings] = useState(() => {
     const stored = readGlobalConfig();
@@ -468,8 +472,9 @@ function App() {
       merged.projectName = merged.projectName || projectMeta.name || merged.projectPath || '';
       merged.projectPath = merged.projectPath || merged.backendRoot || projectMeta.pathLabel || '';
       merged.backendRoot = merged.backendRoot || merged.projectPath || projectMeta.pathLabel || '';
+      merged.workspaceId = merged.workspaceId || backendWorkspaceId || '';
       return merged;
-  }, [mergeToolSettings, projectMeta.name, projectMeta.pathLabel]);
+  }, [mergeToolSettings, projectMeta.name, projectMeta.pathLabel, backendWorkspaceId]);
 
   // Helper to get flat config for backend
   const getBackendConfig = () => {
@@ -609,18 +614,36 @@ function App() {
       });
   };
 
-  const bindBackendWorkspaceRoot = useCallback(async (rootPath, { silent = false } = {}) => {
+  const openBackendWorkspace = useCallback(async (workspaceOrRoot, { silent = false } = {}) => {
+      const descriptor = workspaceOrRoot && typeof workspaceOrRoot === 'object' ? workspaceOrRoot : null;
+      const rootPath = descriptor && Array.isArray(descriptor.folders) && descriptor.folders[0] && typeof descriptor.folders[0].path === 'string'
+          ? descriptor.folders[0].path
+          : workspaceOrRoot;
       const trimmed = (rootPath || '').trim();
       if (!trimmed) {
           setBackendWorkspaceRoot('');
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+                  window.__NODE_AGENT_WORKSPACE_ROOT__ = '';
+              }
+          } catch {}
           setProjectConfig((cfg) => ({ ...cfg, backendRoot: '' }));
           return;
       }
       if (!isAbsolutePath(trimmed)) {
-          const message = '请填写后端工作区的绝对路径，例如 H:\\\\04';
+          const message = '请填写 Workspace 的绝对路径，例如 H:\\\\04';
           setWorkspaceBindingStatus('error');
           setWorkspaceBindingError(message);
           setBackendWorkspaceRoot('');
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+                  window.__NODE_AGENT_WORKSPACE_ROOT__ = '';
+              }
+          } catch {}
           setProjectConfig((cfg) => ({ ...cfg, backendRoot: '' }));
           if (!silent) {
               console.warn(message);
@@ -636,7 +659,14 @@ function App() {
               const res = await fetch('/api/workspace/bind-root', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
-                  body: JSON.stringify({ root: trimmed }),
+                  body: JSON.stringify({
+                      root: trimmed,
+                      settings: {
+                          provider: config.provider,
+                          model: (config[config.provider] && config[config.provider].model) || '',
+                          toolSettings,
+                      },
+                  }),
                   signal: abort.signal,
               });
               let data = {};
@@ -646,14 +676,23 @@ function App() {
                   data = {};
               }
               if (!res.ok) {
-                  throw new Error(data.detail || res.statusText || '绑定后端工作区失败');
+                  throw new Error(data.detail || res.statusText || '打开 Workspace 失败');
               }
               const applied = data.root || trimmed;
+              const workspaceId = typeof data.workspace_id === 'string' ? data.workspace_id.trim() : '';
+              setBackendWorkspaceId(workspaceId);
               setBackendWorkspaceRoot(applied);
+              try {
+                  if (typeof window !== 'undefined') {
+                      window.__NODE_AGENT_WORKSPACE_ID__ = workspaceId;
+                      window.__NODE_AGENT_WORKSPACE_ROOT__ = applied;
+                  }
+              } catch {}
               setProjectConfig((cfg) => ({
                   ...cfg,
                   backendRoot: applied,
-                  projectPath: cfg.projectPath || applied
+                  projectPath: cfg.projectPath || applied,
+                  workspaceId: workspaceId || cfg.workspaceId || '',
               }));
               setWorkspaceBindingError('');
               setWorkspaceBindingStatus('ready');
@@ -670,20 +709,26 @@ function App() {
                       setGitLoading(false);
                   }
               }
-              return;
+              return { descriptor: descriptor || (data.workspace || null) || null, workspaceId, root: applied };
           } finally {
               if (timeoutId) clearTimeout(timeoutId);
           }
       } catch (err) {
           console.error('Bind backend workspace failed', err);
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+              }
+          } catch {}
           setWorkspaceBindingStatus('error');
           const isAbort = err?.name === 'AbortError';
-          setWorkspaceBindingError(isAbort ? '绑定后端工作区超时：请确认后端服务已启动' : (err?.message || '绑定后端工作区失败'));
+          setWorkspaceBindingError(isAbort ? '打开 Workspace 超时：请确认后端服务已启动' : (err?.message || '打开 Workspace 失败'));
           if (!silent) {
-              console.warn(`绑定后端工作区失败：${err.message || err}`);
+              console.warn(`打开 Workspace 失败：${err.message || err}`);
           }
       }
-  }, []);
+  }, [config, toolSettings]);
 
   const refreshRecentProjects = useCallback(async () => {
       try {
@@ -719,6 +764,26 @@ function App() {
       } catch {
           setRecentProjects([]);
       }
+  }, []);
+
+  useEffect(() => {
+      let cancelled = false;
+      const load = async () => {
+          try {
+              const res = await fetch('/api/workspaces');
+              if (!res.ok) return;
+              const data = await res.json();
+              if (!Array.isArray(data)) return;
+              if (!cancelled) setActiveWorkspaces(data);
+          } catch {
+          }
+      };
+      load();
+      const timer = setInterval(load, 5000);
+      return () => {
+          cancelled = true;
+          clearInterval(timer);
+      };
   }, []);
 
   const removeRecentProject = useCallback(async (proj) => {
@@ -860,6 +925,7 @@ function App() {
                   activeFile: userClosedAll ? '' : activeFile,
                   openTabs: userClosedAll ? [] : (openTabs.length ? openTabs : (activeFile ? [activeFile] : [])),
                   entryCandidates: data.entry_candidates || prev.entryCandidates,
+                  workspaceRoots: Array.isArray(data.roots) ? data.roots : prev.workspaceRoots,
               };
           });
           lastSyncRef.current = Date.now();
@@ -970,13 +1036,13 @@ function App() {
           setBackendWorkspaceRoot('');
           setProjectConfig((prev) => ({ ...prev, backendRoot: '' }));
       } else {
-          await bindBackendWorkspaceRoot(candidateRoot, { silent: false });
+          await openBackendWorkspace(candidateRoot, { silent: false });
           setWorkspaceRootLabel(candidateRoot);
       }
 
       await syncWorkspaceFromDisk({ includeContent: true, highlight: false, driver });
       return cfg;
-  }, [applyConfigToState, bindBackendWorkspaceRoot, loadProjectConfigFromDisk, refreshRecentProjects, syncWorkspaceFromDisk]);
+  }, [applyConfigToState, openBackendWorkspace, loadProjectConfigFromDisk, refreshRecentProjects, syncWorkspaceFromDisk]);
 
   useEffect(() => {
       if (!workspaceDriver) return;
@@ -1444,6 +1510,7 @@ function App() {
       setWorkspaceBindingError,
       setWorkspaceRootLabel,
       setBackendWorkspaceRoot,
+      setBackendWorkspaceId,
       setProjectMeta,
       setSessions,
       setMessages,
@@ -1459,6 +1526,7 @@ function App() {
       refreshRecentProjects,
       requestElectronFolderPath,
       setBackendWorkspaceRoot,
+      setBackendWorkspaceId,
       setCurrentSessionId,
       setDiffTabs,
       setLogs,
@@ -1481,6 +1549,11 @@ function App() {
   const handleSelectWorkspace = useCallback(async (projectId = null) => {
       await workspaceController.openWorkspace(projectId);
   }, [workspaceController]);
+
+  const handleOpenBackendWorkspaceFromList = useCallback(async (descriptor) => {
+      if (!descriptor) return;
+      await openBackendWorkspace(descriptor, { silent: false });
+  }, [openBackendWorkspace]);
 
   const handleOpenFileFromWelcome = useCallback(async () => {
       try {
@@ -1538,23 +1611,23 @@ function App() {
       await workspaceController.openWorkspace(null, { preferredRoot: root });
   }, [clearPendingOpenFile, workspaceController]);
 
-  const promptBindBackendRoot = useCallback(() => {
+  const promptOpenWorkspace = useCallback(() => {
       const suggestion = backendWorkspaceRoot || projectConfig.backendRoot || projectConfig.projectPath || '';
       
       setInputModal({
           isOpen: true,
-          title: '绑定后端工作区',
-          label: '请输入后端工作区的绝对路径（例如 H:\\04）',
+          title: '打开 Workspace',
+          label: '请输入 Workspace 的绝对路径（例如 H:\\04）',
           defaultValue: suggestion,
           onConfirm: (input) => {
               if (input) {
-                  bindBackendWorkspaceRoot(input, { silent: false });
+                  openBackendWorkspace(input, { silent: false });
               }
               setInputModal(prev => ({ ...prev, isOpen: false }));
           },
           onClose: () => setInputModal(prev => ({ ...prev, isOpen: false }))
       });
-  }, [backendWorkspaceRoot, projectConfig.backendRoot, projectConfig.projectPath, bindBackendWorkspaceRoot]);
+  }, [backendWorkspaceRoot, projectConfig.backendRoot, projectConfig.projectPath, openBackendWorkspace]);
 
   const scheduleSave = (path, content) => {
       if (!workspaceDriver) return;
@@ -1818,9 +1891,9 @@ function App() {
   useEffect(() => {
       if (!workspaceDriver) return;
       if (backendWorkspaceRoot) {
-          bindBackendWorkspaceRoot(backendWorkspaceRoot, { silent: true });
+          openBackendWorkspace(backendWorkspaceRoot, { silent: true });
       }
-  }, [backendWorkspaceRoot, bindBackendWorkspaceRoot, workspaceDriver]);
+  }, [backendWorkspaceRoot, openBackendWorkspace, workspaceDriver]);
 
   useEffect(() => {
       // ✅ 仅在挂载时执行一次，避免循环依赖
@@ -1841,8 +1914,8 @@ function App() {
               }
           } catch (err) {
               if (!cancelled) {
-                  setWorkspaceBindingStatus('error');
-                  setWorkspaceBindingError(err?.message || '工作区绑定失败');
+          setWorkspaceBindingStatus('error');
+          setWorkspaceBindingError(err?.message || 'Workspace 打开失败');
               }
           }
       })();
@@ -1904,9 +1977,10 @@ function App() {
           backendWorkspaceRoot,
           workspaceRootLabel,
           projectMeta,
+          backendWorkspaceId,
           recentTouchRef,
       });
-  }, [backendWorkspaceRoot, projectMeta, refreshRecentProjects, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceRootLabel]);
+  }, [backendWorkspaceId, backendWorkspaceRoot, projectMeta, refreshRecentProjects, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceRootLabel]);
 
   useEffect(() => {
       // 仅用于跨标签页同步
@@ -3185,7 +3259,8 @@ function App() {
     files: workspaceState.files,
     fileTree: workspaceState.fileTree,
     openTabs: workspaceState.openTabs,
-  }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs]);
+    workspaceRoots: workspaceState.workspaceRoots,
+  }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs, workspaceState.workspaceRoots]);
 
   return (
     <WorkbenchShell theme={theme}>
@@ -3194,7 +3269,7 @@ function App() {
           onSelectProject={handleSelectWorkspace}
           onOpenWelcome={() => workspaceController.openWelcomeTab({ focus: true })}
           onCloseWorkspace={closeWorkspaceToWelcome}
-          onBindBackend={promptBindBackendRoot}
+          onBindBackend={promptOpenWorkspace}
           onToggleTheme={handleToggleTheme}
           theme={theme}
           viewMode={workspaceState.view}
@@ -3300,6 +3375,7 @@ function App() {
                   files={workspaceProps.files}
                   fileTree={workspaceProps.fileTree}
                   projectLabel={workspaceRootLabel}
+                  workspaceRoots={workspaceProps.workspaceRoots}
                   loading={workspaceLoading}
                   activeFile={workspaceState.activeFile}
                   onOpenFile={openFile}
@@ -3447,6 +3523,7 @@ function App() {
                   loading={workspaceLoading}
                   hasWorkspace={!!workspaceDriver}
                   workspaceRootLabel={workspaceRootLabel}
+                  workspaceRoots={workspaceProps.workspaceRoots}
                   bindingStatus={workspaceBindingStatus}
                    bindingError={workspaceBindingError}
                    hotReloadToken={hotReloadToken}
@@ -3460,6 +3537,7 @@ function App() {
                         bindingStatus={workspaceBindingStatus}
                         bindingError={workspaceBindingError}
                         recentProjects={recentProjects}
+                        backendWorkspaces={activeWorkspaces}
                         onOpenFolder={() => handleSelectWorkspace()}
                         onOpenFile={handleOpenFileFromWelcome}
                         onNewFile={handleNewFileFromWelcome}
@@ -3470,10 +3548,11 @@ function App() {
                         onCancelOpen={() => closeWorkspaceToWelcome()}
                         onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
                         onRemoveRecent={(proj) => removeRecentProject(proj)}
+                        onOpenBackendWorkspace={handleOpenBackendWorkspaceFromList}
                       />
                     )}
                    onSelectFolder={handleSelectWorkspace}
-                   onBindBackendRoot={promptBindBackendRoot}
+                   onBindBackendRoot={promptOpenWorkspace}
                    onOpenFile={openFile}
                    onCloseFile={closeFile}
                    onFileChange={handleFileChange}

@@ -32,24 +32,45 @@ async function readJsonResponse(res) {
 
 export class BackendWorkspaceDriver {
   constructor(rootFsPath, meta = {}) {
-    const root = String(rootFsPath || '').trim();
-    if (!isAbsolutePath(root)) throw new Error('BackendWorkspaceDriver requires an absolute root path');
-    this.rootFsPath = root;
-    this.rootName = meta.rootName || basename(root) || 'workspace';
-    this.projectId = meta.id || root;
-    this.pathLabel = meta.pathLabel || root;
+  const root = String(rootFsPath || '').trim();
+  if (!isAbsolutePath(root)) throw new Error('BackendWorkspaceDriver requires an absolute root path');
+  this.rootFsPath = root;
+  this.rootName = meta.rootName || basename(root) || 'workspace';
+  this.projectId = meta.id || root;
+  this.pathLabel = meta.pathLabel || root;
+  this.workspaceId = meta.workspaceId || '';
+  this.workspaceRoots = Array.isArray(meta.workspaceRoots) ? meta.workspaceRoots : [];
   }
 
   static isAvailable() {
     return typeof fetch === 'function';
   }
 
-  static async fromFsPath(rootFsPath) {
-    return new BackendWorkspaceDriver(rootFsPath, { id: String(rootFsPath || '').trim() });
+  static async fromFsPath(rootFsPath, meta = {}) {
+    return new BackendWorkspaceDriver(rootFsPath, {
+      id: meta.id || String(rootFsPath || '').trim(),
+      rootName: meta.rootName,
+      pathLabel: meta.pathLabel,
+      workspaceId: meta.workspaceId,
+      workspaceRoots: meta.workspaceRoots,
+    });
   }
 
   _headers(extra = {}) {
-    return { 'X-Workspace-Root': this.rootFsPath, ...extra };
+    let workspaceId = this.workspaceId || '';
+    if (!workspaceId) {
+      try {
+        if (typeof window !== 'undefined' && window.__NODE_AGENT_WORKSPACE_ID__) {
+          workspaceId = String(window.__NODE_AGENT_WORKSPACE_ID__ || '').trim();
+        }
+      } catch {}
+    }
+    const base = {};
+    if (workspaceId) {
+      base['X-Workspace-Id'] = workspaceId;
+    }
+    base['X-Workspace-Root'] = this.rootFsPath;
+    return { ...base, ...extra };
   }
 
   async _getJson(url) {
@@ -108,17 +129,18 @@ export class BackendWorkspaceDriver {
   async getStructure({ includeContent = false } = {}) {
     const structure = await this._getJson('/api/workspace/structure');
     const entries = Array.isArray(structure?.entries) ? structure.entries : [];
+    const roots = Array.isArray(structure?.roots) ? structure.roots : [];
     const files = [];
     if (includeContent) {
       const fileEntries = entries.filter((e) => e && e.type === 'file' && typeof e.path === 'string');
       for (const entry of fileEntries) {
-        // eslint-disable-next-line no-await-in-loop
         const data = await this.readFile(entry.path);
         files.push(data);
       }
     }
     return {
       root: structure?.root || this.rootName,
+      roots,
       entries,
       files,
       entry_candidates: Array.isArray(structure?.entry_candidates) ? structure.entry_candidates : [],
@@ -134,4 +156,3 @@ export class BackendWorkspaceDriver {
     return null;
   }
 }
-

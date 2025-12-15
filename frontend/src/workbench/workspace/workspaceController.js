@@ -17,6 +17,7 @@ export function createWorkspaceController(deps) {
     setWorkspaceBindingError,
     setWorkspaceRootLabel,
     setBackendWorkspaceRoot,
+    setBackendWorkspaceId,
     setProjectMeta,
     setSessions,
     setMessages,
@@ -132,11 +133,28 @@ export function createWorkspaceController(deps) {
       // ignore
     }
 
+    let backendWorkspaceId = '';
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.window && globalThis.window.__NODE_AGENT_WORKSPACE_ID__) {
+        backendWorkspaceId = String(globalThis.window.__NODE_AGENT_WORKSPACE_ID__ || '').trim();
+      }
+    } catch {}
+    if (backendWorkspaceId) {
+      try {
+        await fetch('/api/workspaces/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Workspace-Id': backendWorkspaceId },
+          body: JSON.stringify({ id: backendWorkspaceId }),
+        });
+      } catch {}
+    }
+
     if (typeof setWorkspaceDriver === 'function') setWorkspaceDriver(null);
     if (typeof setWorkspaceBindingStatus === 'function') setWorkspaceBindingStatus('idle');
     if (typeof setWorkspaceBindingError === 'function') setWorkspaceBindingError('');
     if (typeof setWorkspaceRootLabel === 'function') setWorkspaceRootLabel('');
     if (typeof setBackendWorkspaceRoot === 'function') setBackendWorkspaceRoot('');
+    if (typeof setBackendWorkspaceId === 'function') setBackendWorkspaceId('');
     if (typeof setProjectMeta === 'function') setProjectMeta({ id: null, name: '', pathLabel: '' });
     if (typeof setSessions === 'function') setSessions([]);
     if (typeof setMessages === 'function') setMessages([]);
@@ -188,6 +206,7 @@ export function createWorkspaceController(deps) {
     backendWorkspaceRoot,
     workspaceRootLabel,
     projectMeta,
+    backendWorkspaceId,
     recentTouchRef,
   }) => {
     if (!workspaceDriver) return undefined;
@@ -200,7 +219,7 @@ export function createWorkspaceController(deps) {
 
       // Local recent (FS handle registry): only touch after WORKSPACE_READY.
       try {
-        const updated = await workspaceDriver.touchRecent?.({ pathLabel: fsPath });
+        const updated = await workspaceDriver.touchRecent?.({ pathLabel: fsPath, workspaceId: backendWorkspaceId, backendRoot: backendWorkspaceRoot });
         if (!cancelled && updated?.id && projectMeta?.id !== updated.id && typeof setProjectMeta === 'function') {
           setProjectMeta((prev) => ({ ...prev, id: updated.id }));
         }
