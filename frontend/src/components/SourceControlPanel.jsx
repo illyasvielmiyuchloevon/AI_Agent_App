@@ -75,26 +75,6 @@ const SourceControlPanel = ({
         }
         return ['staged', 'unstaged', 'repositories', 'graph'];
     });
-    const [layout, setLayout] = useState(() => {
-        if (typeof window !== 'undefined') {
-            try {
-                const stored = window.localStorage.getItem('sc-layout-v2');
-                if (stored) {
-                    const parsed = JSON.parse(stored);
-                    if (parsed && typeof parsed === 'object') {
-                        return {
-                            staged: typeof parsed.staged === 'number' ? parsed.staged : 220,
-                            unstaged: typeof parsed.unstaged === 'number' ? parsed.unstaged : 260,
-                            repositories: typeof parsed.repositories === 'number' ? parsed.repositories : 180,
-                            graph: typeof parsed.graph === 'number' ? parsed.graph : 260
-                        };
-                    }
-                }
-            } catch {
-            }
-        }
-        return { staged: 220, unstaged: 260, repositories: 180, graph: 260 };
-    });
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
     const listsRef = useRef(null);
@@ -142,14 +122,6 @@ const SourceControlPanel = ({
             }).catch(console.error);
         }
     };
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        try {
-            window.localStorage.setItem('sc-layout-v2', JSON.stringify(layout));
-        } catch {
-        }
-    }, [layout]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -315,67 +287,6 @@ const SourceControlPanel = ({
         setDraggingSection(null);
     };
 
-    const startResize = (topId, bottomId) => (e) => {
-        if (draggingSection) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const pointerId = e.pointerId;
-        const target = e.currentTarget;
-        if (target && typeof target.setPointerCapture === 'function') {
-            try {
-                target.setPointerCapture(pointerId);
-            } catch {
-            }
-        }
-        if (typeof document !== 'undefined') {
-            document.body.style.userSelect = 'none';
-        }
-        let lastY = e.clientY;
-        const handleMove = (event) => {
-            if (event.pointerId !== pointerId) return;
-            const delta = event.clientY - lastY;
-            if (!delta) return;
-            lastY = event.clientY;
-            setLayout(prev => {
-                const minHeight = 96;
-                if (!topId || !bottomId || !(topId in prev) || !(bottomId in prev)) {
-                    return prev;
-                }
-                let topHeight = prev[topId] + delta;
-                let bottomHeight = prev[bottomId] - delta;
-                const total = topHeight + bottomHeight;
-                if (topHeight < minHeight) {
-                    topHeight = minHeight;
-                    bottomHeight = total - minHeight;
-                } else if (bottomHeight < minHeight) {
-                    bottomHeight = minHeight;
-                    topHeight = total - minHeight;
-                }
-                return {
-                    ...prev,
-                    [topId]: Math.max(topHeight, minHeight),
-                    [bottomId]: Math.max(bottomHeight, minHeight)
-                };
-            });
-        };
-        const handleUp = (event) => {
-            if (event.pointerId !== pointerId) return;
-            if (target && typeof target.releasePointerCapture === 'function') {
-                try {
-                    target.releasePointerCapture(pointerId);
-                } catch {
-                }
-            }
-            if (typeof document !== 'undefined') {
-                document.body.style.userSelect = '';
-            }
-            window.removeEventListener('pointermove', handleMove);
-            window.removeEventListener('pointerup', handleUp);
-        };
-        window.addEventListener('pointermove', handleMove);
-        window.addEventListener('pointerup', handleUp);
-    };
-
     const handleSyncClick = (e) => {
         e.stopPropagation();
         if (!onSync) return;
@@ -430,47 +341,20 @@ const SourceControlPanel = ({
     };
 
     const handleToggleGraph = () => {
-        setExpanded(prev => {
-            const wasExpanded = prev.graph;
-            const next = { ...prev, graph: !prev.graph };
-            if (!wasExpanded) {
-                setLayout(prevLayout => {
-                    const minHeight = 96;
-                    const container = listsRef.current;
-                    const containerHeight = container ? container.clientHeight : 0;
-                    let targetHeight = prevLayout.graph;
-                    if (containerHeight > 0) {
-                        const half = containerHeight * 0.5;
-                        let remaining = half;
-                        if (sectionOrder[sectionOrder.length - 1] === 'graph') {
-                            const others = sectionOrder
-                                .filter(id => id !== 'graph')
-                                .reduce((sum, id) => sum + (prevLayout[id] || minHeight), 0);
-                            remaining = Math.max(containerHeight - others, half);
-                        }
-                        targetHeight = Math.max(remaining, minHeight);
-                    } else {
-                        targetHeight = Math.max(prevLayout.graph, 260);
-                    }
-                    return {
-                        ...prevLayout,
-                        graph: targetHeight
-                    };
-                });
-            } else {
-                setLayout(prevLayout => ({
-                    ...prevLayout,
-                    graph: Math.max(96, prevLayout.graph || 96)
-                }));
-            }
-            return next;
-        });
+        setExpanded(prev => ({
+            ...prev,
+            graph: !prev.graph
+        }));
     };
 
     const renderSection = (id) => {
         if (id === 'staged') {
             return (
-                <div className="sc-section" style={{ minHeight: Math.max(layout.staged, 96) }} onDragOver={handleSectionDragOver('staged')} onDrop={handleSectionDragEnd}>
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('staged')}
+                    onDrop={handleSectionDragEnd}
+                >
                     <div
                         className="sc-section-header"
                         onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
@@ -530,7 +414,11 @@ const SourceControlPanel = ({
 
         if (id === 'unstaged') {
             return (
-                <div className="sc-section" style={{ minHeight: Math.max(layout.unstaged, 96) }} onDragOver={handleSectionDragOver('unstaged')} onDrop={handleSectionDragEnd}>
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('unstaged')}
+                    onDrop={handleSectionDragEnd}
+                >
                     <div
                         className="sc-section-header"
                         onClick={() => setExpanded(p => ({ ...p, unstaged: !p.unstaged }))}
@@ -607,7 +495,11 @@ const SourceControlPanel = ({
 
         if (id === 'repositories') {
             return (
-                <div className="sc-section" style={{ minHeight: Math.max(layout.repositories, 96) }} onDragOver={handleSectionDragOver('repositories')} onDrop={handleSectionDragEnd}>
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('repositories')}
+                    onDrop={handleSectionDragEnd}
+                >
                     <div
                         className="sc-section-header"
                         onClick={() => setExpanded(p => ({ ...p, repositories: !p.repositories }))}
@@ -785,7 +677,11 @@ const SourceControlPanel = ({
 
         if (id === 'graph') {
             return (
-                <div className="sc-section" style={{ minHeight: Math.max(layout.graph, 96) }} onDragOver={handleSectionDragOver('graph')} onDrop={handleSectionDragEnd}>
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('graph')}
+                    onDrop={handleSectionDragEnd}
+                >
                     <div
                         className="sc-section-header"
                         onClick={handleToggleGraph}
@@ -863,7 +759,11 @@ const SourceControlPanel = ({
                 </div>
             </div>
 
-            <div className="sc-lists" ref={listsRef}>
+            <div
+                className="sc-lists"
+                ref={listsRef}
+                style={draggingSection ? { overflowY: 'hidden' } : undefined}
+            >
                 <div className="sc-commit-block">
                     <div className="sc-commit-row">
                         <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
@@ -947,15 +847,9 @@ const SourceControlPanel = ({
                     </div>
                 </div>
 
-                {sectionOrder.map((id, index) => (
+                {sectionOrder.map((id) => (
                     <React.Fragment key={id}>
                         {renderSection(id)}
-                        {index < sectionOrder.length - 1 && (
-                            <div
-                                className="sc-splitter"
-                                onPointerDown={startResize(id, sectionOrder[index + 1])}
-                            />
-                        )}
                     </React.Fragment>
                 ))}
                 <div
