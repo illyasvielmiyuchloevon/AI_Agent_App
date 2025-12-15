@@ -2637,6 +2637,10 @@ input:focus, select:focus, textarea:focus {
   padding-bottom: 8px;
 }
 
+.sc-commit-block {
+  padding-top: 4px;
+}
+
 .sc-commit-row {
   display: flex;
   align-items: center;
@@ -2655,6 +2659,13 @@ input:focus, select:focus, textarea:focus {
   height: 28px;
 }
 
+.sc-commit-input-shell-multiline {
+  align-items: flex-start;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  height: auto;
+}
+
 .sc-commit-input {
   flex: 1;
   border: none;
@@ -2662,6 +2673,13 @@ input:focus, select:focus, textarea:focus {
   background: transparent;
   color: var(--text);
   font-size: 12px;
+}
+
+.sc-commit-textarea {
+  resize: none;
+  min-height: 22px;
+  max-height: 108px;
+  line-height: 18px;
 }
 
 .sc-commit-status-btn {
@@ -2683,6 +2701,12 @@ input:focus, select:focus, textarea:focus {
 .sc-commit-buttons {
   display: flex;
   align-items: center;
+}
+
+.sc-commit-actions-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 16px 4px;
 }
 
 .sc-commit-primary {
@@ -2759,6 +2783,62 @@ input:focus, select:focus, textarea:focus {
 
 .sc-bulk-btn:not(:disabled):hover {
   background: var(--surface-hover);
+}
+
+.sc-subsection {
+  border-top: 1px solid var(--border);
+}
+
+.sc-subsection-header {
+  height: 30px;
+  font-size: 12px;
+  text-transform: none;
+}
+
+.sc-section-actions-inline {
+  opacity: 1;
+}
+
+.sc-bulk-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.sc-bulk-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sc-bulk-link:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.sc-splitter {
+  height: 6px;
+  cursor: row-resize;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.sc-splitter::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  background: var(--border);
+  opacity: 0.7;
+}
+
+.sc-splitter:hover::before {
+  background: var(--accent);
 }
 
 .sc-repo-section {
