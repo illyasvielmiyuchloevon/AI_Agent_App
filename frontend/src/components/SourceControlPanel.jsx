@@ -34,18 +34,18 @@ const SourceControlPanel = ({
     const [expanded, setExpanded] = useState(() => {
         if (typeof window !== 'undefined') {
             try {
-                const stored = window.localStorage.getItem('sc-expanded-v1');
+                const stored = window.localStorage.getItem('sc-expanded-v2');
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (parsed && typeof parsed === 'object') {
-                        const defaults = { changes: true, repositories: true, graph: true, staged: true, unstaged: true };
+                        const defaults = { staged: true, unstaged: true, repositories: true, graph: true };
                         return { ...defaults, ...parsed };
                     }
                 }
             } catch {
             }
         }
-        return { changes: true, repositories: true, graph: true, staged: true, unstaged: true };
+        return { staged: true, unstaged: true, repositories: true, graph: true };
     });
     const [expandedCommits, setExpandedCommits] = useState({});
     const [loadingCommits, setLoadingCommits] = useState({});
@@ -59,11 +59,11 @@ const SourceControlPanel = ({
     const [sectionOrder, setSectionOrder] = useState(() => {
         if (typeof window !== 'undefined') {
             try {
-                const stored = window.localStorage.getItem('sc-section-order-v1');
+                const stored = window.localStorage.getItem('sc-section-order-v2');
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (Array.isArray(parsed) && parsed.length) {
-                        const allowed = ['changes', 'repositories', 'graph'];
+                        const allowed = ['staged', 'unstaged', 'repositories', 'graph'];
                         const filtered = parsed.filter(id => allowed.includes(id));
                         const missing = allowed.filter(id => !filtered.includes(id));
                         const next = [...filtered, ...missing];
@@ -73,17 +73,18 @@ const SourceControlPanel = ({
             } catch {
             }
         }
-        return ['changes', 'repositories', 'graph'];
+        return ['staged', 'unstaged', 'repositories', 'graph'];
     });
     const [layout, setLayout] = useState(() => {
         if (typeof window !== 'undefined') {
             try {
-                const stored = window.localStorage.getItem('sc-layout-v1');
+                const stored = window.localStorage.getItem('sc-layout-v2');
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (parsed && typeof parsed === 'object') {
                         return {
-                            changes: typeof parsed.changes === 'number' ? parsed.changes : 260,
+                            staged: typeof parsed.staged === 'number' ? parsed.staged : 220,
+                            unstaged: typeof parsed.unstaged === 'number' ? parsed.unstaged : 260,
                             repositories: typeof parsed.repositories === 'number' ? parsed.repositories : 180,
                             graph: typeof parsed.graph === 'number' ? parsed.graph : 260
                         };
@@ -92,7 +93,7 @@ const SourceControlPanel = ({
             } catch {
             }
         }
-        return { changes: 260, repositories: 180, graph: 260 };
+        return { staged: 220, unstaged: 260, repositories: 180, graph: 260 };
     });
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
@@ -145,7 +146,7 @@ const SourceControlPanel = ({
     useEffect(() => {
         if (typeof window === 'undefined') return;
         try {
-            window.localStorage.setItem('sc-layout-v1', JSON.stringify(layout));
+            window.localStorage.setItem('sc-layout-v2', JSON.stringify(layout));
         } catch {
         }
     }, [layout]);
@@ -153,7 +154,7 @@ const SourceControlPanel = ({
     useEffect(() => {
         if (typeof window === 'undefined') return;
         try {
-            window.localStorage.setItem('sc-expanded-v1', JSON.stringify(expanded));
+            window.localStorage.setItem('sc-expanded-v2', JSON.stringify(expanded));
         } catch {
         }
     }, [expanded]);
@@ -161,7 +162,7 @@ const SourceControlPanel = ({
     useEffect(() => {
         if (typeof window === 'undefined') return;
         try {
-            window.localStorage.setItem('sc-section-order-v1', JSON.stringify(sectionOrder));
+            window.localStorage.setItem('sc-section-order-v2', JSON.stringify(sectionOrder));
         } catch {
         }
     }, [sectionOrder]);
@@ -467,238 +468,137 @@ const SourceControlPanel = ({
     };
 
     const renderSection = (id) => {
-        if (id === 'changes') {
+        if (id === 'staged') {
             return (
-                <div className="sc-section" style={{ minHeight: Math.max(layout.changes, 96) }} onDragOver={handleSectionDragOver('changes')} onDrop={handleSectionDragEnd}>
+                <div className="sc-section" style={{ minHeight: Math.max(layout.staged, 96) }} onDragOver={handleSectionDragOver('staged')} onDrop={handleSectionDragEnd}>
                     <div
                         className="sc-section-header"
-                        onClick={() => setExpanded(p => ({ ...p, changes: !p.changes }))}
+                        onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
                         draggable
-                        onDragStart={handleSectionDragStart('changes')}
+                        onDragStart={handleSectionDragStart('staged')}
                         onDragEnd={handleSectionDragEnd}
-                        aria-label="拖动以调整更改分组顺序"
+                        aria-label="拖动以调整暂存分组顺序"
                     >
-                        <div className="sc-section-icon">{expanded.changes ? '▼' : '▶'}</div>
+                        <div className="sc-section-icon">{expanded.staged ? '▼' : '▶'}</div>
                         <div className="sc-section-label">
-                            更改 <span className="sc-count-badge">{totalChanges}</span>
+                            暂存的更改
+                            <span className="sc-count-badge">{staged.length}</span>
                         </div>
-                        <div className="sc-section-actions">
+                        <div className="sc-section-actions sc-section-actions-inline">
                             <button
                                 className="sc-action-btn"
-                                onClick={(e) => { e.stopPropagation(); onRefresh(); }}
-                                title="刷新更改"
-                                aria-label="刷新更改"
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleUnstageAllClick();
+                                }}
+                                disabled={staged.length === 0}
+                                title="取消全部暂存"
+                                aria-label="取消全部暂存"
                             >
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="5" y1="12" x2="19" y2="12" />
+                                </svg>
                             </button>
                         </div>
                     </div>
-                    {expanded.changes && (
-                        <div className="sc-section-body">
-                            <div className="sc-commit-block">
-                                <div className="sc-commit-row">
-                                    <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
-                                        <textarea
-                                            ref={messageRef}
-                                            className="sc-commit-input sc-commit-textarea"
-                                            placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
-                                            value={message}
-                                            onChange={e => setMessage(e.target.value)}
-                                            onKeyDown={handleKeyDown}
-                                        />
-                                        <button
-                                            className="sc-commit-status-btn"
-                                            onClick={handleAiGenerate}
-                                            title="生成提交说明"
-                                            type="button"
-                                        >
-                                            ✨
-                                        </button>
-                                    </div>
+                    {expanded.staged && (
+                        <div className="sc-file-list">
+                            {staged.map(file => (
+                                <FileItem
+                                    key={`staged-${file.path}`}
+                                    file={file}
+                                    onAction={() => onUnstage([file.path])}
+                                    actionIcon="-"
+                                    onOpen={() => onOpenFile(file.path)}
+                                    onDiff={() => onDiff(file.path, true)}
+                                    onDiscard={null}
+                                    selected={selectedFile === file.path}
+                                    onSelect={() => setSelectedFile(file.path)}
+                                />
+                            ))}
+                            {staged.length === 0 && (
+                                <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                    当前没有暂存的更改。
                                 </div>
-                                <div className="sc-commit-actions-row">
-                                    <div className="sc-commit-buttons">
-                                        <button
-                                            className="sc-commit-primary"
-                                            onClick={handleCommit}
-                                            disabled={!canCommit}
-                                            type="button"
-                                        >
-                                            提交
-                                            <span className="sc-commit-kbd">Ctrl+Enter</span>
-                                        </button>
-                                        <button
-                                            className="sc-commit-dropdown"
-                                            type="button"
-                                            title="更多提交选项"
-                                        >
-                                            ▾
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
 
-                            <div className="sc-subsection">
-                                <div
-                                    className="sc-section-header sc-subsection-header"
-                                    onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
-                                >
-                                    <div className="sc-section-icon">{expanded.staged ? '▼' : '▶'}</div>
-                                    <div className="sc-section-label">
-                                        暂存的更改
-                                        <span className="sc-count-badge">{staged.length}</span>
-                                    </div>
-                                    <div className="sc-section-actions sc-section-actions-inline">
-                                        <button
-                                            className="sc-action-btn"
-                                            type="button"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleUnstageAllClick();
-                                            }}
-                                            disabled={staged.length === 0}
-                                            title="取消全部暂存"
-                                            aria-label="取消全部暂存"
-                                        >
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <line x1="5" y1="12" x2="19" y2="12" />
-                                            </svg>
-                                        </button>
-                                    </div>
+        if (id === 'unstaged') {
+            return (
+                <div className="sc-section" style={{ minHeight: Math.max(layout.unstaged, 96) }} onDragOver={handleSectionDragOver('unstaged')} onDrop={handleSectionDragEnd}>
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, unstaged: !p.unstaged }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('unstaged')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整更改分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.unstaged ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            更改
+                            <span className="sc-count-badge">{changes.length}</span>
+                        </div>
+                        <div className="sc-section-actions sc-section-actions-inline">
+                            <button
+                                className="sc-action-btn"
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleStageAllClick();
+                                }}
+                                disabled={changes.length === 0}
+                                title="全部暂存"
+                                aria-label="全部暂存"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19" />
+                                    <line x1="5" y1="12" x2="19" y2="12" />
+                                </svg>
+                            </button>
+                            <button
+                                className="sc-action-btn"
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDiscardAllClick();
+                                }}
+                                disabled={changes.length === 0 || !onDiscardAll}
+                                title="全部丢弃更改"
+                                aria-label="全部丢弃更改"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M9 14 4 9l5-5" />
+                                    <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    {expanded.unstaged && (
+                        <div className="sc-file-list">
+                            {changes.map(file => (
+                                <FileItem
+                                    key={`change-${file.path}`}
+                                    file={file}
+                                    onAction={() => onStage([file.path])}
+                                    actionIcon="+"
+                                    onDiscard={() => onDiscard && onDiscard([file.path])}
+                                    onOpen={() => onOpenFile(file.path)}
+                                    onDiff={() => onDiff(file.path, false)}
+                                    selected={selectedFile === file.path}
+                                    onSelect={() => setSelectedFile(file.path)}
+                                />
+                            ))}
+                            {changes.length === 0 && (
+                                <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                    当前没有未暂存的更改。
                                 </div>
-                                {expanded.staged && (
-                                    <div className="sc-file-list">
-                                        {staged.map(file => (
-                                            <FileItem
-                                                key={`staged-${file.path}`}
-                                                file={file}
-                                                onAction={() => onUnstage([file.path])}
-                                                actionIcon="-"
-                                                onOpen={() => onOpenFile(file.path)}
-                                                onDiff={() => onDiff(file.path, true)}
-                                                onDiscard={null}
-                                                selected={selectedFile === file.path}
-                                                onSelect={() => setSelectedFile(file.path)}
-                                            />
-                                        ))}
-                                        {staged.length === 0 && (
-                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
-                                                当前没有暂存的更改。
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="sc-subsection">
-                                <div
-                                    className="sc-section-header sc-subsection-header"
-                                    onClick={() => setExpanded(p => ({ ...p, unstaged: !p.unstaged }))}
-                                >
-                                    <div className="sc-section-icon">{expanded.unstaged ? '▼' : '▶'}</div>
-                                    <div className="sc-section-label">
-                                        更改
-                                        <span className="sc-count-badge">{changes.length}</span>
-                                    </div>
-                                    <div className="sc-section-actions sc-section-actions-inline">
-                                        <button
-                                            className="sc-action-btn"
-                                            type="button"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleStageAllClick();
-                                            }}
-                                            disabled={changes.length === 0}
-                                            title="全部暂存"
-                                            aria-label="全部暂存"
-                                        >
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <line x1="12" y1="5" x2="12" y2="19" />
-                                                <line x1="5" y1="12" x2="19" y2="12" />
-                                            </svg>
-                                        </button>
-                                        <button
-                                            className="sc-action-btn"
-                                            type="button"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDiscardAllClick();
-                                            }}
-                                            disabled={changes.length === 0 || !onDiscardAll}
-                                            title="全部丢弃更改"
-                                            aria-label="全部丢弃更改"
-                                        >
-                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M9 14 4 9l5-5" />
-                                                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
-                                            </svg>
-                                        </button>
-                                    </div>
-                                </div>
-                                {expanded.unstaged && (
-                                    <div className="sc-file-list">
-                                        {changes.map(file => (
-                                            <FileItem
-                                                key={`change-${file.path}`}
-                                                file={file}
-                                                onAction={() => onStage([file.path])}
-                                                actionIcon="+"
-                                                onDiscard={() => onDiscard && onDiscard([file.path])}
-                                                onOpen={() => onOpenFile(file.path)}
-                                                onDiff={() => onDiff(file.path, false)}
-                                                selected={selectedFile === file.path}
-                                                onSelect={() => setSelectedFile(file.path)}
-                                            />
-                                        ))}
-                                        {changes.length === 0 && (
-                                            <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
-                                                当前没有未暂存的更改。
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="sc-bulk-actions-bar">
-                                <button
-                                    className="sc-action-btn"
-                                    type="button"
-                                    onClick={handleStageAllClick}
-                                    disabled={changes.length === 0}
-                                    title="全部暂存"
-                                    aria-label="全部暂存"
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <line x1="12" y1="5" x2="12" y2="19" />
-                                        <line x1="5" y1="12" x2="19" y2="12" />
-                                    </svg>
-                                </button>
-                                <button
-                                    className="sc-action-btn"
-                                    type="button"
-                                    onClick={handleUnstageAllClick}
-                                    disabled={staged.length === 0}
-                                    title="取消全部暂存"
-                                    aria-label="取消全部暂存"
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <line x1="5" y1="12" x2="19" y2="12" />
-                                    </svg>
-                                </button>
-                                <button
-                                    className="sc-action-btn"
-                                    type="button"
-                                    onClick={handleDiscardAllClick}
-                                    disabled={totalChanges === 0 || !onDiscardAll}
-                                    title="全部丢弃更改"
-                                    aria-label="全部丢弃更改"
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M9 14 4 9l5-5" />
-                                        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
-                                    </svg>
-                                </button>
-                            </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -964,6 +864,89 @@ const SourceControlPanel = ({
             </div>
 
             <div className="sc-lists" ref={listsRef}>
+                <div className="sc-commit-block">
+                    <div className="sc-commit-row">
+                        <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
+                            <textarea
+                                ref={messageRef}
+                                className="sc-commit-input sc-commit-textarea"
+                                placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
+                                value={message}
+                                onChange={e => setMessage(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                            />
+                            <button
+                                className="sc-commit-status-btn"
+                                onClick={handleAiGenerate}
+                                title="生成提交说明"
+                                type="button"
+                            >
+                                ✨
+                            </button>
+                        </div>
+                    </div>
+                    <div className="sc-commit-actions-row">
+                        <div className="sc-commit-buttons">
+                            <button
+                                className="sc-commit-primary"
+                                onClick={handleCommit}
+                                disabled={!canCommit}
+                                type="button"
+                            >
+                                提交
+                                <span className="sc-commit-kbd">Ctrl+Enter</span>
+                            </button>
+                            <button
+                                className="sc-commit-dropdown"
+                                type="button"
+                                title="更多提交选项"
+                            >
+                                ▾
+                            </button>
+                        </div>
+                    </div>
+                    <div className="sc-bulk-actions-bar">
+                        <button
+                            className="sc-action-btn"
+                            type="button"
+                            onClick={handleStageAllClick}
+                            disabled={changes.length === 0}
+                            title="全部暂存"
+                            aria-label="全部暂存"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19" />
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                        </button>
+                        <button
+                            className="sc-action-btn"
+                            type="button"
+                            onClick={handleUnstageAllClick}
+                            disabled={staged.length === 0}
+                            title="取消全部暂存"
+                            aria-label="取消全部暂存"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                        </button>
+                        <button
+                            className="sc-action-btn"
+                            type="button"
+                            onClick={handleDiscardAllClick}
+                            disabled={totalChanges === 0 || !onDiscardAll}
+                            title="全部丢弃更改"
+                            aria-label="全部丢弃更改"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 14 4 9l5-5" />
+                                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
                 {sectionOrder.map((id, index) => (
                     <React.Fragment key={id}>
                         {renderSection(id)}
