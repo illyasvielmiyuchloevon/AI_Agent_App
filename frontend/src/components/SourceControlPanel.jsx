@@ -199,7 +199,7 @@ const SourceControlPanel = ({
                                     </svg>
                                 </button>
                              )}
-                             <button onClick={(e) => { e.stopPropagation(); onUnstageAll(); }} className="sc-action-btn" title="Unstage All">
+                             <button onClick={(e) => { e.stopPropagation(); onUnstageAll(); }} className="sc-action-btn" title="Unstage All" disabled={staged.length === 0}>
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
                              </button>
                         </div>

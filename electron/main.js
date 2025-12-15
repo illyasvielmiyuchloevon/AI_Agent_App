@@ -106,6 +106,8 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('git:getRemotes', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     const remotes = await git.getRemotes(true);
     return { success: true, remotes: JSON.parse(JSON.stringify(remotes)) };
   }));
@@ -121,10 +123,38 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('git:unstage', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    let hasHead = true;
+    try {
+      await git.raw(['rev-parse', '--verify', 'HEAD']);
+    } catch (err) {
+      hasHead = false;
+    }
+    if (hasHead) {
+      if (files === '.') {
+        await git.reset(['HEAD']);
+      } else {
+        await git.reset(['HEAD', ...files]);
+      }
+      return { success: true };
+    }
+    const status = await git.status();
+    const stagedFiles = status.files
+      .filter(f => ['A', 'M', 'D', 'R'].includes(f.index))
+      .map(f => f.path);
+    if (stagedFiles.length === 0) {
+      return { success: true };
+    }
     if (files === '.') {
-      await git.reset(['HEAD']); // Unstage all
+      for (const p of stagedFiles) {
+        await git.raw(['rm', '--cached', '--', p]);
+      }
     } else {
-      await git.reset(['HEAD', ...files]);
+      const target = new Set(files || []);
+      for (const p of stagedFiles) {
+        if (target.has(p)) {
+          await git.raw(['rm', '--cached', '--', p]);
+        }
+      }
     }
     return { success: true };
   }));
@@ -168,6 +198,13 @@ app.whenReady().then(() => {
 
   ipcMain.handle('git:log', (e, cwd) => handleGit(cwd, async (git) => {
     try {
+      const isRepo = await git.checkIsRepo();
+      if (!isRepo) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
       const log = await git.log({ maxCount: 50 });
       return { success: true, log: JSON.parse(JSON.stringify(log)) };
     } catch (err) {

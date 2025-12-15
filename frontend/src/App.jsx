@@ -2683,6 +2683,12 @@ function App() {
       setGitLoading(true);
       const status = await GitDriver.status(backendWorkspaceRoot);
       setGitStatus(status);
+      if (!status) {
+          setGitRemotes([]);
+          setGitLog([]);
+          setGitLoading(false);
+          return;
+      }
       const remotes = await GitDriver.getRemotes(backendWorkspaceRoot);
       setGitRemotes(remotes);
       const log = await GitDriver.log(backendWorkspaceRoot);
@@ -2730,6 +2736,8 @@ function App() {
   };
   const handleGitUnstageAll = async () => {
       if (!backendWorkspaceRoot) return;
+      const hasStaged = gitStatus?.files?.some(f => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index));
+      if (!hasStaged) return;
       await GitDriver.unstage(backendWorkspaceRoot, '.');
       refreshGitStatus();
   };
