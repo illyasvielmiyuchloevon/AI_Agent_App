@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const simpleGit = require('simple-git');
 const { registerIpcHandlers } = require('./main/ipcHandlers');
@@ -82,6 +83,19 @@ app.whenReady().then(() => {
       console.error('[Git] Error:', err);
       return { success: false, error: err.message || String(err) };
     }
+  };
+
+  const sanitizeFolderName = (name) => {
+    const raw = String(name || '').trim();
+    if (!raw) return '';
+    return raw.replace(/[\\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim();
+  };
+
+  const inferRepoFolderName = (url) => {
+    const u = String(url || '').trim();
+    if (!u) return 'repo';
+    const last = u.split('/').pop() || u.split(':').pop() || 'repo';
+    return sanitizeFolderName(last.replace(/\.git$/i, '')) || 'repo';
   };
 
   ipcMain.handle('git:status', (e, cwd) => handleGit(cwd, async (git) => {
@@ -258,6 +272,25 @@ app.whenReady().then(() => {
     await git.init();
     return { success: true };
   }));
+
+  ipcMain.handle('git:clone', async (_e, payload) => {
+    try {
+      const parentDir = payload && payload.parentDir ? String(payload.parentDir) : '';
+      const url = payload && payload.url ? String(payload.url) : '';
+      const folderName = sanitizeFolderName(payload && payload.folderName ? String(payload.folderName) : '') || inferRepoFolderName(url);
+      if (!parentDir) throw new Error('Missing destination folder');
+      if (!url) throw new Error('Missing repository URL');
+      const targetPath = path.join(parentDir, folderName);
+      if (fs.existsSync(targetPath)) {
+        throw new Error(`Target folder already exists: ${targetPath}`);
+      }
+      const git = simpleGit(parentDir);
+      await git.clone(url, targetPath, ['--progress']);
+      return { success: true, targetPath };
+    } catch (err) {
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
 
   createWindow();
 

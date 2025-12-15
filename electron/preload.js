@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   workspace: {
     pickFolder: () => ipcRenderer.invoke('workspace:pickFolder'),
+    pickFile: () => ipcRenderer.invoke('workspace:pickFile'),
     open: (payload) => ipcRenderer.invoke('workspace:open', payload),
     close: () => ipcRenderer.invoke('workspace:close'),
   },
@@ -25,6 +26,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     checkout: (cwd, branch) => ipcRenderer.invoke('git:checkout', { cwd, branch }),
     log: (cwd) => ipcRenderer.invoke('git:log', cwd),
     diff: (cwd, file) => ipcRenderer.invoke('git:diff', { cwd, file }),
+    clone: (parentDir, url, folderName) => ipcRenderer.invoke('git:clone', { parentDir, url, folderName }),
     init: (cwd) => ipcRenderer.invoke('git:init', cwd),
     getRemotes: (cwd) => ipcRenderer.invoke('git:getRemotes', cwd),
     addRemote: (cwd, name, url) => ipcRenderer.invoke('git:addRemote', { cwd, name, url }),

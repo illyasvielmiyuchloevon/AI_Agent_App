@@ -7,6 +7,7 @@ export function createWorkspaceController(deps) {
     initialWorkspaceState,
     welcomeTabPath,
     LocalWorkspaceDriver,
+    BackendWorkspaceDriver,
     requestElectronFolderPath,
     hydrateProject,
     refreshRecentProjects,
@@ -31,24 +32,77 @@ export function createWorkspaceController(deps) {
     throw new Error('createWorkspaceController: missing LocalWorkspaceDriver');
   }
 
+  const isAbsolutePath = (path = '') => {
+    const trimmed = String(path || '').trim();
+    if (!trimmed) return false;
+    return /^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\') || trimmed.startsWith('/');
+  };
+
+  const pickElectronFolderPath = async () => {
+    try {
+      const api = globalThis?.window?.electronAPI?.workspace;
+      if (api?.pickFolder) {
+        const res = await api.pickFolder();
+        if (!res?.ok || res?.canceled) return '';
+        return String(res?.fsPath || '').trim();
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      if (requestElectronFolderPath) {
+        return String((await requestElectronFolderPath()) || '').trim();
+      }
+    } catch {
+      // ignore
+    }
+    return '';
+  };
+
   if (typeof setWorkspaceState !== 'function') {
     throw new Error('createWorkspaceController: missing setWorkspaceState');
   }
 
-  const openWorkspace = async (projectId = null) => {
+  const openWorkspace = async (projectId = null, { preferredRoot = '' } = {}) => {
     if (typeof setWorkspaceBindingError === 'function') setWorkspaceBindingError('');
     try {
       workbenchOpenRequested?.();
       workspaceServices?.stop?.().catch?.(() => {});
       if (typeof setWorkspaceBindingStatus === 'function') setWorkspaceBindingStatus('checking');
-      const driver = projectId
-        ? await LocalWorkspaceDriver.fromPersisted(projectId)
-        : await LocalWorkspaceDriver.pickFolder();
+
+      const preferred = String(preferredRoot || '').trim();
+      const explicitFsPath = isAbsolutePath(preferred) ? preferred : (isAbsolutePath(projectId) ? String(projectId) : '');
+
+      let driver = null;
+      if (explicitFsPath && BackendWorkspaceDriver?.fromFsPath) {
+        driver = await BackendWorkspaceDriver.fromFsPath(explicitFsPath);
+      } else if (projectId) {
+        driver = await LocalWorkspaceDriver.fromPersisted(projectId);
+      } else if (BackendWorkspaceDriver?.fromFsPath) {
+        const fsPath = await pickElectronFolderPath();
+        if (!fsPath) {
+          if (typeof setWorkspaceBindingStatus === 'function') setWorkspaceBindingStatus('idle');
+          return;
+        }
+        driver = await BackendWorkspaceDriver.fromFsPath(fsPath);
+      }
+
+      if (!driver && !BackendWorkspaceDriver?.fromFsPath) {
+        driver = await LocalWorkspaceDriver.pickFolder();
+      }
+
       if (!driver) {
         throw new Error('未找到可用的项目文件夹');
       }
-      const electronPath = requestElectronFolderPath ? await requestElectronFolderPath() : '';
-      await hydrateProject?.(driver, electronPath);
+
+      let nextPreferred = preferred;
+      if (!nextPreferred && isAbsolutePath(driver?.pathLabel)) {
+        nextPreferred = String(driver.pathLabel || '').trim();
+      }
+      if (!nextPreferred && requestElectronFolderPath) {
+        nextPreferred = String((await requestElectronFolderPath()) || '').trim();
+      }
+      await hydrateProject?.(driver, nextPreferred);
     } catch (err) {
       if (typeof setWorkspaceBindingStatus === 'function') setWorkspaceBindingStatus('error');
       if (typeof setWorkspaceBindingError === 'function') setWorkspaceBindingError(err?.message || '选择文件夹失败');

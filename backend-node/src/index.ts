@@ -287,6 +287,19 @@ app.post('/sessions/:id/chat', async (req, res) => {
 
 // --- Workspace Endpoints ---
 
+function resolveWorkspacePath(root: string, relativePath: string): { fullPath: string, rootPath: string } {
+    const rootPath = path.resolve(String(root || '')).replace(/[\\\/]+$/, '');
+    const rel = String(relativePath || '');
+    const fullPath = path.resolve(rootPath, rel);
+    const rootLower = rootPath.toLowerCase();
+    const fullLower = fullPath.toLowerCase();
+    const prefix = rootLower.endsWith(path.sep) ? rootLower : `${rootLower}${path.sep}`;
+    if (!(fullLower === rootLower || fullLower.startsWith(prefix))) {
+        throw new Error("Access denied");
+    }
+    return { fullPath, rootPath };
+}
+
 app.post('/workspace/bind-root', async (req, res) => {
     console.log(`[Workspace] Binding root: ${req.body.root}`);
     try {
@@ -330,9 +343,8 @@ app.get('/workspace/read', async (req, res) => {
         const root = getWorkspaceRoot();
         const relativePath = req.query.path as string;
         if (!relativePath) throw new Error("Path is required");
-        
-        const fullPath = path.resolve(root, relativePath);
-        if (!fullPath.startsWith(root)) throw new Error("Access denied");
+
+        const { fullPath } = resolveWorkspacePath(root, relativePath);
         
         const content = await fs.readFile(fullPath, 'utf-8');
         res.json({ path: relativePath, content, truncated: false });
@@ -347,8 +359,7 @@ app.post('/workspace/write', async (req, res) => {
         const { path: relativePath, content, create_directories } = req.body;
         if (!relativePath) throw new Error("Path is required");
 
-        const fullPath = path.resolve(root, relativePath);
-        if (!fullPath.startsWith(root)) throw new Error("Access denied");
+        const { fullPath } = resolveWorkspacePath(root, relativePath);
 
         const beforeSnapshot = await takeSnapshot(relativePath);
 
@@ -373,6 +384,59 @@ app.post('/workspace/write', async (req, res) => {
         res.json({ path: relativePath, bytes: (content || "").length });
     } catch (e: any) {
          res.status(400).json({ detail: e.message });
+    }
+});
+
+app.post('/workspace/mkdir', async (req, res) => {
+    try {
+        const root = getWorkspaceRoot();
+        const rel = req.body?.path;
+        if (!rel) throw new Error("Path is required");
+        const { fullPath } = resolveWorkspacePath(root, rel);
+        await fs.mkdir(fullPath, { recursive: req.body?.recursive !== false });
+        res.json({ status: "ok", path: rel });
+    } catch (e: any) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+
+app.post('/workspace/delete', async (req, res) => {
+    try {
+        const root = getWorkspaceRoot();
+        const rel = req.body?.path;
+        if (!rel) throw new Error("Path is required");
+        const { fullPath } = resolveWorkspacePath(root, rel);
+        let stats: any = null;
+        try {
+            stats = await fs.stat(fullPath);
+        } catch {
+            res.json({ status: "ok", path: rel, existed: false });
+            return;
+        }
+        if (stats.isDirectory()) {
+            await fs.rm(fullPath, { recursive: req.body?.recursive !== false, force: true });
+        } else {
+            await fs.unlink(fullPath);
+        }
+        res.json({ status: "ok", path: rel, existed: true });
+    } catch (e: any) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+
+app.post('/workspace/rename', async (req, res) => {
+    try {
+        const root = getWorkspaceRoot();
+        const from = req.body?.from;
+        const to = req.body?.to;
+        if (!from || !to) throw new Error("From/To are required");
+        const { fullPath: fromPath } = resolveWorkspacePath(root, from);
+        const { fullPath: toPath } = resolveWorkspacePath(root, to);
+        await fs.mkdir(path.dirname(toPath), { recursive: true });
+        await fs.rename(fromPath, toPath);
+        res.json({ status: "ok", from, to });
+    } catch (e: any) {
+        res.status(400).json({ detail: e.message });
     }
 });
 

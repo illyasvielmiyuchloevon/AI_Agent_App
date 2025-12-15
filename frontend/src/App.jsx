@@ -9,6 +9,7 @@ import TitleBar from './components/TitleBar';
 import EditorArea from './workbench/layout/EditorArea';
 import WorkbenchShell from './workbench/WorkbenchShell';
 import { LocalWorkspaceDriver } from './utils/localWorkspaceDriver';
+import { BackendWorkspaceDriver } from './utils/backendWorkspaceDriver';
 import DiffModal from './components/DiffModal';
 import { GitDriver } from './utils/gitDriver';
 import SourceControlPanel from './components/SourceControlPanel';
@@ -24,6 +25,46 @@ const THEME_STORAGE_KEY = 'ai_agent_theme_choice';
 const detectSystemTheme = () => {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
+const pathDirname = (absPath = '') => {
+  const s = String(absPath || '');
+  const idx1 = s.lastIndexOf('/');
+  const idx2 = s.lastIndexOf('\\');
+  const idx = Math.max(idx1, idx2);
+  if (idx < 0) return '';
+  return s.slice(0, idx);
+};
+
+const pathJoinAbs = (baseAbs = '', rel = '') => {
+  const base = String(baseAbs || '').replace(/[\\\/]+$/, '');
+  const suffix = String(rel || '').replace(/^[\\\/]+/, '');
+  if (!base) return suffix;
+  if (!suffix) return base;
+  const sep = base.includes('\\') ? '\\' : '/';
+  const normalized = suffix.replace(/[\\\/]+/g, sep);
+  return `${base}${sep}${normalized}`;
+};
+
+const pathRelativeToRoot = (rootAbs = '', fileAbs = '') => {
+  const root = String(rootAbs || '').replace(/[\\\/]+$/, '');
+  const file = String(fileAbs || '');
+  if (!root || !file) return '';
+  const lowerRoot = root.toLowerCase();
+  const lowerFile = file.toLowerCase();
+  if (!lowerFile.startsWith(lowerRoot)) return '';
+  let rel = file.slice(root.length);
+  rel = rel.replace(/^[\\\/]+/, '');
+  rel = rel.replace(/\\/g, '/');
+  if (!rel || rel.includes('..')) return '';
+  return rel;
+};
+
+const isFileUnderRoot = (rootAbs = '', fileAbs = '') => {
+  const root = String(rootAbs || '').replace(/[\\\/]+$/, '');
+  const file = String(fileAbs || '');
+  if (!root || !file) return false;
+  return file.toLowerCase().startsWith(root.toLowerCase());
 };
 const readStoredTheme = () => {
   if (typeof window === 'undefined') return null;
@@ -337,6 +378,18 @@ function App() {
   });
   const [theme, setTheme] = useState(() => storedThemePreference || DEFAULT_PROJECT_CONFIG.theme || detectSystemTheme());
   const abortControllerRef = useRef(null);
+  const pendingOpenFileRef = useRef({ absPath: '', expectedRoot: '' });
+  const clearPendingOpenFile = useCallback(() => {
+      pendingOpenFileRef.current = { absPath: '', expectedRoot: '' };
+  }, []);
+  const pendingStartActionRef = useRef({ type: null });
+  const clearPendingStartAction = useCallback(() => {
+      pendingStartActionRef.current = { type: null };
+  }, []);
+  const pendingTemplateRef = useRef(null);
+  const clearPendingTemplate = useCallback(() => {
+      pendingTemplateRef.current = null;
+  }, []);
   const saveTimersRef = useRef({});
   const configSaveTimerRef = useRef(null);
   const streamBufferRef = useRef('');
@@ -390,7 +443,8 @@ function App() {
 
   const projectReady = !!workspaceDriver;
   const backendBound = !!backendWorkspaceRoot && workspaceBindingStatus === 'ready';
-  const hasElectronPicker = () => typeof window !== 'undefined' && !!window.electronAPI?.openFolder;
+  const hasElectronPicker = () =>
+      typeof window !== 'undefined' && (!!window.electronAPI?.workspace?.pickFolder || !!window.electronAPI?.openFolder);
   const projectHeaders = useMemo(
       () => (backendWorkspaceRoot ? { 'X-Workspace-Root': backendWorkspaceRoot } : {}),
       [backendWorkspaceRoot]
@@ -647,11 +701,20 @@ function App() {
               })(),
           ]);
 
-          const electronById = new Map((electronRecent || []).map((e) => [e.id, e]));
-          const merged = (list || []).map((proj) => {
-              const extra = electronById.get(proj.id) || null;
-              return extra ? { ...proj, ...extra } : proj;
+          const mergedById = new Map();
+
+          (electronRecent || []).forEach((entry) => {
+              if (!entry?.id) return;
+              mergedById.set(entry.id, { ...entry });
           });
+
+          (list || []).forEach((proj) => {
+              if (!proj?.id) return;
+              const existing = mergedById.get(proj.id);
+              mergedById.set(proj.id, existing ? { ...proj, ...existing } : { ...proj });
+          });
+
+          const merged = Array.from(mergedById.values()).sort((a, b) => (b?.lastOpened || 0) - (a?.lastOpened || 0));
           setRecentProjects(merged);
       } catch {
           setRecentProjects([]);
@@ -1348,7 +1411,12 @@ function App() {
 
   const requestElectronFolderPath = useCallback(async () => {
       try {
-          if (hasElectronPicker()) {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+          if (api?.pickFolder) {
+              const res = await api.pickFolder();
+              if (res?.ok && !res?.canceled && res?.fsPath) return String(res.fsPath).trim();
+          }
+          if (hasElectronPicker() && window.electronAPI?.openFolder) {
               const result = await window.electronAPI.openFolder();
               if (result && typeof result === 'string') return result.trim();
           }
@@ -1366,6 +1434,7 @@ function App() {
       initialWorkspaceState,
       welcomeTabPath: WELCOME_TAB_PATH,
       LocalWorkspaceDriver,
+      BackendWorkspaceDriver,
       requestElectronFolderPath,
       hydrateProject,
       refreshRecentProjects,
@@ -1412,6 +1481,62 @@ function App() {
   const handleSelectWorkspace = useCallback(async (projectId = null) => {
       await workspaceController.openWorkspace(projectId);
   }, [workspaceController]);
+
+  const handleOpenFileFromWelcome = useCallback(async () => {
+      try {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+          if (!api?.pickFile) {
+              throw new Error('Open File is not available in this build');
+          }
+          const res = await api.pickFile();
+          if (!res?.ok || res?.canceled) return;
+          const absPath = String(res?.fsPath || '').trim();
+          if (!absPath) return;
+
+          const expectedRoot = pathDirname(absPath);
+          pendingOpenFileRef.current = { absPath, expectedRoot };
+
+          const match = (recentProjects || []).find((p) => p?.id && p?.fsPath && isFileUnderRoot(p.fsPath, absPath));
+          if (match?.id) {
+              await workspaceController.openWorkspace(match.id, { preferredRoot: match.fsPath });
+              return;
+          }
+
+          await workspaceController.openWorkspace(null, { preferredRoot: expectedRoot });
+      } catch (err) {
+          console.warn('Open File failed', err);
+          setWorkspaceBindingError(err?.message || 'Open file failed');
+          setWorkspaceBindingStatus('error');
+      }
+  }, [recentProjects, workspaceController]);
+
+  const pickNativeFolderPath = useCallback(async () => {
+      const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+      if (!api?.pickFolder) {
+          throw new Error('Pick Folder is not available in this build');
+      }
+      const res = await api.pickFolder();
+      if (!res?.ok || res?.canceled) return '';
+      return String(res?.fsPath || '').trim();
+  }, []);
+
+  const cloneRepositoryFromWelcome = useCallback(async ({ url, parentDir, folderName } = {}) => {
+      if (!GitDriver.isAvailable() || typeof GitDriver.clone !== 'function') {
+          throw new Error('Clone is not available. Please restart the application.');
+      }
+      const res = await GitDriver.clone(parentDir, url, folderName);
+      if (!res?.success) {
+          throw new Error(res?.error || 'Clone failed');
+      }
+      return { targetPath: res.targetPath };
+  }, []);
+
+  const openWorkspaceWithPreferredRoot = useCallback(async (preferredRoot) => {
+      const root = String(preferredRoot || '').trim();
+      if (!root) return;
+      clearPendingOpenFile();
+      await workspaceController.openWorkspace(null, { preferredRoot: root });
+  }, [clearPendingOpenFile, workspaceController]);
 
   const promptBindBackendRoot = useCallback(() => {
       const suggestion = backendWorkspaceRoot || projectConfig.backendRoot || projectConfig.projectPath || '';
@@ -1735,8 +1860,19 @@ function App() {
   }, [syncWorkbenchFromLegacy, workspaceBindingError, workspaceBindingStatus, workspaceDriver]);
 
   const closeWorkspaceToWelcome = useCallback(async () => {
+      clearPendingOpenFile();
+      clearPendingStartAction();
+      clearPendingTemplate();
       await workspaceController.closeWorkspaceToWelcome({ recentTouchRef });
-  }, [workspaceController]);
+  }, [clearPendingOpenFile, clearPendingStartAction, clearPendingTemplate, workspaceController]);
+
+  useEffect(() => {
+      if (!workspaceDriver && workspaceBindingStatus !== 'checking') {
+          clearPendingOpenFile();
+          clearPendingStartAction();
+          clearPendingTemplate();
+      }
+  }, [clearPendingOpenFile, clearPendingStartAction, clearPendingTemplate, workspaceBindingStatus, workspaceDriver]);
 
   // Default editor on boot: Welcome tab (Editor Area), not a blocking full-screen page.
   useEffect(() => {
@@ -2172,6 +2308,131 @@ function App() {
       loadFileContent(path);
   };
 
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      const pending = pendingOpenFileRef.current;
+      if (!pending?.absPath) return;
+
+      const rootAbs = (backendWorkspaceRoot || workspaceRootLabel || pending.expectedRoot || '').trim();
+      const rel = pathRelativeToRoot(rootAbs, pending.absPath);
+      clearPendingOpenFile();
+      if (!rel) return;
+      openFile(rel);
+  }, [backendWorkspaceRoot, clearPendingOpenFile, workspaceBindingStatus, workspaceDriver, workspaceRootLabel]);
+
+  const sanitizeTemplateFolder = (raw) => {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      if (s.includes('..')) return '';
+      if (s.includes('/') || s.includes('\\')) return '';
+      if (/^[A-Za-z]:/.test(s)) return '';
+      return s.replace(/[:*?"<>|]+/g, '').trim();
+  };
+
+  const getTemplateSpec = (templateId) => {
+      const id = String(templateId || '').trim();
+      if (id === 'web') {
+          return {
+              id: 'web',
+              entry: 'index.html',
+              files: {
+                  'README.md': '# Web Template\n\nGenerated by Start Page Templates.\n',
+                  'index.html': '<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Web Template</title><link rel="stylesheet" href="./style.css"/></head><body><div id="app"></div><script type="module" src="./main.js"></script></body></html>\n',
+                  'style.css': 'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;margin:0;padding:24px;background:#f6f7f9;color:#111827}#app{max-width:720px}\n',
+                  'main.js': "document.querySelector('#app').innerHTML = '<h1>Hello</h1><p>Template created.</p>';\n",
+              },
+          };
+      }
+      if (id === 'react') {
+          return {
+              id: 'react',
+              entry: 'src/App.jsx',
+              files: {
+                  'README.md': '# React Template\n\nGenerated by Start Page Templates.\n',
+                  'index.html': '<!doctype html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>React Template</title></head><body><div id=\"root\"></div><script type=\"module\" src=\"/src/main.jsx\"></script></body></html>\n',
+                  'src/main.jsx': "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App.jsx';\n\nReactDOM.createRoot(document.getElementById('root')).render(<App />);\n",
+                  'src/App.jsx': "import React from 'react';\n\nexport default function App() {\n  return (\n    <div style={{ fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif', padding: 24 }}>\n      <h1>Hello</h1>\n      <p>Template created.</p>\n    </div>\n  );\n}\n",
+              },
+          };
+      }
+      return {
+          id: 'blank',
+          entry: 'README.md',
+          files: {
+              'README.md': '# Blank Template\n\nGenerated by Start Page Templates.\n',
+          },
+      };
+  };
+
+  const createTemplateProjectInWorkspace = useCallback(async ({ templateId, projectName, parentDir } = {}) => {
+      const destParent = String(parentDir || '').trim();
+      if (destParent && isAbsolutePath(destParent) && BackendWorkspaceDriver?.fromFsPath) {
+          const folder = sanitizeTemplateFolder(projectName) || 'my-project';
+          const spec = getTemplateSpec(templateId);
+
+          const parentDriver = await BackendWorkspaceDriver.fromFsPath(destParent);
+          await parentDriver.createFolder(folder);
+
+          const targetRoot = pathJoinAbs(destParent, folder);
+          const targetDriver = await BackendWorkspaceDriver.fromFsPath(targetRoot);
+          for (const [rel, content] of Object.entries(spec.files || {})) {
+              // eslint-disable-next-line no-await-in-loop
+              await targetDriver.writeFile(rel, String(content || ''), { createDirectories: true });
+          }
+
+          clearPendingOpenFile();
+          pendingOpenFileRef.current = { absPath: pathJoinAbs(targetRoot, spec.entry), expectedRoot: targetRoot };
+          await workspaceController.openWorkspace(targetRoot, { preferredRoot: targetRoot });
+          return { queued: true, root: targetRoot };
+      }
+
+      if (!workspaceDriver) {
+          pendingStartActionRef.current = { type: 'template' };
+          pendingTemplateRef.current = { templateId, projectName };
+          await handleSelectWorkspace(null);
+          return { queued: true };
+      }
+      if (workspaceBindingStatus !== 'ready') {
+          pendingStartActionRef.current = { type: 'template' };
+          pendingTemplateRef.current = { templateId, projectName };
+          return { queued: true };
+      }
+
+      const folder = sanitizeTemplateFolder(projectName) || 'my-project';
+      const hasExisting =
+          (workspaceState.files || []).some((f) => f?.path === folder || String(f?.path || '').startsWith(`${folder}/`)) ||
+          (workspaceState.fileTree || []).some((e) => e?.path === folder || String(e?.path || '').startsWith(`${folder}/`));
+      if (hasExisting) {
+          throw new Error(`目标目录已存在：${folder}`);
+      }
+
+      const spec = getTemplateSpec(templateId);
+      await workspaceDriver.createFolder(folder);
+      for (const [rel, content] of Object.entries(spec.files || {})) {
+          // eslint-disable-next-line no-await-in-loop
+          await workspaceDriver.writeFile(`${folder}/${rel}`, String(content || ''), { createDirectories: true });
+      }
+      await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
+      openFile(`${folder}/${spec.entry}`);
+      return { ok: true, folder, entry: `${folder}/${spec.entry}` };
+  }, [clearPendingOpenFile, handleSelectWorkspace, openFile, syncWorkspaceFromDisk, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceState.fileTree, workspaceState.files]);
+
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      if (pendingStartActionRef.current?.type !== 'template') return;
+      const pending = pendingTemplateRef.current;
+      if (!pending) return;
+      clearPendingStartAction();
+      clearPendingTemplate();
+      createTemplateProjectInWorkspace(pending).catch((err) => {
+          console.warn('Create template failed', err);
+          setWorkspaceBindingError(err?.message || 'Create template failed');
+          setWorkspaceBindingStatus('error');
+      });
+  }, [clearPendingStartAction, clearPendingTemplate, createTemplateProjectInWorkspace, workspaceBindingStatus, workspaceDriver]);
+
   const closeFile = (path) => {
       setWorkspaceState((prev) => {
           const nextTabs = prev.openTabs.filter((p) => p !== path);
@@ -2229,6 +2490,25 @@ function App() {
           onClose: () => setInputModal(prev => ({ ...prev, isOpen: false }))
       });
   };
+
+  const handleNewFileFromWelcome = useCallback(async () => {
+      if (workspaceDriver && workspaceBindingStatus === 'ready') {
+          handleAddFile();
+          return;
+      }
+      pendingStartActionRef.current = { type: 'newFile' };
+      await handleSelectWorkspace(null);
+  }, [handleSelectWorkspace, handleAddFile, workspaceBindingStatus, workspaceDriver]);
+
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      const pending = pendingStartActionRef.current;
+      if (!pending?.type) return;
+      if (pending.type !== 'newFile') return;
+      clearPendingStartAction();
+      handleAddFile();
+  }, [clearPendingStartAction, handleAddFile, workspaceBindingStatus, workspaceDriver]);
 
   const handleAddFolder = () => {
       if (!workspaceDriver) {
@@ -3156,8 +3436,14 @@ function App() {
                         bindingError={workspaceBindingError}
                         recentProjects={recentProjects}
                         onOpenFolder={() => handleSelectWorkspace()}
+                        onOpenFile={handleOpenFileFromWelcome}
+                        onNewFile={handleNewFileFromWelcome}
+                        onPickFolderPath={pickNativeFolderPath}
+                        onCloneRepository={cloneRepositoryFromWelcome}
+                        onCreateTemplate={createTemplateProjectInWorkspace}
+                        onOpenFolderWithPreferredRoot={openWorkspaceWithPreferredRoot}
                         onCancelOpen={() => closeWorkspaceToWelcome()}
-                        onOpenRecent={(proj) => handleSelectWorkspace(proj?.id)}
+                        onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
                         onRemoveRecent={(proj) => removeRecentProject(proj)}
                       />
                     )}

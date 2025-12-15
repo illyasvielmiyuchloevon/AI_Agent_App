@@ -1,6 +1,20 @@
 export const GitDriver = {
     isAvailable: () => typeof window !== 'undefined' && !!window.electronAPI?.git,
 
+    async clone(parentDir, url, folderName = '') {
+        if (!this.isAvailable()) return { success: false, error: 'Git is not available' };
+        if (typeof window.electronAPI.git.clone !== 'function') {
+            return { success: false, error: 'Core component updated. Please restart the application to enable Clone.' };
+        }
+        try {
+            const res = await window.electronAPI.git.clone(parentDir, url, folderName);
+            return res || { success: false, error: 'Clone failed' };
+        } catch (e) {
+            console.error('Git clone failed', e);
+            return { success: false, error: e.message || String(e) };
+        }
+    },
+
     async status(cwd) {
         if (!this.isAvailable()) return null;
         try {

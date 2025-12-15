@@ -108,6 +108,12 @@ export default function WelcomeEditor({
   bindingError,
   recentProjects,
   onOpenFolder,
+  onOpenFile,
+  onNewFile,
+  onPickFolderPath,
+  onCloneRepository,
+  onCreateTemplate,
+  onOpenFolderWithPreferredRoot,
   onCancelOpen,
   onOpenRecent,
   onRemoveRecent,
@@ -119,6 +125,17 @@ export default function WelcomeEditor({
   const [selectedRecentIndex, setSelectedRecentIndex] = useState(-1);
   const [statusText, setStatusText] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
+  const [cloneFormOpen, setCloneFormOpen] = useState(false);
+  const [cloneUrl, setCloneUrl] = useState('');
+  const [cloneDest, setCloneDest] = useState('');
+  const [cloneFolderName, setCloneFolderName] = useState('');
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneResult, setCloneResult] = useState('');
+  const [templatesFormOpen, setTemplatesFormOpen] = useState(false);
+  const [templateId, setTemplateId] = useState('blank');
+  const [templateName, setTemplateName] = useState('');
+  const [templateDest, setTemplateDest] = useState('');
+  const [templateBusy, setTemplateBusy] = useState(false);
 
   const filteredRecents = useMemo(() => {
     const list = Array.isArray(recentProjects) ? recentProjects : [];
@@ -149,6 +166,52 @@ export default function WelcomeEditor({
       setStatusText(bindingError);
     }
   }, [bindingError, bindingStatus]);
+
+  useEffect(() => {
+    const onGlobalKeyDown = (e) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(e.target)) return;
+
+      const tag = String(e.target?.tagName || '').toUpperCase();
+      const isFormField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      if (e.key === 'Escape') {
+        if (cloneFormOpen) {
+          e.preventDefault();
+          setCloneFormOpen(false);
+          setCloneResult('');
+          return;
+        }
+        if (templatesFormOpen) {
+          e.preventDefault();
+          setTemplatesFormOpen(false);
+          return;
+        }
+        if (opening && onCancelOpen) {
+          e.preventDefault();
+          onCancelOpen().catch(() => {});
+          return;
+        }
+      }
+
+      if (isFormField) return;
+
+      const key = String(e.key || '').toLowerCase();
+      const mod = !!(e.metaKey || e.ctrlKey);
+      if (!mod) return;
+
+      if (key === 'o') {
+        e.preventDefault();
+        Promise.resolve(onOpenFile?.()).catch((err) => setStatusText(err?.message || 'Open file failed'));
+      } else if (key === 'n') {
+        e.preventDefault();
+        Promise.resolve(onNewFile?.()).catch((err) => setStatusText(err?.message || 'New file failed'));
+      }
+    };
+
+    document.addEventListener('keydown', onGlobalKeyDown);
+    return () => document.removeEventListener('keydown', onGlobalKeyDown);
+  }, [cloneFormOpen, onCancelOpen, onNewFile, onOpenFile, opening, templatesFormOpen]);
 
   const closeContextMenu = () => setContextMenu(null);
 
@@ -239,33 +302,61 @@ export default function WelcomeEditor({
       key: 'open-file',
       icon: 'codicon-go-to-file',
       label: 'Open File…',
-      hint: 'Coming soon',
-      disabled: true,
-      onClick: () => {},
+      hint: 'Ctrl+O / ⌘O',
+      disabled: !onOpenFile,
+      onClick: async () => {
+        try {
+          if (opening && onCancelOpen) {
+            await onCancelOpen();
+          }
+          await onOpenFile?.();
+        } catch (err) {
+          setStatusText(err?.message || 'Open file failed');
+        }
+      },
     },
     {
       key: 'new-file',
       icon: 'codicon-new-file',
       label: 'New File…',
-      hint: 'Coming soon',
-      disabled: true,
-      onClick: () => {},
+      hint: 'Ctrl+N / ⌘N',
+      disabled: !onNewFile,
+      onClick: async () => {
+        try {
+          if (opening && onCancelOpen) {
+            await onCancelOpen();
+          }
+          await onNewFile?.();
+        } catch (err) {
+          setStatusText(err?.message || 'New file failed');
+        }
+      },
     },
     {
       key: 'clone',
       icon: 'codicon-repo-clone',
       label: 'Clone Repository…',
-      hint: 'Coming soon',
-      disabled: true,
-      onClick: () => {},
+      hint: '',
+      disabled: !onCloneRepository,
+      onClick: () => {
+        setCloneFormOpen(true);
+        setCloneResult('');
+        setStatusText('');
+      },
     },
     {
       key: 'templates',
       icon: 'codicon-symbol-folder',
       label: 'Templates',
-      hint: 'Coming soon',
-      disabled: true,
-      onClick: () => {},
+      hint: '',
+      disabled: !onCreateTemplate,
+      onClick: () => {
+        setTemplatesFormOpen(true);
+        setCloneFormOpen(false);
+        setCloneResult('');
+        setTemplateDest('');
+        setStatusText('');
+      },
     },
   ];
 
@@ -273,6 +364,67 @@ export default function WelcomeEditor({
     if (!filterText.trim()) return 'Recent';
     return `Recent (${filteredRecents.length})`;
   }, [filterText, filteredRecents.length]);
+
+  const deriveFolderNameFromUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    const last = raw.split('/').pop() || raw.split(':').pop() || '';
+    return last.replace(/\.git$/i, '') || '';
+  };
+
+  const handleStartClone = async () => {
+    if (!onCloneRepository) return;
+    const url = String(cloneUrl || '').trim();
+    const parentDir = String(cloneDest || '').trim();
+    const folderName = String(cloneFolderName || '').trim() || deriveFolderNameFromUrl(url) || 'repo';
+    if (!url) {
+      setStatusText('Please enter a repository URL');
+      return;
+    }
+    if (!parentDir) {
+      setStatusText('Please choose a destination folder');
+      return;
+    }
+    setCloneBusy(true);
+    setStatusText('Cloning…');
+    try {
+      const res = await onCloneRepository({ url, parentDir, folderName });
+      const targetPath = String(res?.targetPath || res || '').trim();
+      if (!targetPath) throw new Error('Clone failed');
+      setCloneResult(targetPath);
+      setStatusText('Clone complete');
+    } catch (err) {
+      setStatusText(err?.message || 'Clone failed');
+      setCloneResult('');
+    } finally {
+      setCloneBusy(false);
+    }
+  };
+
+  const handleCreateTemplate = async () => {
+    if (!onCreateTemplate) return;
+    const name = String(templateName || '').trim();
+    if (!name) {
+      setStatusText('Please enter a project name');
+      return;
+    }
+    setTemplateBusy(true);
+    setStatusText('Creating…');
+    try {
+      const parentDir = String(templateDest || '').trim();
+      const res = await onCreateTemplate({ templateId, projectName: name, parentDir });
+      if (res?.queued) {
+        setStatusText('Opening folder…');
+      } else {
+        setStatusText('Created');
+        setTemplatesFormOpen(false);
+      }
+    } catch (err) {
+      setStatusText(err?.message || 'Create template failed');
+    } finally {
+      setTemplateBusy(false);
+    }
+  };
 
   return (
     <div className={styles.root} ref={rootRef}>
@@ -339,6 +491,221 @@ export default function WelcomeEditor({
                   </div>
                 ))}
               </div>
+
+              {cloneFormOpen ? (
+                <div
+                  className={styles.inlineForm}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setCloneFormOpen(false);
+                      setCloneBusy(false);
+                      setCloneResult('');
+                      return;
+                    }
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      handleStartClone();
+                    }
+                  }}
+                >
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Repository URL</div>
+                    <input
+                      className={styles.filterInput}
+                      value={cloneUrl}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setCloneUrl(next);
+                        if (!cloneFolderName) {
+                          const inferred = deriveFolderNameFromUrl(next);
+                          if (inferred) setCloneFolderName(inferred);
+                        }
+                      }}
+                      placeholder="https://github.com/user/repo.git"
+                      disabled={cloneBusy}
+                    />
+                  </div>
+
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Destination</div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={cloneBusy || !onPickFolderPath}
+                        onClick={async () => {
+                          try {
+                            const picked = await onPickFolderPath?.();
+                            if (picked) setCloneDest(String(picked));
+                          } catch (err) {
+                            setStatusText(err?.message || 'Pick folder failed');
+                          }
+                        }}
+                      >
+                        <i className="codicon codicon-folder-opened" aria-hidden />
+                        <span>Choose Folder…</span>
+                      </button>
+                      <div className={styles.pathBox} title={cloneDest || ''}>
+                        {cloneDest ? cloneDest : 'No folder selected'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Folder Name</div>
+                    <input
+                      className={styles.filterInput}
+                      value={cloneFolderName}
+                      onChange={(e) => setCloneFolderName(e.target.value)}
+                      placeholder="repo"
+                      disabled={cloneBusy}
+                    />
+                  </div>
+
+                  {cloneResult ? (
+                    <div className={styles.formRow}>
+                      <div className={styles.formLabel}>Result</div>
+                      <div className={styles.pathBox} title={cloneResult}>
+                        {cloneResult}
+                      </div>
+                      <div className={styles.formActions} style={{ justifyContent: 'flex-start' }}>
+                        <button
+                          type="button"
+                          className={styles.primaryButton}
+                          disabled={!onOpenFolderWithPreferredRoot || opening}
+                          onClick={async () => {
+                            try {
+                              await onOpenFolderWithPreferredRoot?.(cloneResult);
+                            } catch (err) {
+                              setStatusText(err?.message || 'Open folder failed');
+                            }
+                          }}
+                        >
+                          <i className="codicon codicon-folder-opened" aria-hidden />
+                          <span>Open Cloned Folder…</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className={styles.formActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={cloneBusy}
+                      onClick={() => {
+                        setCloneFormOpen(false);
+                        setCloneResult('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={cloneBusy}
+                      onClick={handleStartClone}
+                      title="Ctrl/Cmd+Enter"
+                    >
+                      <i className={`codicon ${cloneBusy ? 'codicon-loading' : 'codicon-cloud-download'}`} aria-hidden />
+                      <span>{cloneBusy ? 'Cloning…' : 'Clone'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {templatesFormOpen ? (
+                <div
+                  className={styles.inlineForm}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setTemplatesFormOpen(false);
+                      return;
+                    }
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      handleCreateTemplate();
+                    }
+                  }}
+                >
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Template</div>
+                    <select
+                      className={styles.filterInput}
+                      value={templateId}
+                      onChange={(e) => setTemplateId(e.target.value)}
+                      disabled={templateBusy}
+                    >
+                      <option value="blank">Blank</option>
+                      <option value="web">Web (index.html)</option>
+                      <option value="react">React (src/App.jsx)</option>
+                    </select>
+                  </div>
+
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Location</div>
+                    <div className={styles.formInline}>
+                      <input
+                        className={styles.filterInput}
+                        value={templateDest}
+                        onChange={(e) => setTemplateDest(e.target.value)}
+                        placeholder="Choose a destination folder (optional)"
+                        disabled={templateBusy}
+                      />
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={templateBusy || !onPickFolderPath}
+                        onClick={async () => {
+                          try {
+                            const picked = await onPickFolderPath?.();
+                            if (picked) setTemplateDest(String(picked || '').trim());
+                          } catch (err) {
+                            setStatusText(err?.message || 'Pick folder failed');
+                          }
+                        }}
+                      >
+                        Browse…
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={styles.formRow}>
+                    <div className={styles.formLabel}>Project Name (folder)</div>
+                    <input
+                      className={styles.filterInput}
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      placeholder="my-project"
+                      disabled={templateBusy}
+                    />
+                  </div>
+
+                  <div className={styles.formActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={templateBusy}
+                      onClick={() => setTemplatesFormOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      disabled={templateBusy}
+                      onClick={handleCreateTemplate}
+                      title="Ctrl/Cmd+Enter"
+                    >
+                      <i className={`codicon ${templateBusy ? 'codicon-loading' : 'codicon-new-folder'}`} aria-hidden />
+                      <span>{templateBusy ? 'Creating…' : 'Create'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className={styles.statusBar}>
                 <span>
                   Tips: <span className={styles.kbd}>↑</span>/<span className={styles.kbd}>↓</span> select recent,{' '}

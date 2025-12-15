@@ -24,6 +24,16 @@ function registerIpcHandlers() {
     return { ok: true, canceled: false, fsPath: res.filePaths[0] };
   });
 
+  ipcMain.handle('workspace:pickFile', async () => {
+    const res = await dialog.showOpenDialog({
+      properties: ['openFile'],
+    });
+    if (res.canceled || !res.filePaths.length) {
+      return { ok: true, canceled: true, fsPath: '' };
+    }
+    return { ok: true, canceled: false, fsPath: res.filePaths[0] };
+  });
+
   ipcMain.handle('workspace:open', async (_event, payload) => {
     const id = payload && payload.id ? String(payload.id) : '';
     if (!id) return { ok: false, error: 'workspace:open missing id' };
