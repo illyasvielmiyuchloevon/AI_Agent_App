@@ -2632,3 +2632,226 @@ input:focus, select:focus, textarea:focus {
   filter: brightness(1.08);
   transform: translateY(-1px);
 }
+
+.sc-section-body {
+  padding-bottom: 8px;
+}
+
+.sc-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px 4px;
+}
+
+.sc-commit-input-shell {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  height: 28px;
+}
+
+.sc-commit-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sc-commit-status-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.sc-commit-status-btn:hover {
+  background: var(--surface-hover);
+}
+
+.sc-commit-buttons {
+  display: flex;
+  align-items: center;
+}
+
+.sc-commit-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: 6px 0 0 6px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  gap: 6px;
+}
+
+.sc-commit-primary:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.sc-commit-kbd {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.sc-commit-dropdown {
+  width: 24px;
+  height: 28px;
+  border-radius: 0 6px 6px 0;
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.sc-commit-primary:not(:disabled):hover,
+.sc-commit-dropdown:hover {
+  filter: brightness(1.08);
+}
+
+.sc-changes-header-row {
+  padding: 4px 16px 4px;
+}
+
+.sc-bulk-actions-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 16px 0;
+  font-size: 11px;
+}
+
+.sc-bulk-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-sub);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sc-bulk-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sc-bulk-btn:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.sc-repo-section {
+  padding: 6px 16px 10px;
+}
+
+.sc-repo-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.sc-repo-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sc-repo-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sc-repo-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sc-repo-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--accent);
+  border: 1px solid var(--pill-border);
+}
+
+.sc-repo-sync {
+  color: var(--accent-2);
+}
+
+.sc-repo-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sc-repo-mode {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--accent);
+}
+
+.sc-file-type {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--panel-sub);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--muted);
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.sc-status-pill {
+  min-width: 20px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+}
+
+.sc-file-item.selected {
+  background: var(--sidebar-active);
+}

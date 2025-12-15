@@ -98,107 +98,137 @@ app.whenReady().then(() => {
     return sanitizeFolderName(last.replace(/\.git$/i, '')) || 'repo';
   };
 
-  ipcMain.handle('git:status', (e, cwd) => handleGit(cwd, async (git) => {
+  const ensureRepo = async (git) => {
     const isRepo = await git.checkIsRepo();
+    if (!isRepo) {
+      return false;
+    }
+    return true;
+  };
+
+  ipcMain.handle('git:status', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };
     const status = await git.status();
     return { success: true, status: JSON.parse(JSON.stringify(status)) };
   }));
 
   ipcMain.handle('git:getRemotes', (e, cwd) => handleGit(cwd, async (git) => {
-    const isRepo = await git.checkIsRepo();
+    const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };
     const remotes = await git.getRemotes(true);
     return { success: true, remotes: JSON.parse(JSON.stringify(remotes)) };
   }));
 
   ipcMain.handle('git:addRemote', (e, { cwd, name, url }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.addRemote(name, url);
     return { success: true };
   }));
 
   ipcMain.handle('git:stage', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.add(files);
     return { success: true };
   }));
 
   ipcMain.handle('git:unstage', (e, { cwd, files }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+
+    const status = await git.status();
+    const stagedFiles = status.files
+      .filter(f => ['A', 'M', 'D', 'R'].includes(f.index))
+      .map(f => f.path);
+
+    if (stagedFiles.length === 0) {
+      return { success: true };
+    }
+
     let hasHead = true;
     try {
       await git.raw(['rev-parse', '--verify', 'HEAD']);
     } catch (err) {
       hasHead = false;
     }
-    if (hasHead) {
-      if (files === '.') {
+
+    const isAll = files === '.' || files === undefined || files === null;
+    const targetList = isAll ? stagedFiles : stagedFiles.filter(p => new Set(Array.isArray(files) ? files : [files]).has(p));
+
+    if (targetList.length === 0) {
+      return { success: true };
+    }
+
+    if (files === '.') {
+      if (hasHead) {
         await git.reset(['HEAD']);
       } else {
-        await git.reset(['HEAD', ...files]);
-      }
-      return { success: true };
-    }
-    const status = await git.status();
-    const stagedFiles = status.files
-      .filter(f => ['A', 'M', 'D', 'R'].includes(f.index))
-      .map(f => f.path);
-    if (stagedFiles.length === 0) {
-      return { success: true };
-    }
-    if (files === '.') {
-      for (const p of stagedFiles) {
-        await git.raw(['rm', '--cached', '--', p]);
+        await git.raw(['restore', '--staged', '--', '.']);
       }
     } else {
-      const target = new Set(files || []);
-      for (const p of stagedFiles) {
-        if (target.has(p)) {
-          await git.raw(['rm', '--cached', '--', p]);
-        }
+      if (hasHead) {
+        await git.reset(['HEAD', '--', ...targetList]);
+      } else {
+        await git.raw(['restore', '--staged', '--', ...targetList]);
       }
     }
     return { success: true };
   }));
 
   ipcMain.handle('git:restore', (e, { cwd, files }) => handleGit(cwd, async (git) => {
-    // Discard changes in working directory
-    // git checkout -- path/to/file
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.checkout(files);
     return { success: true };
   }));
 
   ipcMain.handle('git:commit', (e, { cwd, message }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     const summary = await git.commit(message);
     return { success: true, summary: JSON.parse(JSON.stringify(summary)) };
   }));
 
   ipcMain.handle('git:push', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.push();
     return { success: true };
   }));
 
   ipcMain.handle('git:pull', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.pull();
     return { success: true };
   }));
 
   ipcMain.handle('git:fetch', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.fetch();
     return { success: true };
   }));
 
   ipcMain.handle('git:branch', (e, cwd) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     const branches = await git.branchLocal();
     return { success: true, branches: JSON.parse(JSON.stringify(branches)) };
   }));
 
   ipcMain.handle('git:checkout', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     await git.checkout(branch);
     return { success: true };
   }));
 
   ipcMain.handle('git:log', (e, cwd) => handleGit(cwd, async (git) => {
     try {
-      const isRepo = await git.checkIsRepo();
+      const isRepo = await ensureRepo(git);
       if (!isRepo) {
         return {
           success: true,
@@ -220,14 +250,15 @@ app.whenReady().then(() => {
   }));
   
   ipcMain.handle('git:diff', (e, { cwd, file }) => handleGit(cwd, async (git) => {
-     // If file is provided, get diff for that file. If not, get all.
-     // We want staged and unstaged changes usually.
+     const isRepo = await ensureRepo(git);
+     if (!isRepo) return { success: false, error: 'Not a git repository' };
      const diff = await git.diff(file ? [file] : []);
      return { success: true, diff: JSON.parse(JSON.stringify(diff)) };
   }));
 
   ipcMain.handle('git:getCommitDetails', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
-    // git show --name-status --pretty=format:"" <hash>
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     const raw = await git.raw(['show', '--name-status', '--pretty=format:', hash]);
     const lines = raw.trim().split('\n').filter(Boolean);
     const files = lines.map(line => {
@@ -238,8 +269,8 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('git:getCommitStats', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
-    // git show --shortstat --format="" <hash>
-    // Output: " 3 files changed, 15 insertions(+), 5 deletions(-)"
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
     const raw = await git.raw(['show', '--shortstat', '--format=', hash]);
     const trimmed = raw.trim();
     if (!trimmed) return { success: true, stats: { files: 0, insertions: 0, deletions: 0 } };
@@ -259,7 +290,8 @@ app.whenReady().then(() => {
   }));
 
   ipcMain.handle('git:getCommitFileDiffs', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
-      // 1. Get file list
+      const isRepo = await ensureRepo(git);
+      if (!isRepo) return { success: false, error: 'Not a git repository' };
       const raw = await git.raw(['show', '--name-status', '--pretty=format:', hash]);
       const lines = raw.trim().split('\n').filter(Boolean);
       const files = lines.map(line => {
@@ -298,6 +330,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('git:getFileContent', (e, { cwd, hash, path }) => handleGit(cwd, async (git) => {
       try {
+        const isRepo = await ensureRepo(git);
+        if (!isRepo) return { success: false, error: 'Not a git repository' };
         const content = await git.show([`${hash}:${path}`]);
         return { success: true, content };
       } catch (err) {

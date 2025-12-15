@@ -3325,6 +3325,7 @@ function App() {
                     onOpenAllDiffs={handleOpenAllCommitDiffs}
                     onOpenBatchDiffs={handleOpenBatchDiffs}
                     loading={gitLoading}
+                    repositoryLabel={workspaceRootLabel}
                 />
             )}
           </div>

@@ -25,16 +25,18 @@ const SourceControlPanel = ({
     onOpenBatchDiffs,
     onDiscard,
     onDiscardAll,
-    loading
+    loading,
+    repositoryLabel
 }) => {
     const [message, setMessage] = useState('');
-    const [expanded, setExpanded] = useState({ staged: true, changes: true, remotes: false, history: true });
+    const [expanded, setExpanded] = useState({ changes: true, repositories: true, graph: true });
     const [expandedCommits, setExpandedCommits] = useState({});
     const [loadingCommits, setLoadingCommits] = useState({});
     const [isAddingRemote, setIsAddingRemote] = useState(false);
     const [newRemoteName, setNewRemoteName] = useState('origin');
     const [newRemoteUrl, setNewRemoteUrl] = useState('');
     const [viewMode, setViewMode] = useState('list'); // 'list' | 'tree'
+    const [selectedFile, setSelectedFile] = useState(null);
 
     // Hover state management
     const [hoveredCommit, setHoveredCommit] = useState(null); // { commit, rect }
@@ -97,14 +99,15 @@ const SourceControlPanel = ({
     if (!gitStatus && !loading) {
         return (
             <div className="sc-panel" style={{ alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-                <p style={{ marginBottom: '15px', textAlign: 'center', fontSize: '13px', color: 'var(--muted)' }}>The current folder is not a git repository.</p>
-                <button className="primary-btn" onClick={onInit}>Initialize Repository</button>
+                <p style={{ marginBottom: '15px', textAlign: 'center', fontSize: '13px', color: 'var(--muted)' }}>当前文件夹不是 Git 仓库。</p>
+                <button className="primary-btn" onClick={onInit}>初始化仓库</button>
             </div>
         );
     }
 
     const staged = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index)) || [];
     const changes = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R', '?'].includes(f.working_dir)) || [];
+    const totalChanges = staged.length + changes.length;
 
     const handleKeyDown = (e) => {
         if (e.ctrlKey && e.key === 'Enter') {
@@ -113,8 +116,9 @@ const SourceControlPanel = ({
     };
 
     const handleCommit = () => {
-        if (!message.trim()) return;
-        onCommit(message);
+        const trimmed = message.trim();
+        if (!trimmed || staged.length === 0) return;
+        onCommit(trimmed);
         setMessage('');
     };
 
@@ -131,96 +135,29 @@ const SourceControlPanel = ({
         if (msg) setMessage(msg);
     };
 
+    const canCommit = !!message.trim() && staged.length > 0;
+
     return (
         <div className="sc-panel">
             <div className="sc-header">
-                <span className="sc-title">Source Control</span>
+                <span className="sc-title">源代码管理</span>
                 <div className="sc-header-actions">
-                     <button className="sc-action-btn" onClick={onPull} title="Pull">
+                     <button className="sc-action-btn" onClick={onPull} title="拉取">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
                      </button>
-                     <button className="sc-action-btn" onClick={onPush} title="Push">
+                     <button className="sc-action-btn" onClick={onPush} title="推送">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
                      </button>
-                     <button className="sc-action-btn" onClick={onRefresh} title="Refresh">
+                     <button className="sc-action-btn" onClick={onRefresh} title="刷新">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                      </button>
+                     <button className="sc-action-btn" title="更多操作">
+                        <span className="codicon codicon-ellipsis" aria-hidden />
+                     </button>
                 </div>
-            </div>
-
-            <div className="sc-input-area">
-                <div className="sc-input-wrapper">
-                    <textarea 
-                        className="sc-input"
-                        placeholder="Message (Ctrl+Enter to commit)"
-                        value={message}
-                        onChange={e => setMessage(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                    />
-                    <button 
-                        className="sc-ai-btn"
-                        onClick={handleAiGenerate}
-                        title="Generate Commit Message with AI"
-                    >
-                        ✨
-                    </button>
-                </div>
-                <button 
-                    className="sc-commit-btn" 
-                    onClick={handleCommit}
-                    disabled={staged.length === 0}
-                >
-                    Commit
-                </button>
             </div>
 
             <div className="sc-lists">
-                {/* Staged Changes */}
-                <div className="sc-section">
-                     <div 
-                        className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, staged: !p.staged }))}
-                     >
-                        <div className="sc-section-icon">{expanded.staged ? '▼' : '▶'}</div>
-                        <div className="sc-section-label">
-                            Staged Changes <span className="sc-count-badge">{staged.length}</span>
-                        </div>
-                        <div className="sc-section-actions">
-                             {staged.length > 0 && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); onOpenBatchDiffs && onOpenBatchDiffs(staged, 'staged'); }} 
-                                    className="sc-action-btn" 
-                                    title="Open All Staged Diffs"
-                                    style={{ marginRight: '4px' }}
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <rect x="4" y="3" width="6" height="18" rx="1" />
-                                        <rect x="14" y="3" width="6" height="18" rx="1" />
-                                    </svg>
-                                </button>
-                             )}
-                             <button onClick={(e) => { e.stopPropagation(); onUnstageAll(); }} className="sc-action-btn" title="Unstage All" disabled={staged.length === 0}>
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                             </button>
-                        </div>
-                     </div>
-                     {expanded.staged && (
-                        <div className="sc-file-list">
-                            {staged.map(file => (
-                                <FileItem 
-                                    key={file.path} 
-                                    file={file} 
-                                    onAction={() => onUnstage([file.path])} 
-                                    actionIcon="-" 
-                                    onOpen={() => onOpenFile(file.path)}
-                                    onDiff={() => onDiff(file.path, true)}
-                                />
-                            ))}
-                        </div>
-                     )}
-                </div>
-
-                {/* Changes */}
                 <div className="sc-section">
                      <div 
                         className="sc-section-header" 
@@ -228,71 +165,187 @@ const SourceControlPanel = ({
                      >
                         <div className="sc-section-icon">{expanded.changes ? '▼' : '▶'}</div>
                         <div className="sc-section-label">
-                            Changes <span className="sc-count-badge">{changes.length}</span>
+                            更改 <span className="sc-count-badge">{totalChanges}</span>
                         </div>
                         <div className="sc-section-actions">
-                             {changes.length > 0 && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); onDiscardAll && onDiscardAll(); }} 
-                                    className="sc-action-btn" 
-                                    title="Discard All Changes"
-                                    style={{ marginRight: '4px' }}
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
-                                </button>
-                             )}
-                             {changes.length > 0 && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); onOpenBatchDiffs && onOpenBatchDiffs(changes, 'unstaged'); }} 
-                                    className="sc-action-btn" 
-                                    title="Open All Changes Diffs"
-                                    style={{ marginRight: '4px' }}
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <rect x="4" y="3" width="6" height="18" rx="1" />
-                                        <rect x="14" y="3" width="6" height="18" rx="1" />
-                                    </svg>
-                                </button>
-                             )}
-                             <button onClick={(e) => { e.stopPropagation(); onStageAll(); }} className="sc-action-btn" title="Stage All">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                             </button>
+                            <button 
+                                className="sc-action-btn" 
+                                onClick={(e) => { e.stopPropagation(); onRefresh(); }} 
+                                title="刷新更改"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                            </button>
                         </div>
                      </div>
                      {expanded.changes && (
-                        <div className="sc-file-list">
-                            {changes.map(file => (
-                                <FileItem 
-                                    key={file.path} 
-                                    file={file} 
-                                    onAction={() => onStage([file.path])} 
-                                    actionIcon="+" 
-                                    onDiscard={() => onDiscard && onDiscard([file.path])}
-                                    onOpen={() => onOpenFile(file.path)}
-                                    onDiff={() => onDiff(file.path, false)}
-                                />
-                            ))}
+                        <div className="sc-section-body">
+                            <div className="sc-commit-row">
+                                <div className="sc-commit-input-shell">
+                                    <input
+                                        className="sc-commit-input"
+                                        placeholder="提交变更内容(Ctrl+Enter 在“GIT集成”提交)"
+                                        value={message}
+                                        onChange={e => setMessage(e.target.value)}
+                                        onKeyDown={handleKeyDown}
+                                    />
+                                    <button 
+                                        className="sc-commit-status-btn"
+                                        onClick={handleAiGenerate}
+                                        title="生成提交说明"
+                                        type="button"
+                                    >
+                                        ✨
+                                    </button>
+                                </div>
+                                <div className="sc-commit-buttons">
+                                    <button 
+                                        className="sc-commit-primary" 
+                                        onClick={handleCommit}
+                                        disabled={!canCommit}
+                                        type="button"
+                                    >
+                                        提交
+                                        <span className="sc-commit-kbd">Ctrl+Enter</span>
+                                    </button>
+                                    <button 
+                                        className="sc-commit-dropdown" 
+                                        type="button"
+                                        title="更多提交选项"
+                                    >
+                                        ▾
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="sc-changes-header-row">
+                                <div className="sc-section-label">
+                                    更改
+                                    <span className="sc-count-badge">{totalChanges}</span>
+                                </div>
+                            </div>
+
+                            <div className="sc-file-list">
+                                {staged.map(file => (
+                                    <FileItem 
+                                        key={`staged-${file.path}`} 
+                                        file={file} 
+                                        onAction={() => onUnstage([file.path])} 
+                                        actionIcon="-"
+                                        onOpen={() => onOpenFile(file.path)}
+                                        onDiff={() => onDiff(file.path, true)}
+                                        onDiscard={null}
+                                        selected={selectedFile === file.path}
+                                        onSelect={() => setSelectedFile(file.path)}
+                                    />
+                                ))}
+                                {changes.map(file => (
+                                    <FileItem 
+                                        key={`change-${file.path}`} 
+                                        file={file} 
+                                        onAction={() => onStage([file.path])} 
+                                        actionIcon="+"
+                                        onDiscard={() => onDiscard && onDiscard([file.path])}
+                                        onOpen={() => onOpenFile(file.path)}
+                                        onDiff={() => onDiff(file.path, false)}
+                                        selected={selectedFile === file.path}
+                                        onSelect={() => setSelectedFile(file.path)}
+                                    />
+                                ))}
+                                {totalChanges === 0 && (
+                                    <div style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                        当前没有检测到变更。
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="sc-bulk-actions-bar">
+                                <button 
+                                    className="sc-bulk-btn" 
+                                    type="button"
+                                    onClick={onStageAll}
+                                    disabled={changes.length === 0}
+                                >
+                                    全部暂存
+                                </button>
+                                <button 
+                                    className="sc-bulk-btn" 
+                                    type="button"
+                                    onClick={onUnstageAll}
+                                    disabled={staged.length === 0}
+                                >
+                                    取消全部暂存
+                                </button>
+                                <button 
+                                    className="sc-bulk-btn" 
+                                    type="button"
+                                    onClick={onDiscardAll}
+                                    disabled={totalChanges === 0 || !onDiscardAll}
+                                >
+                                    全部丢弃
+                                </button>
+                            </div>
                         </div>
                      )}
                 </div>
 
-                {/* Remotes */}
                 <div className="sc-section">
                      <div 
                         className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, remotes: !p.remotes }))}
+                        onClick={() => setExpanded(p => ({ ...p, repositories: !p.repositories }))}
                      >
-                        <div className="sc-section-icon">{expanded.remotes ? '▼' : '▶'}</div>
+                        <div className="sc-section-icon">{expanded.repositories ? '▼' : '▶'}</div>
                         <div className="sc-section-label">
-                            Remotes <span className="sc-count-badge">{gitRemotes.length}</span>
+                            存储库 <span className="sc-count-badge">{gitRemotes.length}</span>
                         </div>
                         <div className="sc-section-actions">
-                             <button onClick={(e) => { e.stopPropagation(); setIsAddingRemote(true); }} className="sc-action-btn" title="Add Remote">
+                             <button onClick={(e) => { e.stopPropagation(); setIsAddingRemote(true); }} className="sc-action-btn" title="添加远程仓库">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                              </button>
                         </div>
                      </div>
-                     {expanded.remotes && (
+                     {expanded.repositories && (
+                        <div className="sc-repo-section">
+                            <div className="sc-repo-item">
+                                <div className="sc-repo-main">
+                                    <div className="sc-repo-name">
+                                        {repositoryLabel || '未选择工作区'}
+                                    </div>
+                                    <div className="sc-repo-meta">
+                                        <span>{gitStatus?.current || '无分支'}</span>
+                                        {gitStatus?.tracking && (
+                                            <span className="sc-repo-badge">{gitStatus.tracking}</span>
+                                        )}
+                                        {(gitStatus?.ahead > 0 || gitStatus?.behind > 0) && (
+                                            <span className="sc-repo-sync">
+                                                {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
+                                                {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="sc-repo-actions">
+                                    <span className="sc-repo-mode">GIT 集成</span>
+                                    <button 
+                                        className="sc-item-btn" 
+                                        onClick={(e) => { e.stopPropagation(); onSync && onSync(); }} 
+                                        title="同步"
+                                        type="button"
+                                    >
+                                        ⟳
+                                    </button>
+                                    <button 
+                                        className="sc-item-btn" 
+                                        onClick={(e) => { e.stopPropagation(); }} 
+                                        title="更多"
+                                        type="button"
+                                    >
+                                        <span className="codicon codicon-ellipsis" aria-hidden />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                     )}
+                     {expanded.repositories && (
                         <div className="sc-remote-form">
                             {isAddingRemote && (
                                 <div style={{ marginBottom: '10px' }}>
@@ -309,13 +362,13 @@ const SourceControlPanel = ({
                                         placeholder="URL (https://...)"
                                     />
                                     <div className="sc-form-actions">
-                                        <button className="sc-btn ghost" onClick={() => setIsAddingRemote(false)}>Cancel</button>
-                                        <button className="sc-btn primary" onClick={handleAddRemoteSubmit}>Add Remote</button>
+                                        <button className="sc-btn ghost" onClick={() => setIsAddingRemote(false)}>取消</button>
+                                        <button className="sc-btn primary" onClick={handleAddRemoteSubmit}>添加</button>
                                     </div>
                                 </div>
                             )}
                             {gitRemotes.map(remote => (
-                                <div key={remote.name} className="sc-file-item" style={{ height: 'auto', padding: '6px 0', alignItems: 'flex-start' }}>
+                                <div key={remote.name} className="sc-file-item" style={{ height: 'auto', padding: '6px 16px', alignItems: 'flex-start' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <div style={{ fontWeight: 'bold' }}>{remote.name}</div>
                                         <div style={{ opacity: 0.7, fontSize: '11px' }}>{remote.refs.fetch}</div>
@@ -326,21 +379,20 @@ const SourceControlPanel = ({
                      )}
                 </div>
 
-                {/* History / Commits */}
                 <div className="sc-section">
                      <div 
                         className="sc-section-header" 
-                        onClick={() => setExpanded(p => ({ ...p, history: !p.history }))}
+                        onClick={() => setExpanded(p => ({ ...p, graph: !p.graph }))}
                      >
-                        <div className="sc-section-icon">{expanded.history ? '▼' : '▶'}</div>
+                        <div className="sc-section-icon">{expanded.graph ? '▼' : '▶'}</div>
                         <div className="sc-section-label">
-                            Commits <span className="sc-count-badge">{gitLog.length}</span>
+                            图形 <span className="sc-count-badge">{gitLog.length}</span>
                         </div>
                         <div className="sc-section-actions">
                             <button 
                                 className="sc-action-btn" 
                                 onClick={(e) => { e.stopPropagation(); setViewMode(m => m === 'list' ? 'tree' : 'list'); }}
-                                title={viewMode === 'list' ? "Switch to Tree View" : "Switch to List View"}
+                                title={viewMode === 'list' ? "切换为树形视图" : "切换为列表视图"}
                             >
                                 <span
                                     className={`codicon ${viewMode === 'list' ? 'codicon-list-tree' : 'codicon-list-flat'}`}
@@ -350,7 +402,7 @@ const SourceControlPanel = ({
                             </button>
                         </div>
                      </div>
-                     {expanded.history && (
+                     {expanded.graph && (
                         <div style={{ paddingBottom: '10px' }}>
                             {gitLog.map(commit => (
                                 <CommitItem 
@@ -369,7 +421,7 @@ const SourceControlPanel = ({
                                 />
                             ))}
                             {gitLog.length === 0 && (
-                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>No commits yet.</div>
+                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>暂无提交记录，在上方完成一次提交后即可看到提交图形。</div>
                             )}
                         </div>
                      )}
@@ -392,7 +444,7 @@ const SourceControlPanel = ({
     );
 };
 
-const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard }) => {
+const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard, selected, onSelect }) => {
     const getStatusColor = (code) => {
         if (code === 'M') return 'var(--warning)';
         if (code === 'A' || code === '?') return 'var(--success)';
@@ -404,15 +456,21 @@ const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard }) => 
     const color = getStatusColor(status);
     const fileName = file.path.split('/').pop();
     const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
+    const ext = fileName.includes('.') ? fileName.split('.').pop().toUpperCase().slice(0, 3) : '';
+    const iconLabel = ext || 'FILE';
+    const isDeleted = status === 'D';
 
     return (
         <div 
-            className="sc-file-item" 
-            onClick={onOpen}
+            className={`sc-file-item${selected ? ' selected' : ''}`} 
+            onClick={() => {
+                if (onSelect) onSelect();
+                onOpen();
+            }}
             onContextMenu={(e) => { e.preventDefault(); onDiff(); }}
         >
-            <span className="sc-status-icon" style={{ color }}>{status === '?' ? 'U' : status}</span>
-            <span className="sc-file-name">
+            <span className="sc-file-type">{iconLabel}</span>
+            <span className="sc-file-name" style={{ textDecoration: isDeleted ? 'line-through' : 'none', opacity: isDeleted ? 0.6 : 1 }}>
                 {fileName} <span className="sc-file-path">{dirName}</span>
             </span>
             <div className="sc-file-actions">
@@ -447,6 +505,9 @@ const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard }) => 
                     )}
                  </button>
             </div>
+            <span className="sc-status-pill" style={{ color, borderColor: color }}>
+                {status === '?' ? 'U' : status}
+            </span>
         </div>
     );
 };
