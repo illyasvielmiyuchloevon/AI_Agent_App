@@ -79,6 +79,7 @@ const SourceControlPanel = ({
     const messageRef = useRef(null);
     const listsRef = useRef(null);
     const [syncHint, setSyncHint] = useState(null);
+    const [repoMenu, setRepoMenu] = useState(null);
 
     // Hover state management
     const [hoveredCommit, setHoveredCommit] = useState(null); // { commit, rect }
@@ -154,6 +155,19 @@ const SourceControlPanel = ({
         }
     };
 
+    useEffect(() => {
+        if (!repoMenu) return;
+        const handler = (e) => {
+            if (e.key === 'Escape') {
+                setRepoMenu(null);
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => {
+            window.removeEventListener('keydown', handler);
+        };
+    }, [repoMenu]);
+
     if (!gitStatus && !loading) {
         return (
             <div className="sc-panel" style={{ alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -205,6 +219,7 @@ const SourceControlPanel = ({
             setIsAddingRemote(false);
             setNewRemoteName('origin');
             setNewRemoteUrl('');
+            setSyncHint(null);
             if (onRefresh) {
                 onRefresh();
             }
@@ -287,8 +302,32 @@ const SourceControlPanel = ({
         setDraggingSection(null);
     };
 
-    const handleSyncClick = (e) => {
-        e.stopPropagation();
+    const handleToggleRepositories = () => {
+        setExpanded(prev => {
+            const nextOpen = !prev.repositories;
+            if (!nextOpen) {
+                setSyncHint(null);
+            }
+            return {
+                ...prev,
+                repositories: nextOpen
+            };
+        });
+    };
+
+    const openRepoMenu = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        setRepoMenu({
+            x: rect.left,
+            y: rect.bottom + 4
+        });
+    };
+
+    const closeRepoMenu = () => setRepoMenu(null);
+
+    const runSync = () => {
         if (!onSync) return;
         const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
         const hasUpstream = !!gitStatus?.tracking;
@@ -304,8 +343,12 @@ const SourceControlPanel = ({
         onSync();
     };
 
-    const handlePullClick = (e) => {
+    const handleSyncClick = (e) => {
         e.stopPropagation();
+        runSync();
+    };
+
+    const runPull = () => {
         const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
         const hasUpstream = !!gitStatus?.tracking;
         if (!hasRemote) {
@@ -322,8 +365,12 @@ const SourceControlPanel = ({
         }
     };
 
-    const handlePushClick = (e) => {
+    const handlePullClick = (e) => {
         e.stopPropagation();
+        runPull();
+    };
+
+    const runPush = () => {
         const hasRemote = Array.isArray(gitRemotes) && gitRemotes.length > 0;
         const hasUpstream = !!gitStatus?.tracking;
         if (!hasRemote) {
@@ -339,6 +386,48 @@ const SourceControlPanel = ({
             onPush();
         }
     };
+
+    const handlePushClick = (e) => {
+        e.stopPropagation();
+        runPush();
+    };
+
+    const handleCopyBranchName = async () => {
+        if (!gitStatus?.current) return;
+        if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.writeText) return;
+        try {
+            await navigator.clipboard.writeText(gitStatus.current);
+        } catch {
+        }
+    };
+
+    const handleCopyRemoteUrl = async () => {
+        if (!gitRemotes || gitRemotes.length === 0) return;
+        const origin = gitRemotes.find(r => r.name === 'origin') || gitRemotes[0];
+        const url = origin?.refs?.fetch || origin?.refs?.push;
+        if (!url) return;
+        if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.writeText) return;
+        try {
+            await navigator.clipboard.writeText(url);
+        } catch {
+        }
+    };
+
+    const renderRepoMenuItem = (label, action, { danger = false, disabled = false } = {}) => (
+        <div
+            className={`context-item ${danger ? 'danger' : ''} ${disabled ? 'disabled' : ''}`}
+            style={{ padding: '8px 12px', ...(danger ? { color: 'var(--danger)' } : {}) }}
+            onClick={() => {
+                if (disabled) return;
+                if (action) {
+                    action();
+                }
+                closeRepoMenu();
+            }}
+        >
+            {label}
+        </div>
+    );
 
     const handleToggleGraph = () => {
         setExpanded(prev => ({
@@ -502,7 +591,7 @@ const SourceControlPanel = ({
                 >
                     <div
                         className="sc-section-header"
-                        onClick={() => setExpanded(p => ({ ...p, repositories: !p.repositories }))}
+                        onClick={handleToggleRepositories}
                         draggable
                         onDragStart={handleSectionDragStart('repositories')}
                         onDragEnd={handleSectionDragEnd}
@@ -522,7 +611,7 @@ const SourceControlPanel = ({
                         <>
                             {syncHint === 'noRemote' && (
                                 <div className="sc-remote-error">
-                                    当前仓库未配置远程，请先添加远程或发布仓库后再同步。
+                                    未配置远程仓库，请先添加远程后再同步。
                                 </div>
                             )}
                             {syncHint === 'noUpstream' && gitStatus?.current && (
@@ -583,7 +672,7 @@ const SourceControlPanel = ({
                                         </div>
                                     </div>
                                     <div className="sc-repo-actions">
-                                        <span className="sc-repo-mode">GIT 集成</span>
+                                        <span className="sc-repo-mode">{gitStatus?.current || '无分支'}</span>
                                         <button
                                             className="sc-item-btn"
                                             onClick={handleSyncClick}
@@ -595,7 +684,7 @@ const SourceControlPanel = ({
                                         </button>
                                         <button
                                             className="sc-item-btn"
-                                            onClick={(e) => { e.stopPropagation(); }}
+                                            onClick={openRepoMenu}
                                             title="更多"
                                             type="button"
                                             aria-label="更多"
@@ -642,6 +731,7 @@ const SourceControlPanel = ({
                                             onClick={() => {
                                                 setIsAddingRemote(false);
                                                 setAddRemoteError('');
+                                                setSyncHint(null);
                                             }}
                                         >
                                             取消
@@ -753,7 +843,7 @@ const SourceControlPanel = ({
                      <button className="sc-action-btn" onClick={onRefresh} title="刷新">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                      </button>
-                     <button className="sc-action-btn" title="更多操作">
+                     <button className="sc-action-btn" title="更多操作" onClick={openRepoMenu}>
                         <span className="codicon codicon-ellipsis" aria-hidden />
                      </button>
                 </div>
@@ -764,7 +854,7 @@ const SourceControlPanel = ({
                 ref={listsRef}
                 style={draggingSection ? { overflowY: 'hidden' } : undefined}
             >
-                <div className="sc-commit-block">
+            <div className="sc-commit-block">
                     <div className="sc-commit-row">
                         <div className="sc-commit-input-shell sc-commit-input-shell-multiline">
                             <textarea
@@ -869,6 +959,76 @@ const SourceControlPanel = ({
                     onDrop={handleSectionDragEnd}
                 />
             </div>
+
+            {repoMenu && (
+                <>
+                    <div
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            zIndex: 99998
+                        }}
+                        onClick={closeRepoMenu}
+                    />
+                    <div
+                        className="context-menu"
+                        style={{
+                            position: 'fixed',
+                            top: repoMenu.y,
+                            left: repoMenu.x,
+                            background: 'var(--panel)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius)',
+                            boxShadow: 'var(--shadow-soft)',
+                            zIndex: 99999,
+                            minWidth: 200,
+                            padding: 4
+                        }}
+                    >
+                        {renderRepoMenuItem('同步', runSync, { disabled: !onSync })}
+                        {renderRepoMenuItem('拉取', runPull, { disabled: !onPull })}
+                        {renderRepoMenuItem('推送', runPush, { disabled: !onPush })}
+                        {renderRepoMenuItem('刷新', onRefresh, { disabled: !onRefresh })}
+                        <div style={{ height: 1, margin: '4px 0', background: 'var(--border)' }} />
+                        {renderRepoMenuItem(
+                            '添加远程仓库',
+                            () => {
+                                setAddRemoteError('');
+                                setIsAddingRemote(true);
+                            }
+                        )}
+                        {renderRepoMenuItem(
+                            '发布当前分支',
+                            () => {
+                                if (onPublishBranch && gitStatus?.current) {
+                                    onPublishBranch(gitStatus.current);
+                                }
+                            },
+                            { disabled: !onPublishBranch || !gitStatus?.current }
+                        )}
+                        {renderRepoMenuItem(
+                            '设置上游分支',
+                            () => {
+                                if (onSetUpstream && gitStatus?.current) {
+                                    onSetUpstream(gitStatus.current);
+                                }
+                            },
+                            { disabled: !onSetUpstream || !gitStatus?.current }
+                        )}
+                        <div style={{ height: 1, margin: '4px 0', background: 'var(--border)' }} />
+                        {renderRepoMenuItem(
+                            '复制当前分支名',
+                            handleCopyBranchName,
+                            { disabled: !gitStatus?.current }
+                        )}
+                        {renderRepoMenuItem(
+                            '复制远程地址',
+                            handleCopyRemoteUrl,
+                            { disabled: !gitRemotes || gitRemotes.length === 0 }
+                        )}
+                    </div>
+                </>
+            )}
 
             {/* Hover Popup */}
             {hoveredCommit && (
