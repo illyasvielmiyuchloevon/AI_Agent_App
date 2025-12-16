@@ -1,4 +1,5 @@
 import React from 'react';
+import { getTranslation } from '../utils/i18n';
 
 const FolderIcon = ({ open = false }) => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -49,32 +50,34 @@ function NavSidebar({
     onCreateSession,
     onToggleConfig,
     apiStatus,
-    gitBadgeCount = 0
+    gitBadgeCount = 0,
+    language = 'en'
 }) {
     const isSessionsActive = activeSidebar === 'sessions' && !sidebarCollapsed;
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
     const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
+    const t = (key) => getTranslation(language, key);
 
     return (
         <div className="activity-bar">
             <button 
                 className={`activity-item ${isSessionsActive ? 'active' : ''}`} 
                 onClick={() => onSelectSidebar('sessions')}
-                title="会话列表"
+                title={t('sessionList')}
             >
                 <ChatIcon />
             </button>
             <button 
                 className={`activity-item ${isExplorerActive ? 'active' : ''}`} 
                 onClick={() => onSelectSidebar('explorer')}
-                title="Explorer（资源管理器）"
+                title={t('explorer')}
             >
                 <FolderIcon open={explorerOpen} />
             </button>
             <button 
                 className={`activity-item ${isGitActive ? 'active' : ''}`} 
                 onClick={() => onSelectSidebar('git')}
-                title="Source Control（源代码管理）"
+                title={t('sourceControl')}
                 style={{ position: 'relative' }}
             >
                 <span className="codicon codicon-source-control activity-git-icon" aria-hidden />
@@ -85,7 +88,7 @@ function NavSidebar({
             <button 
                 className="activity-item ghost" 
                 onClick={onCreateSession} 
-                title="新建会话" 
+                title={t('newSession')} 
             >
                 <PlusIcon />
             </button>
@@ -95,7 +98,7 @@ function NavSidebar({
             <button 
                 className="activity-item ghost" 
                 onClick={onToggleChatPanel} 
-                title={chatPanelCollapsed ? "展开聊天区" : "收起聊天区"}
+                title={chatPanelCollapsed ? t('expandChat') : t('collapseChat')}
             >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M4 5h14a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-5l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
@@ -116,12 +119,12 @@ function NavSidebar({
             <button 
                 className="activity-item ghost" 
                 onClick={onToggleConfig} 
-                title="Settings" 
+                title={t('settings')} 
             >
                 <SettingsIcon />
             </button>
 
-            <div className="activity-status" title={`Status: ${apiStatus}`}>
+            <div className="activity-status" title={`${t('statusPrefix')}${apiStatus}`}>
                 <span className={`status-dot ${apiStatus}`} />
             </div>
         </div>

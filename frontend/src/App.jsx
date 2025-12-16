@@ -18,13 +18,35 @@ import { WELCOME_TAB_PATH } from './workbench/constants';
 import { useWorkbenchStateMachine, WorkbenchStates } from './workbench/workbenchStateMachine';
 import { createWorkspaceServices } from './workbench/workspace/workspaceServices';
 import { createWorkspaceController } from './workbench/workspace/workspaceController';
+import ConnectRemoteModal from './components/ConnectRemoteModal';
+import CloneRepositoryModal from './components/CloneRepositoryModal';
+import { getTranslation } from './utils/i18n';
 
 const DEBUG_SEPARATORS = false;
 
 const THEME_STORAGE_KEY = 'ai_agent_theme_choice';
+const LANGUAGE_STORAGE_KEY = 'ai_agent_language_choice';
 const detectSystemTheme = () => {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
+const readStoredLanguage = () => {
+    if (typeof window === 'undefined') return 'zh'; // Default to Chinese
+    try {
+        return window.localStorage.getItem(LANGUAGE_STORAGE_KEY) || 'zh';
+    } catch {
+        return 'zh';
+    }
+};
+
+const persistLanguageChoice = (value) => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(LANGUAGE_STORAGE_KEY, value);
+    } catch {
+        // ignore
+    }
 };
 
 const pathDirname = (absPath = '') => {
@@ -318,6 +340,13 @@ function App() {
       canva: { ...DEFAULT_TOOL_SETTINGS.canva, ...(incoming?.canva || {}) }
   });
   const storedThemePreference = readStoredTheme();
+  const [language, setLanguage] = useState(readStoredLanguage);
+
+  const handleLanguageChange = (lang) => {
+    setLanguage(lang);
+    persistLanguageChoice(lang);
+  };
+
   // --- Config State ---
   const [projectConfig, setProjectConfig] = useState(DEFAULT_PROJECT_CONFIG);
   const workbench = useWorkbenchStateMachine();
@@ -410,6 +439,8 @@ function App() {
   // --- Modal State ---
   const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', onConfirm: () => {}, onClose: () => {} });
   const [diffModal, setDiffModal] = useState(null);
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
   const [configFullscreen, setConfigFullscreen] = useState(false);
 
   // --- Logs State ---
@@ -514,28 +545,9 @@ function App() {
   }, [config.anthropic, config.openai, config.provider]);
 
   const fetchPersistedBackendConfig = useCallback(async ({ silent = false } = {}) => {
-      if (!projectReady) return null;
-      try {
-          const res = await projectFetch('/api/config');
-          if (!res.ok) return null;
-          const data = await res.json();
-          if (data?.config) {
-              const applied = applyBackendConfigSnapshot(data.config);
-              if (data.config.api_key) {
-                  configHydratedRef.current = true;
-              }
-              if (!silent) {
-                  setApiStatus('unknown');
-              }
-              return applied;
-          }
-      } catch (err) {
-          if (!silent) {
-              console.error('Fetch backend config failed', err);
-          }
-      }
+      // Backend config persistence is deprecated in favor of local file config (.aichat/config.json)
       return null;
-  }, [applyBackendConfigSnapshot, projectFetch, projectReady]);
+  }, []);
 
   const checkApiStatus = async () => {
       if (!projectReady) {
@@ -564,20 +576,11 @@ function App() {
   const handleConfigSubmit = async (options = {}) => {
     const { silent = false } = options;
     try {
-      const res = await projectFetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getBackendConfig()),
-      });
-      if (res.ok) {
+        // Backend config persistence is deprecated.
+        // We now rely on local file persistence via useEffect hook.
         setConfigured(true);
         setProjectConfig((prev) => ({ ...prev, provider: config.provider, openai: { ...config.openai }, anthropic: { ...config.anthropic } }));
         if (!silent) checkApiStatus();
-      } else {
-        const errData = await res.json();
-        if (!silent) alert(`Configuration failed: ${errData.detail || 'Unknown error'}`);
-        else console.error(`Configuration failed: ${errData.detail || 'Unknown error'}`);
-      }
     } catch (err) {
       console.error(err);
       if (!silent) alert(`Error configuring agent: ${err.message}`);
@@ -585,25 +588,10 @@ function App() {
   };
 
   const applyStoredConfig = useCallback(async ({ silent = false } = {}) => {
-      const payload = getBackendConfig();
-      if (!payload.api_key || !projectReady) return;
-      try {
-          const res = await projectFetch('/api/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-          });
-          if (res.ok) {
-              setConfigured(true);
-              checkApiStatus();
-          } else if (!silent) {
-              alert('Configuration failed');
-          }
-      } catch (err) {
-          console.error(err);
-          if (!silent) alert('Error configuring agent');
-      }
-  }, [getBackendConfig, checkApiStatus, projectFetch, projectReady]);
+      // Backend config persistence is deprecated.
+      setConfigured(true);
+      checkApiStatus();
+  }, [checkApiStatus]);
 
   // --- Workspace helpers ---
   const persistToolSettings = (updater) => {
@@ -2608,6 +2596,15 @@ function App() {
       });
   };
 
+  const handleConnectRemote = useCallback(async (data) => {
+      // TODO: Implement actual backend connection
+      console.log('Connecting to remote:', data);
+      // Simulate connection delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      alert(`Connected to ${data.username}@${data.host}:${data.port}`);
+      setShowRemoteModal(false);
+  }, []);
+
   const handleDeletePath = async (path) => {
       if (!workspaceDriver) {
           alert('请先选择项目文件夹');
@@ -3272,6 +3269,7 @@ function App() {
           onBindBackend={promptOpenWorkspace}
           onToggleTheme={handleToggleTheme}
           theme={theme}
+          language={language}
           viewMode={workspaceState.view}
           onToggleView={() => setWorkspaceState((prev) => ({ ...prev, view: prev.view === 'code' ? 'preview' : 'code' }))}
           onAddFile={() => handleAddFile()}
@@ -3280,6 +3278,12 @@ function App() {
           onRefreshPreview={handleRefreshPreview}
           hasDriver={!!workspaceDriver}
           bindingError={workspaceBindingError}
+          workspaceRoots={workspaceProps.workspaceRoots}
+          workspaceRootLabel={workspaceRootLabel}
+          recentProjects={recentProjects}
+          onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
+            onCloneRepository={() => setShowCloneModal(true)}
+          onConnectRemote={() => setShowRemoteModal(true)}
       />
             {showResizeOverlay && (
                 <div
@@ -3310,6 +3314,8 @@ function App() {
           apiMessage={apiMessage}
           appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
           onChangeAppearanceMode={handleThemeModeChange}
+          language={language}
+          onLanguageChange={handleLanguageChange}
           displayPreferences={uiDisplayPreferences}
           onChangeDisplayPreference={handleChangeDisplayPreference}
           onOpenInEditor={handleOpenConfigInEditor}
@@ -3338,6 +3344,7 @@ function App() {
             }}
             apiStatus={apiStatus}
             gitBadgeCount={gitBadgeCount}
+            language={language}
           />
 
           <div
@@ -3584,6 +3591,8 @@ function App() {
                       apiMessage={apiMessage}
                       appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
                       onChangeAppearanceMode={handleThemeModeChange}
+                      language={language}
+                      onLanguageChange={setLanguage}
                       displayPreferences={uiDisplayPreferences}
                       onChangeDisplayPreference={handleChangeDisplayPreference}
                       onOpenInEditor={handleOpenConfigInEditor}
@@ -3659,6 +3668,22 @@ function App() {
             {resizeTooltip.text}
         </div>
       )}
+      <ConnectRemoteModal 
+          isOpen={showRemoteModal} 
+          onClose={() => setShowRemoteModal(false)}
+          onConnect={handleConnectRemote}
+      />
+      <CloneRepositoryModal 
+          isOpen={showCloneModal}
+          onClose={() => setShowCloneModal(false)}
+          onClone={async (data) => {
+              const res = await cloneRepositoryFromWelcome(data);
+              if (res?.targetPath) {
+                   await workspaceController.openWorkspace(null, { preferredRoot: res.targetPath });
+              }
+          }}
+          onPickFolder={pickNativeFolderPath}
+      />
       <DiffModal 
           diff={diffModal} 
           onClose={closeDiffModal} 

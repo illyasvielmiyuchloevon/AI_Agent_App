@@ -1912,6 +1912,8 @@ input:focus, select:focus, textarea:focus {
   user-select: none;
   gap: 12px;
   font-family: system-ui, -apple-system, sans-serif;
+  position: relative;
+  z-index: 200;
 }
 
 .title-bar-menu {
@@ -1949,7 +1951,7 @@ input:focus, select:focus, textarea:focus {
   border-radius: 6px;
   box-shadow: var(--shadow-strong);
   padding: 4px 0;
-  z-index: 9999;
+  z-index: 100000;
   display: flex;
   flex-direction: column;
   margin-top: 4px;
@@ -1962,14 +1964,56 @@ input:focus, select:focus, textarea:focus {
   color: var(--text);
   cursor: pointer;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   -webkit-app-region: no-drag;
+}
+
+.dropdown-item .shortcut {
+  margin-left: auto;
 }
 
 .dropdown-item:hover {
   background: var(--accent);
   color: white;
+}
+
+.dropdown-item:hover .recent-project-path {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.workspace-menu-dropdown {
+  min-width: 280px;
+}
+
+.dropdown-section-header {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.recent-project-item {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.recent-project-name {
+  font-weight: 500;
+}
+
+.recent-project-path {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  width: 100%;
 }
 
 .dropdown-separator {
@@ -3012,3 +3056,144 @@ input:focus, select:focus, textarea:focus {
 .sc-file-item.selected {
   background: var(--sidebar-active);
 }
+
+/* Modal Styles */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 99999;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-container {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-close-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+
+/* Form Styles */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.form-group label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.secondary-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 1rem;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.12s ease;
+}
+
+.secondary-btn:hover:not(:disabled) {
+  background: var(--panel-sub);
+  border-color: var(--border-strong);
+}
+
+.secondary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Ensure primary-btn matches size */
+.primary-btn {
+  height: 32px;
+  padding: 0 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+
+.form-input {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.2);
+}
+

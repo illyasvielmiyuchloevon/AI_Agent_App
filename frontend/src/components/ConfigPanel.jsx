@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getTranslation } from '../utils/i18n';
 
 const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit = '', defaultValue }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -95,8 +96,9 @@ const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit =
     );
 };
 
-function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage, appearanceMode = 'system', onChangeAppearanceMode, displayPreferences, onChangeDisplayPreference, onOpenInEditor, fullscreen, onToggleFullscreen, variant = 'modal' }) {
-    const [activeTab, setActiveTab] = useState('general');
+function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage, appearanceMode = 'system', onChangeAppearanceMode, language = 'zh', onLanguageChange, displayPreferences, onChangeDisplayPreference, onOpenInEditor, fullscreen, onToggleFullscreen, variant = 'modal' }) {
+    const [activeTab, setActiveTab] = useState('app');
+    const t = (key) => getTranslation(language, key);
     const currentConfig = config[config.provider];
     const isFirstRun = useRef(true);
 
@@ -151,13 +153,47 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
 
     const renderAppSettings = () => (
         <>
-            <div className="config-section-title">App General</div>
+            <div className="config-section-title">{t('appGeneral')}</div>
             <div className="config-field">
-                <label className="config-label">Global Settings</label>
+                <label className="config-label">{t('globalSettings')}</label>
                 <div style={{ fontSize: '12px', color: '#666' }}>
-                    Application level preferences such as theme and appearance are applied globally across all projects.
+                    {t('globalSettingsDesc')}
                 </div>
             </div>
+
+            <div className="config-field">
+                <label className="config-label">{t('language')}</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'zh'}
+                            onChange={() => onLanguageChange && onLanguageChange('zh')}
+                        />
+                        <span>中文</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'en'}
+                            onChange={() => onLanguageChange && onLanguageChange('en')}
+                        />
+                        <span>English</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'ja'}
+                            onChange={() => onLanguageChange && onLanguageChange('ja')}
+                        />
+                        <span>日本語</span>
+                    </label>
+                </div>
+            </div>
+
             <div className="config-field">
                 <label className="config-label">Default View Location</label>
                 <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
@@ -245,9 +281,9 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
 
     const renderGeneralSettings = () => (
         <>
-            <div className="config-section-title">General Settings</div>
+            <div className="config-section-title">{t('llmAndSession')}</div>
             <div className="config-field">
-                <label className="config-label">Provider</label>
+                <label className="config-label">{t('provider')}</label>
                 <select
                     value={config.provider}
                     onChange={(e) => setConfig({ ...config, provider: e.target.value })}
@@ -258,7 +294,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 </select>
             </div>
             <div className="config-field">
-                <label className="config-label">API Key</label>
+                <label className="config-label">{t('apiKey')}</label>
                 <input
                     type="password"
                     value={currentConfig.api_key}
@@ -268,7 +304,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Base URL (Optional)</label>
+                <label className="config-label">{t('baseUrl')}</label>
                 <input
                     type="text"
                     value={currentConfig.base_url}
@@ -278,7 +314,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Model (Optional)</label>
+                <label className="config-label">{t('model')}</label>
                 <input
                     type="text"
                     value={currentConfig.model}
@@ -288,7 +324,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Status Check Model (Optional)</label>
+                <label className="config-label">{t('statusCheckModel')}</label>
                 <input
                     type="text"
                     value={currentConfig.check_model}
@@ -298,7 +334,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
 
-            <div className="config-section-title" style={{ marginTop: '24px' }}>Session Context</div>
+            <div className="config-section-title" style={{ marginTop: '24px' }}>{t('sessionContext')}</div>
             <div className="config-field">
                 <label className="config-tool-row">
                     <input 
@@ -306,15 +342,15 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                         checked={currentConfig.context_independent ?? true} 
                         onChange={(e) => updateCurrent('context_independent', e.target.checked)} 
                     />
-                    <span>Independent Session Context</span>
+                    <span>{t('independentSessionContext')}</span>
                 </label>
                 <div style={{ fontSize: '11px', color: '#666', marginTop: '4px', marginLeft: '24px' }}>
-                    Each session maintains its own context to prevent interference.
+                    {t('independentSessionContextDesc')}
                 </div>
             </div>
 
             <ConfigSlider
-                label="Context Window Limit"
+                label={t('contextWindowLimit')}
                 value={currentConfig.context_max_length ?? 128000}
                 min={32000}
                 max={256000}
@@ -324,7 +360,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 helpText="Maximum context length (Range: 32k - 256k tokens). Default: 128k."
                 onChange={(val) => updateCurrent('context_max_length', val)}
             />
-
+            
             <div className="config-section-title" style={{ marginTop: '24px' }}>Model Parameters</div>
 
             <ConfigSlider
@@ -340,7 +376,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
             />
 
             <ConfigSlider
-                label="Temperature"
+                label={t('temperature')}
                 value={currentConfig.temperature ?? 0.8}
                 min={0.1}
                 max={2.0}
@@ -357,7 +393,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                     onClick={resetParameters}
                     style={{ width: '100%', justifyContent: 'center', color: '#666' }}
                 >
-                    Reset Parameters to Defaults
+                    {t('resetToDefaults')}
                 </button>
             </div>
         </>
