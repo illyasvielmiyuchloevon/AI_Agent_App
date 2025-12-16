@@ -290,7 +290,8 @@ const TitleBar = ({
             </div>
 
             {/* Project Info & Actions */}
-            <div className="title-bar-content">
+            <div className="title-bar-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1, padding: '0 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
                 <div 
                     className="project-info" 
                     onClick={handleLabelClick} 
@@ -349,34 +350,16 @@ const TitleBar = ({
                 </div>
 
                 <div 
-                    className="title-bar-search-trigger"
+                    className="title-bar-search-button"
                     onClick={onOpenCommandPalette}
-                    style={{
-                        flex: '0 1 400px',
-                        margin: '0 12px',
-                        background: 'var(--bg-subtle)', // Fallback if var not defined
-                        backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                        border: '1px solid var(--border)',
-                        borderColor: 'rgba(255, 255, 255, 0.1)',
-                        borderRadius: '6px',
-                        height: '24px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        color: 'var(--text-secondary)',
-                        fontSize: '12px',
-                        transition: 'all 0.2s ease',
-                        userSelect: 'none',
-                        WebkitAppRegion: 'no-drag'
-                    }}
                     title="Search files (Ctrl+P)"
                 >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6, opacity: 0.7 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
                         <circle cx="11" cy="11" r="8"></circle>
                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                     </svg>
-                    <span style={{ opacity: 0.8 }}>{projectLabel ? `Search ${projectLabel}` : 'Search...'}</span>
+                    <span>Search</span>
+                </div>
                 </div>
 
                 <div className="window-actions">

@@ -136,6 +136,17 @@ export const GitDriver = {
         }
     },
 
+    async resolve(cwd, file, type) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.resolve(cwd, file, type);
+            return res.success;
+        } catch (e) {
+            console.error('Git resolve failed', e);
+            return false;
+        }
+    },
+
     async publishBranch(cwd, branch) {
         if (!this.isAvailable()) return false;
         if (typeof window.electronAPI.git.publishBranch !== 'function') {

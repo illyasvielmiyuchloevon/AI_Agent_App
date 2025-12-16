@@ -1513,6 +1513,7 @@ function App() {
       setShowLogs,
       setCurrentSessionId,
       setDiffTabs,
+      setActiveWorkspaces,
   }), [
       abortControllerRef,
       hydrateProject,
@@ -1534,6 +1535,7 @@ function App() {
       setWorkspaceDriver,
       setWorkspaceRootLabel,
       setWorkspaceState,
+      setActiveWorkspaces,
       workbenchCloseRequested,
       workbenchOpenRequested,
       workspaceServices,
@@ -2820,6 +2822,12 @@ function App() {
       refreshGitStatus();
   };
 
+  const handleGitResolve = async (file, type) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.resolve(backendWorkspaceRoot, file, type);
+      refreshGitStatus();
+  };
+
   const handleGitAddRemote = async (name, url) => {
       if (!backendWorkspaceRoot) return;
       await GitDriver.addRemote(backendWorkspaceRoot, name, url);
@@ -3328,8 +3336,12 @@ function App() {
           workspaceRoots={workspaceProps.workspaceRoots}
           workspaceRootLabel={workspaceRootLabel}
           recentProjects={recentProjects}
-          onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
-            onCloneRepository={() => setShowCloneModal(true)}
+          onOpenRecent={(proj) => {
+            const candidate = proj?.fsPath || proj?.pathLabel || proj?.backendRoot || '';
+            const target = isAbsolutePath(candidate) ? candidate : (proj?.id || null);
+            workspaceController.openWorkspace(target, { preferredRoot: candidate });
+          }}
+          onCloneRepository={() => setShowCloneModal(true)}
           onConnectRemote={() => setShowRemoteModal(true)}
           onOpenCommandPalette={() => setShowCommandPalette(true)}
       />
@@ -3487,6 +3499,7 @@ function App() {
                     onCreateBranch={handleGitCreateBranch}
                     onDeleteBranch={handleGitDeleteBranch}
                     onCheckoutBranch={handleGitCheckoutBranch}
+                    onResolve={handleGitResolve}
                     onOpenFile={openFile}
                     onDiff={handleOpenWorkingCopyDiff}
                     onGetCommitDetails={handleGetCommitDetails}

@@ -3201,3 +3201,34 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.2);
 }
 
+
+
+/* TitleBar Search Button Styles */
+.title-bar-search-button {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 0 10px;
+  margin-left: 8px;
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary, #9ca3af);
+  font-size: 12px;
+  height: 24px;
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.title-bar-search-button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text, #e5e7eb);
+}
+
+.title-bar-search-button:active {
+  background-color: rgba(255, 255, 255, 0.15);
+  transform: translateY(1px);
+}
+

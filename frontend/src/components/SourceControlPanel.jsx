@@ -32,7 +32,8 @@ const SourceControlPanel = ({
     gitBranches,
     onCreateBranch,
     onDeleteBranch,
-    onCheckoutBranch
+    onCheckoutBranch,
+    onResolve
 }) => {
     const [message, setMessage] = useState('');
     const [expanded, setExpanded] = useState(() => {
@@ -42,14 +43,14 @@ const SourceControlPanel = ({
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (parsed && typeof parsed === 'object') {
-                        const defaults = { staged: true, unstaged: true, repositories: true, graph: true, branches: true };
+                        const defaults = { staged: true, unstaged: true, repositories: true, graph: true, branches: true, conflicts: true };
                         return { ...defaults, ...parsed };
                     }
                 }
             } catch {
             }
         }
-        return { staged: true, unstaged: true, repositories: true, graph: true, branches: true };
+        return { staged: true, unstaged: true, repositories: true, graph: true, branches: true, conflicts: true };
     });
     const [expandedCommits, setExpandedCommits] = useState({});
     const [loadingCommits, setLoadingCommits] = useState({});
@@ -69,7 +70,7 @@ const SourceControlPanel = ({
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (Array.isArray(parsed) && parsed.length) {
-                        const allowed = ['staged', 'unstaged', 'repositories', 'graph', 'branches'];
+                        const allowed = ['staged', 'unstaged', 'repositories', 'graph', 'branches', 'conflicts'];
                         const filtered = parsed.filter(id => allowed.includes(id));
                         const missing = allowed.filter(id => !filtered.includes(id));
                         const next = [...filtered, ...missing];
@@ -79,7 +80,7 @@ const SourceControlPanel = ({
             } catch {
             }
         }
-        return ['staged', 'unstaged', 'repositories', 'branches', 'graph'];
+        return ['conflicts', 'staged', 'unstaged', 'repositories', 'branches', 'graph'];
     });
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
@@ -183,9 +184,22 @@ const SourceControlPanel = ({
         );
     }
 
-    const staged = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index)) || [];
-    const changes = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R', '?'].includes(f.working_dir)) || [];
-    const totalChanges = staged.length + changes.length;
+    const conflicts = gitStatus?.files?.filter(f => 
+        (f.index === 'U' || f.working_dir === 'U') || 
+        (f.index === 'A' && f.working_dir === 'A') || 
+        (f.index === 'D' && f.working_dir === 'D') ||
+        (f.index === 'U' && f.working_dir === 'D') ||
+        (f.index === 'D' && f.working_dir === 'U') ||
+        (f.index === 'A' && f.working_dir === 'U') ||
+        (f.index === 'U' && f.working_dir === 'A')
+    ) || [];
+
+    const staged = (gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index)) || [])
+        .filter(f => !conflicts.includes(f));
+        
+    const changes = (gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R', '?'].includes(f.working_dir)) || [])
+        .filter(f => !conflicts.includes(f));
+    const totalChanges = staged.length + changes.length + conflicts.length;
 
     const handleKeyDown = (e) => {
         if (e.ctrlKey && e.key === 'Enter') {
@@ -454,6 +468,55 @@ const SourceControlPanel = ({
     };
 
     const renderSection = (id) => {
+        if (id === 'conflicts') {
+            return (
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('conflicts')}
+                    onDrop={handleSectionDragEnd}
+                >
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, conflicts: !p.conflicts }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('conflicts')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整冲突分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.conflicts ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            合并冲突
+                            <span className="sc-count-badge" style={{ background: 'var(--danger)', color: '#fff' }}>{conflicts.length}</span>
+                        </div>
+                    </div>
+                    {expanded.conflicts && (
+                        <div className="sc-file-list">
+                            {conflicts.map(file => (
+                                <FileItem
+                                    key={`conflict-${file.path}`}
+                                    file={file}
+                                    onAction={null}
+                                    actionIcon="!"
+                                    onDiscard={null}
+                                    onOpen={() => onOpenFile(file.path)}
+                                    onDiff={() => onDiff(file.path, true)}
+                                    selected={selectedFile === file.path}
+                                    onSelect={() => setSelectedFile(file.path)}
+                                    isConflict={true}
+                                    onResolve={onResolve}
+                                />
+                            ))}
+                            {conflicts.length === 0 && (
+                                <div style={{ padding: '8px 16px', fontSize: '12px', color: 'var(--muted)' }}>
+                                    当前没有冲突的文件。
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
         if (id === 'staged') {
             return (
                 <div
@@ -1150,11 +1213,12 @@ const SourceControlPanel = ({
     );
 };
 
-const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard, selected, onSelect }) => {
+const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard, selected, onSelect, isConflict, onResolve }) => {
     const getStatusColor = (code) => {
         if (code === 'M') return 'var(--warning)';
         if (code === 'A' || code === '?') return 'var(--success)';
         if (code === 'D') return 'var(--danger)';
+        if (code === 'U') return 'var(--danger)';
         return 'var(--muted)';
     };
 
@@ -1180,36 +1244,57 @@ const FileItem = ({ file, onAction, actionIcon, onOpen, onDiff, onDiscard, selec
                 {fileName} <span className="sc-file-path">{dirName}</span>
             </span>
             <div className="sc-file-actions">
-                 {onDiscard && (
-                    <button 
-                        className="sc-item-btn" 
-                        onClick={(e) => { e.stopPropagation(); onDiscard(); }}
-                        title="Discard Changes"
-                    >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
-                    </button>
-                 )}
-                 <button 
-                    className="sc-item-btn" 
-                    onClick={(e) => { e.stopPropagation(); onDiff(); }}
-                    title="Open Diff"
-                 >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="4" y="3" width="6" height="18" rx="1" />
-                        <rect x="14" y="3" width="6" height="18" rx="1" />
-                    </svg>
-                 </button>
-                 <button 
-                    className="sc-item-btn" 
-                    onClick={(e) => { e.stopPropagation(); onAction(); }}
-                    title={actionIcon === '+' ? "Stage Changes" : "Unstage Changes"}
-                 >
-                    {actionIcon === '+' ? (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    ) : (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    )}
-                 </button>
+                {isConflict ? (
+                    <>
+                        <button 
+                            className="sc-item-btn" 
+                            onClick={(e) => { e.stopPropagation(); onResolve && onResolve(file.path, 'ours'); }}
+                            title="Accept Current Change"
+                        >
+                            <span style={{ fontSize: '10px', fontWeight: 'bold' }}>CUR</span>
+                        </button>
+                        <button 
+                            className="sc-item-btn" 
+                            onClick={(e) => { e.stopPropagation(); onResolve && onResolve(file.path, 'theirs'); }}
+                            title="Accept Incoming Change"
+                        >
+                            <span style={{ fontSize: '10px', fontWeight: 'bold' }}>INC</span>
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        {onDiscard && (
+                            <button 
+                                className="sc-item-btn" 
+                                onClick={(e) => { e.stopPropagation(); onDiscard(); }}
+                                title="Discard Changes"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+                            </button>
+                        )}
+                        <button 
+                            className="sc-item-btn" 
+                            onClick={(e) => { e.stopPropagation(); onDiff(); }}
+                            title="Open Diff"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="4" y="3" width="6" height="18" rx="1" />
+                                <rect x="14" y="3" width="6" height="18" rx="1" />
+                            </svg>
+                        </button>
+                        <button 
+                            className="sc-item-btn" 
+                            onClick={(e) => { e.stopPropagation(); onAction(); }}
+                            title={actionIcon === '+' ? "Stage Changes" : "Unstage Changes"}
+                        >
+                            {actionIcon === '+' ? (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            ) : (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            )}
+                        </button>
+                    </>
+                )}
             </div>
             <span className="sc-status-pill" style={{ color, borderColor: color }}>
                 {status === '?' ? 'U' : status}

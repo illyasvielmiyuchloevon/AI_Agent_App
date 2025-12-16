@@ -27,6 +27,7 @@ export function createWorkspaceController(deps) {
     setShowLogs,
     setCurrentSessionId,
     setDiffTabs,
+    setActiveWorkspaces,
   } = deps || {};
 
   if (!LocalWorkspaceDriver) {
@@ -66,6 +67,7 @@ export function createWorkspaceController(deps) {
 
   const openWorkspace = async (projectId = null, { preferredRoot = '' } = {}) => {
     if (typeof setWorkspaceBindingError === 'function') setWorkspaceBindingError('');
+    if (typeof setActiveWorkspaces === 'function') setActiveWorkspaces([]);
     try {
       workbenchOpenRequested?.();
       workspaceServices?.stop?.().catch?.(() => {});
@@ -150,6 +152,7 @@ export function createWorkspaceController(deps) {
     }
 
     if (typeof setWorkspaceDriver === 'function') setWorkspaceDriver(null);
+    if (typeof setActiveWorkspaces === 'function') setActiveWorkspaces([]);
     if (typeof setWorkspaceBindingStatus === 'function') setWorkspaceBindingStatus('idle');
     if (typeof setWorkspaceBindingError === 'function') setWorkspaceBindingError('');
     if (typeof setWorkspaceRootLabel === 'function') setWorkspaceRootLabel('');

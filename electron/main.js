@@ -302,6 +302,19 @@ app.whenReady().then(() => {
      return { success: true, diff: JSON.parse(JSON.stringify(diff)) };
   }));
 
+  ipcMain.handle('git:resolve', (e, { cwd, file, type }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    if (!['ours', 'theirs'].includes(type)) return { success: false, error: 'Invalid resolution type' };
+    
+    // Use checkout to resolve
+    await git.checkout([`--${type}`, file]);
+    // After checkout, we usually need to add the file to mark it as resolved
+    await git.add([file]);
+    
+    return { success: true };
+  }));
+
   ipcMain.handle('git:getCommitDetails', (e, { cwd, hash }) => handleGit(cwd, async (git) => {
     const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };
