@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pull: (cwd) => ipcRenderer.invoke('git:pull', cwd),
     fetch: (cwd) => ipcRenderer.invoke('git:fetch', cwd),
     branch: (cwd) => ipcRenderer.invoke('git:branch', cwd),
+    createBranch: (cwd, name) => ipcRenderer.invoke('git:createBranch', { cwd, name }),
+    deleteBranch: (cwd, branch) => ipcRenderer.invoke('git:deleteBranch', { cwd, branch }),
     checkout: (cwd, branch) => ipcRenderer.invoke('git:checkout', { cwd, branch }),
     log: (cwd) => ipcRenderer.invoke('git:log', cwd),
     diff: (cwd, file) => ipcRenderer.invoke('git:diff', { cwd, file }),

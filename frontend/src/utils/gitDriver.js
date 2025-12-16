@@ -92,6 +92,50 @@ export const GitDriver = {
         }
     },
 
+    async branch(cwd) {
+        if (!this.isAvailable()) return null;
+        try {
+            const res = await window.electronAPI.git.branch(cwd);
+            return res.success ? res.branches : null;
+        } catch (e) {
+            console.error('Git branch failed', e);
+            return null;
+        }
+    },
+
+    async createBranch(cwd, name) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.createBranch(cwd, name);
+            return res.success;
+        } catch (e) {
+            console.error('Git createBranch failed', e);
+            return false;
+        }
+    },
+
+    async deleteBranch(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.deleteBranch(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git deleteBranch failed', e);
+            return false;
+        }
+    },
+
+    async checkout(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.checkout(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git checkout failed', e);
+            return false;
+        }
+    },
+
     async publishBranch(cwd, branch) {
         if (!this.isAvailable()) return false;
         if (typeof window.electronAPI.git.publishBranch !== 'function') {

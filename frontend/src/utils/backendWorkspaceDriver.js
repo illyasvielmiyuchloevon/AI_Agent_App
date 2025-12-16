@@ -152,6 +152,22 @@ export class BackendWorkspaceDriver {
     return true;
   }
 
+  async search(query, options = {}) {
+    const { caseSensitive = false, isRegex = false } = options;
+    const data = await this._postJson('/workspace/search', { 
+        query,
+        case_sensitive: caseSensitive,
+        regex: isRegex
+    });
+    if (data.status === 'error') throw new Error(data.message);
+    const results = (data.results || []).map(r => ({
+        path: r.file,
+        line: r.line,
+        preview: r.context ? r.context.trim() : ''
+    }));
+    return { query, results };
+  }
+
   async touchRecent() {
     return null;
   }

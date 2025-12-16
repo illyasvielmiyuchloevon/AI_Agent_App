@@ -28,7 +28,11 @@ const SourceControlPanel = ({
     loading,
     repositoryLabel,
     onPublishBranch,
-    onSetUpstream
+    onSetUpstream,
+    gitBranches,
+    onCreateBranch,
+    onDeleteBranch,
+    onCheckoutBranch
 }) => {
     const [message, setMessage] = useState('');
     const [expanded, setExpanded] = useState(() => {
@@ -38,14 +42,14 @@ const SourceControlPanel = ({
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (parsed && typeof parsed === 'object') {
-                        const defaults = { staged: true, unstaged: true, repositories: true, graph: true };
+                        const defaults = { staged: true, unstaged: true, repositories: true, graph: true, branches: true };
                         return { ...defaults, ...parsed };
                     }
                 }
             } catch {
             }
         }
-        return { staged: true, unstaged: true, repositories: true, graph: true };
+        return { staged: true, unstaged: true, repositories: true, graph: true, branches: true };
     });
     const [expandedCommits, setExpandedCommits] = useState({});
     const [loadingCommits, setLoadingCommits] = useState({});
@@ -54,6 +58,8 @@ const SourceControlPanel = ({
     const [newRemoteUrl, setNewRemoteUrl] = useState('');
     const [addRemoteError, setAddRemoteError] = useState('');
     const [addingRemote, setAddingRemote] = useState(false);
+    const [isCreatingBranch, setIsCreatingBranch] = useState(false);
+    const [newBranchName, setNewBranchName] = useState('');
     const [viewMode, setViewMode] = useState('list');
     const [selectedFile, setSelectedFile] = useState(null);
     const [sectionOrder, setSectionOrder] = useState(() => {
@@ -63,7 +69,7 @@ const SourceControlPanel = ({
                 if (stored) {
                     const parsed = JSON.parse(stored);
                     if (Array.isArray(parsed) && parsed.length) {
-                        const allowed = ['staged', 'unstaged', 'repositories', 'graph'];
+                        const allowed = ['staged', 'unstaged', 'repositories', 'graph', 'branches'];
                         const filtered = parsed.filter(id => allowed.includes(id));
                         const missing = allowed.filter(id => !filtered.includes(id));
                         const next = [...filtered, ...missing];
@@ -73,7 +79,7 @@ const SourceControlPanel = ({
             } catch {
             }
         }
-        return ['staged', 'unstaged', 'repositories', 'graph'];
+        return ['staged', 'unstaged', 'repositories', 'branches', 'graph'];
     });
     const [draggingSection, setDraggingSection] = useState(null);
     const messageRef = useRef(null);
@@ -192,6 +198,17 @@ const SourceControlPanel = ({
         if (!trimmed || staged.length === 0) return;
         onCommit(trimmed);
         setMessage('');
+    };
+
+    const handleCreateBranchConfirm = async () => {
+        if (!newBranchName.trim()) return;
+        try {
+            await onCreateBranch(newBranchName.trim());
+            setIsCreatingBranch(false);
+            setNewBranchName('');
+        } catch (e) {
+            console.error(e);
+        }
     };
 
     const handleAddRemoteSubmit = async () => {
@@ -821,6 +838,103 @@ const SourceControlPanel = ({
                                 <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>暂无提交记录，在上方完成一次提交后即可看到提交图形。</div>
                             )}
                         </div>
+                    )}
+                </div>
+            );
+        }
+
+        if (id === 'branches') {
+            const list = gitBranches?.all || [];
+            return (
+                <div
+                    className="sc-section"
+                    onDragOver={handleSectionDragOver('branches')}
+                    onDrop={handleSectionDragEnd}
+                >
+                    <div
+                        className="sc-section-header"
+                        onClick={() => setExpanded(p => ({ ...p, branches: !p.branches }))}
+                        draggable
+                        onDragStart={handleSectionDragStart('branches')}
+                        onDragEnd={handleSectionDragEnd}
+                        aria-label="拖动以调整分支分组顺序"
+                    >
+                        <div className="sc-section-icon">{expanded.branches ? '▼' : '▶'}</div>
+                        <div className="sc-section-label">
+                            分支 <span className="sc-count-badge">{list.length}</span>
+                        </div>
+                        <div className="sc-section-actions">
+                             <button 
+                                className="sc-action-btn" 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setIsCreatingBranch(true);
+                                }}
+                                title="新建分支"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    {expanded.branches && (
+                        <>
+                             {isCreatingBranch && (
+                                <div className="sc-remote-form">
+                                    <div className="sc-remote-header">
+                                        <span>新建分支</span>
+                                        <button className="sc-icon-btn" onClick={() => setIsCreatingBranch(false)}>×</button>
+                                    </div>
+                                    <input
+                                        className="sc-remote-input"
+                                        placeholder="分支名称"
+                                        value={newBranchName}
+                                        onChange={e => setNewBranchName(e.target.value)}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter') handleCreateBranchConfirm();
+                                            if (e.key === 'Escape') setIsCreatingBranch(false);
+                                        }}
+                                        autoFocus
+                                    />
+                                    <div className="sc-remote-actions">
+                                        <button
+                                            className="sc-btn primary"
+                                            onClick={handleCreateBranchConfirm}
+                                            disabled={!newBranchName.trim()}
+                                        >
+                                            创建
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            <div className="sc-file-list">
+                                {list.map(b => (
+                                    <div key={b} className="sc-repo-item" style={{ padding: '4px 16px' }}>
+                                         <div className="sc-repo-main" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                            <span style={{ 
+                                                fontWeight: b === gitBranches.current ? 'bold' : 'normal', 
+                                                color: b === gitBranches.current ? 'var(--accent)' : 'inherit',
+                                                display: 'flex', alignItems: 'center', gap: '6px'
+                                            }}>
+                                                {b === gitBranches.current && <span style={{fontSize: '10px'}}>●</span>}
+                                                {b}
+                                            </span>
+                                            <div className="sc-repo-actions" style={{ opacity: 0.7 }}>
+                                                {b !== gitBranches.current && (
+                                                    <button className="sc-item-btn" onClick={() => onCheckoutBranch && onCheckoutBranch(b)} title="切换分支">
+                                                        ✓
+                                                    </button>
+                                                )}
+                                                {b !== gitBranches.current && (
+                                                    <button className="sc-item-btn" onClick={() => onDeleteBranch && onDeleteBranch(b)} title="删除分支">
+                                                        🗑
+                                                    </button>
+                                                )}
+                                            </div>
+                                         </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
                     )}
                 </div>
             );

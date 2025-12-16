@@ -25,6 +25,13 @@ const ChatIcon = () => (
   </svg>
 );
 
+const SearchIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="8"></circle>
+    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+  </svg>
+);
+
 const PlusIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="7.5" />
@@ -55,6 +62,7 @@ function NavSidebar({
 }) {
     const isSessionsActive = activeSidebar === 'sessions' && !sidebarCollapsed;
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
+    const isSearchActive = activeSidebar === 'search' && !sidebarCollapsed;
     const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
     const t = (key) => getTranslation(language, key);
 
@@ -73,6 +81,13 @@ function NavSidebar({
                 title={t('explorer')}
             >
                 <FolderIcon open={explorerOpen} />
+            </button>
+            <button 
+                className={`activity-item ${isSearchActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('search')}
+                title={t('search') || 'Search'}
+            >
+                <SearchIcon />
             </button>
             <button 
                 className={`activity-item ${isGitActive ? 'active' : ''}`} 

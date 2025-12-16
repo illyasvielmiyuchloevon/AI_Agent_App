@@ -6,7 +6,7 @@ import { workspaceContext, getWorkspaceRoot } from "./context";
 import * as db from "./db";
 import { Agent } from "./agent";
 import { OpenAIProvider, AnthropicProvider, LLMClient } from "./core/llm";
-import { getProjectStructure, resolveWorkspaceFilePath } from "./tools/filesystem";
+import { getProjectStructure, resolveWorkspaceFilePath, SearchInFilesTool } from "./tools/filesystem";
 import { takeSnapshot, persistDiffSafely } from "./diffs";
 import { workspaceManager } from "./workspace/manager";
 import { createWorkspaceRpcEnvelope } from "./workspace/rpc";
@@ -300,6 +300,33 @@ app.get("/workspace/structure", async (req, res) => {
     const root = getWorkspaceRoot();
     const structure = await getProjectStructure(root);
     res.json(structure);
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.post("/workspace/search", async (req, res) => {
+  try {
+    const root = getWorkspaceRoot();
+    const { query, case_sensitive, regex } = req.body;
+    if (!query) {
+      res.status(400).json({ detail: "Query is required" });
+      return;
+    }
+    const tool = new SearchInFilesTool();
+    const result = await tool.execute({
+        query,
+        path: '.', 
+        case_sensitive: !!case_sensitive,
+        regex: !!regex,
+        max_results: 500
+    });
+    
+    if (result.status === 'error') {
+        throw new Error(result.message);
+    }
+    
+    res.json(result);
   } catch (e: any) {
     res.status(400).json({ detail: e.message });
   }

@@ -228,6 +228,25 @@ app.whenReady().then(() => {
     return { success: true, branches: JSON.parse(JSON.stringify(branches)) };
   }));
 
+  ipcMain.handle('git:createBranch', (e, { cwd, name }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    await git.checkoutLocalBranch(name);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:deleteBranch', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    try {
+      await git.deleteLocalBranch(branch);
+      return { success: true };
+    } catch (err) {
+      // Force delete if needed or return error
+      return { success: false, error: err.message };
+    }
+  }));
+
   ipcMain.handle('git:checkout', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
     const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };

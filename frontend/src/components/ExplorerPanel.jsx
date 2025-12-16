@@ -1,3 +1,4 @@
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const EXT_ICONS = {
@@ -207,6 +208,7 @@ function ExplorerPanel({
   hasWorkspace = false,
   gitStatus = null,
   workspaceRoots = [],
+  // onSearch prop is no longer used here as search is moved to SearchPanel
 }) {
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [contextMenu, setContextMenu] = useState(null);
@@ -294,19 +296,22 @@ function ExplorerPanel({
 
   return (
     <div className="explorer-panel">
-      <div className="explorer-header">
-        <div className="explorer-title">
-          <div className="explorer-label">EXPLORER</div>
-          <div className="explorer-sub" title={projectLabel || '未绑定项目'}>
-            {projectLabel || '未绑定项目'}
-          </div>
-        </div>
-        <div className="explorer-actions">
-          <button onClick={onAddFile} className="ghost-btn tiny" title="新建文件">＋</button>
-          <button onClick={onAddFolder} className="ghost-btn tiny" title="新建文件夹">📂</button>
-          <button onClick={onSyncStructure} className="ghost-btn tiny" title="刷新">⟳</button>
+      <div className="explorer-header" style={{ height: 'auto', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+            <div className="explorer-title">
+              <div className="explorer-label">EXPLORER</div>
+              <div className="explorer-sub" title={projectLabel || '未绑定项目'}>
+                {projectLabel || '未绑定项目'}
+              </div>
+            </div>
+            <div className="explorer-actions">
+              <button onClick={onAddFile} className="ghost-btn tiny" title="新建文件">＋</button>
+              <button onClick={onAddFolder} className="ghost-btn tiny" title="新建文件夹">📂</button>
+              <button onClick={onSyncStructure} className="ghost-btn tiny" title="刷新">⟳</button>
+            </div>
         </div>
       </div>
+      
       <div
         className="workspace-tree explorer-tree"
         ref={treeRef}

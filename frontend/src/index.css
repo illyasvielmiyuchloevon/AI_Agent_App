@@ -34,6 +34,10 @@
   --success: #16a34a;
 }
 
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 [data-theme="dark"] {
   --bg: #1e1e1e;
   --panel: #252526;

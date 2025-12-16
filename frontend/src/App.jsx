@@ -20,6 +20,8 @@ import { createWorkspaceServices } from './workbench/workspace/workspaceServices
 import { createWorkspaceController } from './workbench/workspace/workspaceController';
 import ConnectRemoteModal from './components/ConnectRemoteModal';
 import CloneRepositoryModal from './components/CloneRepositoryModal';
+import SearchPanel from './components/SearchPanel';
+import CommandPalette from './components/CommandPalette';
 import { getTranslation } from './utils/i18n';
 
 const DEBUG_SEPARATORS = false;
@@ -442,6 +444,8 @@ function App() {
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [configFullscreen, setConfigFullscreen] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -457,6 +461,7 @@ function App() {
   const [gitLoading, setGitLoading] = useState(false);
   const [gitRemotes, setGitRemotes] = useState([]);
   const [gitLog, setGitLog] = useState([]);
+  const [gitBranches, setGitBranches] = useState({ all: [], current: '', branches: {} });
 
   const [chatPanelWidth, setChatPanelWidth] = useState(() => pickLayoutNumber('chatWidth', DEFAULT_PROJECT_CONFIG.chatPanelWidth));
   const [chatPanelCollapsed, setChatPanelCollapsed] = useState(false);
@@ -2149,14 +2154,19 @@ function App() {
         signal: controller.signal
       });
 
+      if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+      }
+
       if (!response.body) {
-          return;
+          throw new Error('Response body is empty');
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let currentAssistantCid = null;
       let shouldStartNewAssistant = false;
+      let hasReceivedContent = false;
 
       const ensureAssistantMessage = () => {
           if (currentAssistantCid && !shouldStartNewAssistant) return currentAssistantCid;
@@ -2169,6 +2179,7 @@ function App() {
 
       const appendToAssistant = (text = '') => {
           if (!text) return;
+          hasReceivedContent = true;
           const cid = ensureAssistantMessage();
           setMessages((prev) => {
               const next = [...prev];
@@ -2242,6 +2253,11 @@ function App() {
           appendToAssistant(streamBufferRef.current);
           streamBufferRef.current = '';
       }
+      
+      if (!hasReceivedContent) {
+          appendToAssistant('（AI 未返回任何内容，请检查网络或配置）');
+      }
+
       fetchSessions();
       fetchLogs();
       await refreshMessages(sessionIdToUse);
@@ -2764,6 +2780,8 @@ function App() {
       setGitRemotes(remotes);
       const log = await GitDriver.log(backendWorkspaceRoot);
       setGitLog(log?.all || []);
+      const branches = await GitDriver.branch(backendWorkspaceRoot);
+      setGitBranches(branches || { all: [], current: '', branches: {} });
       setGitLoading(false);
   }, [backendWorkspaceRoot]);
 
@@ -2781,6 +2799,24 @@ function App() {
           return;
       }
       await GitDriver.init(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+
+  const handleGitCreateBranch = async (name) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.createBranch(backendWorkspaceRoot, name);
+      refreshGitStatus();
+  };
+
+  const handleGitDeleteBranch = async (name) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.deleteBranch(backendWorkspaceRoot, name);
+      refreshGitStatus();
+  };
+
+  const handleGitCheckoutBranch = async (name) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.checkout(backendWorkspaceRoot, name);
       refreshGitStatus();
   };
 
@@ -3250,6 +3286,17 @@ function App() {
       }).length;
   }, [gitStatus]);
 
+  const handleGlobalSearch = useCallback(async (query, options = {}) => {
+      if (!workspaceDriver) return [];
+      try {
+          const result = await workspaceDriver.search(query, options);
+          return result.results || [];
+      } catch (e) {
+          console.error('Search failed', e);
+          return [];
+      }
+  }, [workspaceDriver]);
+
   // ✅ 使用受控渲染而非延迟值，避免闪烁
   // 直接传递最新状态，在 Workspace 组件内部使用 useMemo 优化
   const workspaceProps = useMemo(() => ({
@@ -3284,6 +3331,7 @@ function App() {
           onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
             onCloneRepository={() => setShowCloneModal(true)}
           onConnectRemote={() => setShowRemoteModal(true)}
+          onOpenCommandPalette={() => setShowCommandPalette(true)}
       />
             {showResizeOverlay && (
                 <div
@@ -3324,6 +3372,17 @@ function App() {
           variant="modal"
         />
       )}
+
+      <CommandPalette 
+          isOpen={showCommandPalette}
+          onClose={() => setShowCommandPalette(false)}
+          files={workspaceProps.files}
+          onOpenFile={openFile}
+          onSearchText={(text) => {
+              setGlobalSearchQuery(text);
+              handleSidebarTabChange('search');
+          }}
+      />
 
       <div className="app-body">
             <NavSidebar 
@@ -3395,11 +3454,20 @@ function App() {
                   gitStatus={gitStatus}
               />
             )}
+            {!sidebarCollapsed && activeSidebarPanel === 'search' && (
+                <SearchPanel 
+                    onSearch={handleGlobalSearch}
+                    onOpenFile={openFile}
+                    projectLabel={workspaceRootLabel}
+                    initialQuery={globalSearchQuery}
+                />
+            )}
             {!sidebarCollapsed && activeSidebarPanel === 'git' && (
                 <SourceControlPanel 
                     gitStatus={gitStatus}
                     gitRemotes={gitRemotes}
                     gitLog={gitLog}
+                    gitBranches={gitBranches}
                     onCommit={handleGitCommit}
                     onStage={handleGitStage}
                     onUnstage={handleGitUnstage}
@@ -3416,6 +3484,9 @@ function App() {
                     onGenerateCommitMessage={handleGenerateCommitMessage}
                     onInit={handleGitInit}
                     onAddRemote={handleGitAddRemote}
+                    onCreateBranch={handleGitCreateBranch}
+                    onDeleteBranch={handleGitDeleteBranch}
+                    onCheckoutBranch={handleGitCheckoutBranch}
                     onOpenFile={openFile}
                     onDiff={handleOpenWorkingCopyDiff}
                     onGetCommitDetails={handleGetCommitDetails}

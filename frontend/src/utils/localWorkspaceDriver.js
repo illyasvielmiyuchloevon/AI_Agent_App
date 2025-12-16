@@ -349,20 +349,45 @@ export class LocalWorkspaceDriver {
     return entries;
   }
 
-  async search(query, path = '.') {
+  async search(query, options = {}) {
     if (!query) throw new Error('缺少搜索关键字');
-    const entries = await this.listFiles(path);
-    const results = [];
-    for (const entry of entries) {
-      if (entry.type !== 'file') continue;
-      const { content } = await this.readFile(entry.path);
-      const lines = content.split('\n');
-      lines.forEach((line, idx) => {
-        if (line.toLowerCase().includes(query.toLowerCase())) {
-          results.push({ path: entry.path, line: idx + 1, preview: line.trim() });
-        }
-      });
-      if (results.length > 200) return { query, results };
+    const path = options.path || '.';
+    const caseSensitive = !!options.caseSensitive;
+    const isRegex = !!options.isRegex;
+    
+    let regexPattern;
+     if (isRegex) {
+         try {
+             regexPattern = new RegExp(query, caseSensitive ? '' : 'i');
+         } catch (e) {
+             throw new Error('无效的正则表达式');
+         }
+     }
+
+     const entries = await this.listFiles(path);
+     const results = [];
+     
+     for (const entry of entries) {
+       if (entry.type !== 'file') continue;
+       const { content } = await this.readFile(entry.path);
+       const lines = content.split('\n');
+       lines.forEach((line, idx) => {
+         let match = false;
+         if (isRegex) {
+             match = regexPattern.test(line);
+         } else {
+             if (caseSensitive) {
+                 match = line.includes(query);
+             } else {
+                 match = line.toLowerCase().includes(query.toLowerCase());
+             }
+         }
+
+         if (match) {
+           results.push({ path: entry.path, line: idx + 1, preview: line.trim() });
+         }
+       });
+      if (results.length > 500) return { query, results };
     }
     return { query, results };
   }
