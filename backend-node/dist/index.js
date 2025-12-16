@@ -46,100 +46,79 @@ const agent_1 = require("./agent");
 const llm_1 = require("./core/llm");
 const filesystem_1 = require("./tools/filesystem");
 const diffs_1 = require("./diffs");
+const manager_1 = require("./workspace/manager");
+const rpc_1 = require("./workspace/rpc");
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
-// Middleware to bind workspace root
-app.use((req, res, next) => {
-    const root = req.headers['x-workspace-root'] || req.headers['x-project-root'];
-    console.log(`[Middleware] Request: ${req.method} ${req.url}`);
-    if (root) {
-        console.log(`[Middleware] Binding workspace root: ${root}`);
-    }
-    else {
-        console.log(`[Middleware] No workspace root header found.`);
-    }
-    if (root && typeof root === 'string') {
-        context_1.workspaceContext.run({ root }, () => next());
-    }
-    else {
-        // If no root provided, we can still run but DB ops might fail if they require it.
-        // For /health or global routes it might be fine.
+app.use(async (req, res, next) => {
+    const headerId = req.headers["x-workspace-id"];
+    const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
+    const hint = (typeof headerId === "string" && headerId) ? headerId : (typeof headerRoot === "string" ? headerRoot : "");
+    if (!hint) {
         next();
+        return;
+    }
+    try {
+        const handle = await manager_1.workspaceManager.openWorkspace(hint);
+        const firstFolder = handle.descriptor.folders[0];
+        const rootPath = firstFolder ? firstFolder.path : hint;
+        context_1.workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
+    }
+    catch (e) {
+        res.status(400).json({ detail: e?.message || "Failed to open workspace" });
     }
 });
-// Global LLM Client (simplified)
 let globalLlmClient = null;
 let globalLlmConfig = null;
 async function initLlm() {
-    // Try to load from DB (requires workspace context, which we might not have globally yet)
-    // In actual usage, we load per request or lazily.
 }
 function buildLlmClient(config) {
-    if (config.provider === 'openai') {
+    if (config.provider === "openai") {
         return new llm_1.OpenAIProvider(config.api_key, config.model, config.base_url);
     }
-    else if (config.provider === 'anthropic') {
+    else if (config.provider === "anthropic") {
         return new llm_1.AnthropicProvider(config.api_key, config.model, config.base_url);
     }
     throw new Error("Invalid provider");
 }
-// Routes
-app.post('/health', async (req, res) => {
+app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
     // Check config
     let isHealthy = false;
     let message = "Agent not configured";
-    // In this simple PoC, we check if we have a bound root and config
-    const root = req.headers['x-workspace-root'];
+    const root = req.headers["x-workspace-root"];
     if (root) {
         try {
             await db.initDb();
-            // Prefer config from body if provided (for validation), otherwise load from DB
             if (req.body && req.body.provider) {
-                console.log(`[Health] Using config from body:`, JSON.stringify(req.body, null, 2));
+                console.log("[Health] Using config from body");
             }
             const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
             if (config) {
-                console.log(`[Health] Found config for provider: ${config.provider}`);
-                console.log(`[Health] Config details:`, JSON.stringify({ ...config, api_key: '***' }, null, 2));
                 const client = buildLlmClient(config);
                 isHealthy = await client.checkHealth();
                 message = isHealthy ? "Connected" : "Health check failed";
-                console.log(`[Health] Check result: ${isHealthy}, Message: ${message}`);
-            }
-            else {
-                console.log("[Health] No config found in DB or body.");
             }
         }
         catch (e) {
-            console.error(`[Health] Error: ${e.message}`);
             message = e.message;
         }
     }
-    else {
-        console.log("[Health] No workspace root, cannot check DB config.");
-    }
     res.json({ status: isHealthy ? "ok" : "error", connected: isHealthy, message });
 });
-app.post('/config', async (req, res) => {
-    console.log("[Config] Received new config.");
+app.post("/config", async (req, res) => {
     try {
         const config = req.body;
-        console.log(`[Config] Payload:`, JSON.stringify({ ...config, api_key: '***' }, null, 2));
-        // Verify we can build it
         const client = buildLlmClient(config);
-        // Save it
         await db.saveLlmConfig(config);
-        console.log("[Config] Config saved successfully.");
         res.json({ status: "configured", provider: config.provider, config });
     }
     catch (e) {
-        console.error(`[Config] Error saving config: ${e.message}`);
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/sessions', async (req, res) => {
+app.get("/sessions", async (req, res) => {
     try {
         const sessions = await db.getSessions();
         res.json(sessions);
@@ -148,7 +127,7 @@ app.get('/sessions', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.post('/sessions', async (req, res) => {
+app.post("/sessions", async (req, res) => {
     try {
         const { title, mode } = req.body;
         const session = await db.createSession(title, mode);
@@ -158,7 +137,7 @@ app.post('/sessions', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.patch('/sessions/:id', async (req, res) => {
+app.patch("/sessions/:id", async (req, res) => {
     try {
         const { title, mode } = req.body;
         const updated = await db.updateSessionMeta(req.params.id, { title, mode });
@@ -172,7 +151,7 @@ app.patch('/sessions/:id', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/sessions/:id', async (req, res) => {
+app.get("/sessions/:id", async (req, res) => {
     try {
         const session = await db.getSession(req.params.id);
         if (!session) {
@@ -185,7 +164,7 @@ app.get('/sessions/:id', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/sessions/:id/messages', async (req, res) => {
+app.get("/sessions/:id/messages", async (req, res) => {
     try {
         const messages = await db.getMessages(req.params.id);
         res.json(messages);
@@ -194,7 +173,7 @@ app.get('/sessions/:id/messages', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/sessions/:id/logs', async (req, res) => {
+app.get("/sessions/:id/logs", async (req, res) => {
     try {
         const logs = await db.getLogs(req.params.id);
         res.json(logs);
@@ -203,14 +182,13 @@ app.get('/sessions/:id/logs', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-// Diff snapshots
-app.get('/diffs', async (req, res) => {
+app.get("/diffs", async (req, res) => {
     try {
         const { session_id, path: queryPath, limit } = req.query;
         const diffs = await db.getDiffs({
-            session_id: typeof session_id === 'string' ? session_id : undefined,
-            path: typeof queryPath === 'string' ? queryPath : undefined,
-            limit: limit ? Number(limit) : undefined
+            session_id: typeof session_id === "string" ? session_id : undefined,
+            path: typeof queryPath === "string" ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined,
         });
         res.json(diffs);
     }
@@ -218,13 +196,13 @@ app.get('/diffs', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/sessions/:id/diffs', async (req, res) => {
+app.get("/sessions/:id/diffs", async (req, res) => {
     try {
         const { path: queryPath, limit } = req.query;
         const diffs = await db.getDiffs({
             session_id: req.params.id,
-            path: typeof queryPath === 'string' ? queryPath : undefined,
-            limit: limit ? Number(limit) : undefined
+            path: typeof queryPath === "string" ? queryPath : undefined,
+            limit: limit ? Number(limit) : undefined,
         });
         res.json(diffs);
     }
@@ -232,7 +210,7 @@ app.get('/sessions/:id/diffs', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.get('/diffs/:diffId', async (req, res) => {
+app.get("/diffs/:diffId", async (req, res) => {
     try {
         const diff = await db.getDiffById(Number(req.params.diffId));
         if (!diff) {
@@ -245,17 +223,14 @@ app.get('/diffs/:diffId', async (req, res) => {
         res.status(500).json({ detail: e.message });
     }
 });
-app.post('/sessions/:id/chat', async (req, res) => {
+app.post("/sessions/:id/chat", async (req, res) => {
     const sessionId = req.params.id;
     const { message, mode, attachments, tool_overrides } = req.body;
     const enabledTools = Array.isArray(tool_overrides)
-        ? tool_overrides.filter(t => typeof t === 'string' && t.trim().length > 0)
+        ? tool_overrides.filter(t => typeof t === "string" && t.trim().length > 0)
         : [];
-    // We need to access the workspace root inside the async generator
-    // contextvars should propagate if we are in the same async chain
-    const root = req.headers['x-workspace-root'];
-    // Re-wrap in context just to be safe for the async operation if context is lost
-    context_1.workspaceContext.run({ root }, async () => {
+    const root = req.headers["x-workspace-root"];
+    context_1.workspaceContext.run({ id: root || sessionId, root }, async () => {
         try {
             const config = await db.loadLlmConfig();
             if (!config) {
@@ -265,7 +240,6 @@ app.post('/sessions/:id/chat', async (req, res) => {
             const llm = buildLlmClient(config);
             const contextMaxLength = config.context_max_length || 128000;
             const agent = new agent_1.Agent(llm, sessionId, contextMaxLength);
-            // Set mode
             const session = await db.getSession(sessionId);
             const resolvedMode = mode || session?.mode;
             if (session) {
@@ -275,21 +249,18 @@ app.post('/sessions/:id/chat', async (req, res) => {
                 }
             }
             else {
-                agent.setMode(resolvedMode || 'chat', enabledTools);
+                agent.setMode(resolvedMode || "chat", enabledTools);
             }
             const activeTools = agent.getActiveTools();
             const chatOptions = {
-                max_tokens: config.output_max_tokens, // OpenAI/Anthropic use max_tokens for output limit
-                temperature: config.temperature
+                max_tokens: config.output_max_tokens,
+                temperature: config.temperature,
             };
-            // When tools are available, ask the model to pick and allow parallel tool calls (OpenAI supports it; Anthropic ignores safely)
             if (activeTools.length > 0) {
-                chatOptions.tool_choice = 'auto';
+                chatOptions.tool_choice = "auto";
                 chatOptions.parallel_tool_calls = true;
             }
-            console.log(`[Chat] session=${sessionId} mode=${resolvedMode || 'chat'} tools=${activeTools.map(t => t.name).join(', ') || 'none'}`);
-            // Stream response
-            res.setHeader('Content-Type', 'text/plain');
+            res.setHeader("Content-Type", "text/plain");
             try {
                 for await (const chunk of agent.chat(message, attachments, chatOptions)) {
                     res.write(chunk);
@@ -310,36 +281,59 @@ app.post('/sessions/:id/chat', async (req, res) => {
         }
     });
 });
-// --- Workspace Endpoints ---
-app.post('/workspace/bind-root', async (req, res) => {
-    console.log(`[Workspace] Binding root: ${req.body.root}`);
+app.get("/workspaces", async (req, res) => {
     try {
-        const { root } = req.body;
-        if (!root)
-            throw new Error("Root path is required");
-        // Validate existence
-        const stats = await promises_1.default.stat(root);
-        if (!stats.isDirectory())
-            throw new Error("Path is not a directory");
-        // Run inside context to init DB
-        await context_1.workspaceContext.run({ root }, async () => {
-            await db.initDb();
+        const list = manager_1.workspaceManager.listWorkspaces();
+        res.json(list);
+    }
+    catch (e) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+app.post("/workspaces/close", async (req, res) => {
+    try {
+        const id = req.body?.id || req.body?.workspaceId || req.headers["x-workspace-id"];
+        if (!id) {
+            res.status(400).json({ detail: "Workspace id is required" });
+            return;
+        }
+        await manager_1.workspaceManager.closeWorkspace(String(id));
+        res.json({ id: String(id), status: "closed" });
+    }
+    catch (e) {
+        res.status(500).json({ detail: e.message });
+    }
+});
+app.post("/workspace/bind-root", async (req, res) => {
+    try {
+        const { root, settings } = req.body;
+        if (!root) {
+            res.status(400).json({ detail: "Root path is required" });
+            return;
+        }
+        const handle = await manager_1.workspaceManager.openWorkspace(root, { settings: settings && typeof settings === "object" ? settings : {} });
+        const firstFolder = handle.descriptor.folders[0];
+        const appliedRoot = firstFolder ? firstFolder.path : root;
+        const dataDir = path_1.default.join(appliedRoot, ".aichat");
+        const rpc = (0, rpc_1.createWorkspaceRpcEnvelope)(handle.descriptor.id, {
+            root: appliedRoot,
+            data_dir: dataDir,
         });
-        console.log(`[Workspace] Root bound successfully: ${root}`);
         res.json({
-            root,
+            root: appliedRoot,
             status: "ok",
-            data_dir: path_1.default.join(root, ".aichat")
+            data_dir: dataDir,
+            workspace_id: handle.descriptor.id,
+            workspace: handle.descriptor,
+            rpc,
         });
     }
     catch (e) {
-        console.error(`[Workspace] Bind error: ${e.message}`);
         res.status(400).json({ detail: e.message });
     }
 });
-app.get('/workspace/structure', async (req, res) => {
+app.get("/workspace/structure", async (req, res) => {
     try {
-        // use middleware bound root
         const root = (0, context_1.getWorkspaceRoot)();
         const structure = await (0, filesystem_1.getProjectStructure)(root);
         res.json(structure);
@@ -348,49 +342,118 @@ app.get('/workspace/structure', async (req, res) => {
         res.status(400).json({ detail: e.message });
     }
 });
-app.get('/workspace/read', async (req, res) => {
+app.get("/workspace/read", async (req, res) => {
     try {
         const root = (0, context_1.getWorkspaceRoot)();
         const relativePath = req.query.path;
-        if (!relativePath)
-            throw new Error("Path is required");
-        const fullPath = path_1.default.resolve(root, relativePath);
-        if (!fullPath.startsWith(root))
-            throw new Error("Access denied");
-        const content = await promises_1.default.readFile(fullPath, 'utf-8');
+        if (!relativePath) {
+            res.status(400).json({ detail: "Path is required" });
+            return;
+        }
+        const { fullPath } = await (0, filesystem_1.resolveWorkspaceFilePath)(root, relativePath, { mustExist: true });
+        const content = await promises_1.default.readFile(fullPath, "utf-8");
         res.json({ path: relativePath, content, truncated: false });
     }
     catch (e) {
         res.status(400).json({ detail: e.message });
     }
 });
-app.post('/workspace/write', async (req, res) => {
+app.post("/workspace/write", async (req, res) => {
     try {
         const root = (0, context_1.getWorkspaceRoot)();
         const { path: relativePath, content, create_directories } = req.body;
-        if (!relativePath)
-            throw new Error("Path is required");
-        const fullPath = path_1.default.resolve(root, relativePath);
-        if (!fullPath.startsWith(root))
-            throw new Error("Access denied");
+        if (!relativePath) {
+            res.status(400).json({ detail: "Path is required" });
+            return;
+        }
+        const { fullPath } = await (0, filesystem_1.resolveWorkspaceFilePath)(root, relativePath, { mustExist: false, preferExistingParent: true });
         const beforeSnapshot = await (0, diffs_1.takeSnapshot)(relativePath);
         if (create_directories) {
             await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
         }
-        await promises_1.default.writeFile(fullPath, content || "", 'utf-8');
+        await promises_1.default.writeFile(fullPath, content || "", "utf-8");
         const afterSnapshot = await (0, diffs_1.takeSnapshot)(relativePath);
         try {
             await (0, diffs_1.persistDiffSafely)({
-                sessionId: typeof req.body.session_id === 'string' ? req.body.session_id : '',
+                sessionId: typeof req.body.session_id === "string" ? req.body.session_id : "",
                 path: relativePath,
                 before: beforeSnapshot,
-                after: afterSnapshot
+                after: afterSnapshot,
             });
         }
         catch (e) {
-            console.warn(`[Workspace] Failed to persist diff for ${relativePath}: ${e.message}`);
         }
         res.json({ path: relativePath, bytes: (content || "").length });
+    }
+    catch (e) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+app.post("/workspace/mkdir", async (req, res) => {
+    try {
+        const root = (0, context_1.getWorkspaceRoot)();
+        const rel = req.body?.path;
+        if (!rel) {
+            res.status(400).json({ detail: "Path is required" });
+            return;
+        }
+        const { fullPath } = await (0, filesystem_1.resolveWorkspaceFilePath)(root, rel, { mustExist: false, preferExistingParent: true });
+        await promises_1.default.mkdir(fullPath, { recursive: req.body?.recursive !== false });
+        res.json({ status: "ok", path: rel });
+    }
+    catch (e) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+app.post("/workspace/delete", async (req, res) => {
+    try {
+        const root = (0, context_1.getWorkspaceRoot)();
+        const rel = req.body?.path;
+        if (!rel) {
+            res.status(400).json({ detail: "Path is required" });
+            return;
+        }
+        const { fullPath } = await (0, filesystem_1.resolveWorkspaceFilePath)(root, rel, { mustExist: false, preferExistingParent: true });
+        let stats = null;
+        try {
+            stats = await promises_1.default.stat(fullPath);
+        }
+        catch {
+            res.json({ status: "ok", path: rel, existed: false });
+            return;
+        }
+        if (stats.isDirectory()) {
+            await promises_1.default.rm(fullPath, { recursive: req.body?.recursive !== false, force: true });
+        }
+        else {
+            await promises_1.default.unlink(fullPath);
+        }
+        res.json({ status: "ok", path: rel, existed: true });
+    }
+    catch (e) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+app.post("/workspace/rename", async (req, res) => {
+    try {
+        const root = (0, context_1.getWorkspaceRoot)();
+        const from = req.body?.from;
+        const to = req.body?.to;
+        if (!from || !to) {
+            res.status(400).json({ detail: "From/To are required" });
+            return;
+        }
+        const { fullPath: fromPath, rootPath } = await (0, filesystem_1.resolveWorkspaceFilePath)(root, from, { mustExist: true });
+        const toPath = path_1.default.resolve(rootPath, String(to || ""));
+        const rootLower = rootPath.toLowerCase();
+        const toLower = toPath.toLowerCase();
+        const prefix = rootLower.endsWith(path_1.default.sep) ? rootLower : `${rootLower}${path_1.default.sep}`;
+        if (!(toLower === rootLower || toLower.startsWith(prefix))) {
+            throw new Error("Access denied");
+        }
+        await promises_1.default.mkdir(path_1.default.dirname(toPath), { recursive: true });
+        await promises_1.default.rename(fromPath, toPath);
+        res.json({ status: "ok", from, to });
     }
     catch (e) {
         res.status(400).json({ detail: e.message });

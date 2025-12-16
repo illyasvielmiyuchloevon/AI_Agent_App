@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getTranslation } from '../utils/i18n';
 
 const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit = '', defaultValue }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -95,8 +96,9 @@ const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit =
     );
 };
 
-function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage }) {
-    const [activeTab, setActiveTab] = useState('general');
+function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, onSave, onClose, checkApiStatus, apiStatus, apiMessage, appearanceMode = 'system', onChangeAppearanceMode, language = 'zh', onLanguageChange, displayPreferences, onChangeDisplayPreference, onOpenInEditor, fullscreen, onToggleFullscreen, variant = 'modal' }) {
+    const [activeTab, setActiveTab] = useState('app');
+    const t = (key) => getTranslation(language, key);
     const currentConfig = config[config.provider];
     const isFirstRun = useRef(true);
 
@@ -149,11 +151,139 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
         }));
     };
 
+    const renderAppSettings = () => (
+        <>
+            <div className="config-section-title">{t('appGeneral')}</div>
+            <div className="config-field">
+                <label className="config-label">{t('globalSettings')}</label>
+                <div style={{ fontSize: '12px', color: '#666' }}>
+                    {t('globalSettingsDesc')}
+                </div>
+            </div>
+
+            <div className="config-field">
+                <label className="config-label">{t('language')}</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'zh'}
+                            onChange={() => onLanguageChange && onLanguageChange('zh')}
+                        />
+                        <span>中文</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'en'}
+                            onChange={() => onLanguageChange && onLanguageChange('en')}
+                        />
+                        <span>English</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="app-language"
+                            checked={language === 'ja'}
+                            onChange={() => onLanguageChange && onLanguageChange('ja')}
+                        />
+                        <span>日本語</span>
+                    </label>
+                </div>
+            </div>
+
+            <div className="config-field">
+                <label className="config-label">Default View Location</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <div style={{ fontSize: '12px', marginBottom: '4px', color: '#666' }}>Settings Panel</div>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-settings"
+                            checked={displayPreferences?.settings === 'modal'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('settings', 'modal')}
+                        />
+                        <span>Use Modal Window</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-settings"
+                            checked={displayPreferences?.settings === 'editor'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('settings', 'editor')}
+                        />
+                        <span>Use Editor View</span>
+                    </label>
+
+                    <div style={{ fontSize: '12px', margin: '8px 0 4px', color: '#666' }}>Diff Viewer</div>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-diff"
+                            checked={displayPreferences?.diff === 'modal'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('diff', 'modal')}
+                        />
+                        <span>Use Modal Window</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="view-diff"
+                            checked={displayPreferences?.diff === 'editor'}
+                            onChange={() => onChangeDisplayPreference && onChangeDisplayPreference('diff', 'editor')}
+                        />
+                        <span>Use Editor View</span>
+                    </label>
+                </div>
+            </div>
+        </>
+    );
+
+    const renderAppearanceSettings = () => (
+        <>
+            <div className="config-section-title">Theme & Appearance</div>
+            <div className="config-field">
+                <label className="config-label">Theme Mode</label>
+                <div className="config-grid" style={{ gridTemplateColumns: '1fr' }}>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'system'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('system')}
+                        />
+                        <span>Follow System</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'light'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('light')}
+                        />
+                        <span>Light</span>
+                    </label>
+                    <label className="config-tool-row">
+                        <input
+                            type="radio"
+                            name="theme-mode"
+                            checked={appearanceMode === 'dark'}
+                            onChange={() => onChangeAppearanceMode && onChangeAppearanceMode('dark')}
+                        />
+                        <span>Dark</span>
+                    </label>
+                </div>
+            </div>
+        </>
+    );
+
     const renderGeneralSettings = () => (
         <>
-            <div className="config-section-title">General Settings</div>
+            <div className="config-section-title">{t('llmAndSession')}</div>
             <div className="config-field">
-                <label className="config-label">Provider</label>
+                <label className="config-label">{t('provider')}</label>
                 <select
                     value={config.provider}
                     onChange={(e) => setConfig({ ...config, provider: e.target.value })}
@@ -164,7 +294,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 </select>
             </div>
             <div className="config-field">
-                <label className="config-label">API Key</label>
+                <label className="config-label">{t('apiKey')}</label>
                 <input
                     type="password"
                     value={currentConfig.api_key}
@@ -174,7 +304,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Base URL (Optional)</label>
+                <label className="config-label">{t('baseUrl')}</label>
                 <input
                     type="text"
                     value={currentConfig.base_url}
@@ -184,7 +314,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Model (Optional)</label>
+                <label className="config-label">{t('model')}</label>
                 <input
                     type="text"
                     value={currentConfig.model}
@@ -194,7 +324,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
             <div className="config-field">
-                <label className="config-label">Status Check Model (Optional)</label>
+                <label className="config-label">{t('statusCheckModel')}</label>
                 <input
                     type="text"
                     value={currentConfig.check_model}
@@ -204,7 +334,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 />
             </div>
 
-            <div className="config-section-title" style={{ marginTop: '24px' }}>Session Context</div>
+            <div className="config-section-title" style={{ marginTop: '24px' }}>{t('sessionContext')}</div>
             <div className="config-field">
                 <label className="config-tool-row">
                     <input 
@@ -212,15 +342,15 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                         checked={currentConfig.context_independent ?? true} 
                         onChange={(e) => updateCurrent('context_independent', e.target.checked)} 
                     />
-                    <span>Independent Session Context</span>
+                    <span>{t('independentSessionContext')}</span>
                 </label>
                 <div style={{ fontSize: '11px', color: '#666', marginTop: '4px', marginLeft: '24px' }}>
-                    Each session maintains its own context to prevent interference.
+                    {t('independentSessionContextDesc')}
                 </div>
             </div>
 
             <ConfigSlider
-                label="Context Window Limit"
+                label={t('contextWindowLimit')}
                 value={currentConfig.context_max_length ?? 128000}
                 min={32000}
                 max={256000}
@@ -230,7 +360,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                 helpText="Maximum context length (Range: 32k - 256k tokens). Default: 128k."
                 onChange={(val) => updateCurrent('context_max_length', val)}
             />
-
+            
             <div className="config-section-title" style={{ marginTop: '24px' }}>Model Parameters</div>
 
             <ConfigSlider
@@ -246,7 +376,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
             />
 
             <ConfigSlider
-                label="Temperature"
+                label={t('temperature')}
                 value={currentConfig.temperature ?? 0.8}
                 min={0.1}
                 max={2.0}
@@ -263,7 +393,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                     onClick={resetParameters}
                     style={{ width: '100%', justifyContent: 'center', color: '#666' }}
                 >
-                    Reset Parameters to Defaults
+                    {t('resetToDefaults')}
                 </button>
             </div>
         </>
@@ -283,69 +413,121 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
         </>
     );
 
-    return (
-        <div className="config-modal-backdrop">
-            <div className="config-modal">
-                <div className="config-header">
-                    <h2 className="config-title">Configuration</h2>
+    const content = (
+        <>
+            <div className="config-header">
+                <h2 className="config-title">Global Settings</h2>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {variant === 'modal' && (
+                        <>
+                            <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={onOpenInEditor}
+                                style={{ height: 28, fontSize: '0.85rem' }}
+                            >
+                                在编辑器查看
+                            </button>
+                            <button
+                                type="button"
+                                className="ghost-btn"
+                                onClick={onToggleFullscreen}
+                                style={{ height: 28, fontSize: '0.85rem' }}
+                            >
+                                {fullscreen ? '退出全屏' : '全屏显示'}
+                            </button>
+                        </>
+                    )}
                     <button className="config-close" onClick={onClose} aria-label="关闭设置">×</button>
                 </div>
+            </div>
+            
+            <div className="config-layout">
+                <div className="config-sidebar">
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'app' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('app')}
+                    >
+                        App General
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'appearance' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('appearance')}
+                    >
+                        Theme & Appearance
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'general' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('general')}
+                    >
+                        LLM & Session
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'agent' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('agent')}
+                    >
+                        Agent Tools
+                    </div>
+                    <div 
+                        className={`config-sidebar-item ${activeTab === 'canva' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('canva')}
+                    >
+                        Canva Tools
+                    </div>
+                </div>
                 
-                <div className="config-layout">
-                    <div className="config-sidebar">
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'general' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('general')}
-                        >
-                            General & LLM
-                        </div>
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'agent' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('agent')}
-                        >
-                            Agent Tools
-                        </div>
-                        <div 
-                            className={`config-sidebar-item ${activeTab === 'canva' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('canva')}
-                        >
-                            Canva Tools
-                        </div>
+                <div className="config-content">
+                    {activeTab === 'app' && renderAppSettings()}
+                    {activeTab === 'appearance' && renderAppearanceSettings()}
+                    {activeTab === 'general' && renderGeneralSettings()}
+                    {activeTab === 'agent' && renderToolSettings('agent', 'Agent Mode Tools')}
+                    {activeTab === 'canva' && renderToolSettings('canva', 'Canva Mode Tools')}
+                </div>
+            </div>
+
+            <div className="config-footer">
+                 <div className="config-actions" style={{ width: '100%' }}>
+                    <div className={`config-status ${apiStatus}`} style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
+                        {apiStatus !== 'unknown' && (
+                            <>
+                                <span className="dot" />
+                                {apiStatus === 'checking' ? 'Checking...' : (apiStatus === 'ok' ? 'Connected' : 'Connection Failed')}
+                            </>
+                        )}
+                        {apiMessage && (
+                            <span style={{ marginLeft: '10px', fontSize: '12px', color: apiStatus === 'ok' ? '#4caf50' : '#f44336' }}>
+                                {apiMessage}
+                            </span>
+                        )}
                     </div>
                     
-                    <div className="config-content">
-                        {activeTab === 'general' && renderGeneralSettings()}
-                        {activeTab === 'agent' && renderToolSettings('agent', 'Agent Mode Tools')}
-                        {activeTab === 'canva' && renderToolSettings('canva', 'Canva Mode Tools')}
+                    <div className="config-buttons">
+                         <button type="button" className="ghost-btn" onClick={checkApiStatus}>
+                            Test Connection
+                        </button>
+                        <button type="button" className="primary-btn" onClick={() => { onSave(); onClose(); }}>
+                            Save & Close
+                        </button>
                     </div>
-                </div>
+                 </div>
+            </div>
+        </>
+    );
 
-                <div className="config-footer">
-                     <div className="config-actions" style={{ width: '100%' }}>
-                        <div className={`config-status ${apiStatus}`} style={{ marginRight: 'auto', display: 'flex', alignItems: 'center' }}>
-                            {apiStatus !== 'unknown' && (
-                                <>
-                                    <span className="dot" />
-                                    {apiStatus === 'checking' ? 'Checking...' : (apiStatus === 'ok' ? 'Connected' : 'Connection Failed')}
-                                </>
-                            )}
-                            {apiMessage && (
-                                <span style={{ marginLeft: '10px', fontSize: '12px', color: apiStatus === 'ok' ? '#4caf50' : '#f44336' }}>
-                                    {apiMessage}
-                                </span>
-                            )}
-                        </div>
-                        
-                        <div className="config-buttons">
-                             <button type="button" className="ghost-btn" onClick={checkApiStatus}>
-                                Test Connection
-                            </button>
-                            <button type="button" className="primary-btn" onClick={() => { onSave(); onClose(); }}>
-                                Save & Close
-                            </button>
-                        </div>
-                     </div>
+    if (variant === 'inline') {
+        return (
+            <div className="config-inline-shell" style={{ flex: 1, minHeight: 0 }}>
+                <div className="config-modal" style={{ width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', borderRadius: 0 }}>
+                    {content}
                 </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="config-modal-backdrop">
+            <div className="config-modal" style={fullscreen ? { width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh', borderRadius: 0 } : undefined}>
+                {content}
             </div>
         </div>
     );

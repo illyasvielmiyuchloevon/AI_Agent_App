@@ -6,16 +6,87 @@ import ChatArea from './components/ChatArea';
 import LogPanel from './components/LogPanel';
 import ConfigPanel from './components/ConfigPanel';
 import TitleBar from './components/TitleBar';
-import Workspace from './components/Workspace';
+import EditorArea from './workbench/layout/EditorArea';
+import WorkbenchShell from './workbench/WorkbenchShell';
 import { LocalWorkspaceDriver } from './utils/localWorkspaceDriver';
+import { BackendWorkspaceDriver } from './utils/backendWorkspaceDriver';
 import DiffModal from './components/DiffModal';
+import { GitDriver } from './utils/gitDriver';
+import SourceControlPanel from './components/SourceControlPanel';
+import WelcomeEditor from './workbench/editors/WelcomeEditor';
+import { WELCOME_TAB_PATH } from './workbench/constants';
+import { useWorkbenchStateMachine, WorkbenchStates } from './workbench/workbenchStateMachine';
+import { createWorkspaceServices } from './workbench/workspace/workspaceServices';
+import { createWorkspaceController } from './workbench/workspace/workspaceController';
+import ConnectRemoteModal from './components/ConnectRemoteModal';
+import CloneRepositoryModal from './components/CloneRepositoryModal';
+import { getTranslation } from './utils/i18n';
 
 const DEBUG_SEPARATORS = false;
 
 const THEME_STORAGE_KEY = 'ai_agent_theme_choice';
+const LANGUAGE_STORAGE_KEY = 'ai_agent_language_choice';
 const detectSystemTheme = () => {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
+const readStoredLanguage = () => {
+    if (typeof window === 'undefined') return 'zh'; // Default to Chinese
+    try {
+        return window.localStorage.getItem(LANGUAGE_STORAGE_KEY) || 'zh';
+    } catch {
+        return 'zh';
+    }
+};
+
+const persistLanguageChoice = (value) => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(LANGUAGE_STORAGE_KEY, value);
+    } catch {
+        // ignore
+    }
+};
+
+const pathDirname = (absPath = '') => {
+  const s = String(absPath || '');
+  const idx1 = s.lastIndexOf('/');
+  const idx2 = s.lastIndexOf('\\');
+  const idx = Math.max(idx1, idx2);
+  if (idx < 0) return '';
+  return s.slice(0, idx);
+};
+
+const pathJoinAbs = (baseAbs = '', rel = '') => {
+  const base = String(baseAbs || '').replace(/[\\\/]+$/, '');
+  const suffix = String(rel || '').replace(/^[\\\/]+/, '');
+  if (!base) return suffix;
+  if (!suffix) return base;
+  const sep = base.includes('\\') ? '\\' : '/';
+  const normalized = suffix.replace(/[\\\/]+/g, sep);
+  return `${base}${sep}${normalized}`;
+};
+
+const pathRelativeToRoot = (rootAbs = '', fileAbs = '') => {
+  const root = String(rootAbs || '').replace(/[\\\/]+$/, '');
+  const file = String(fileAbs || '');
+  if (!root || !file) return '';
+  const lowerRoot = root.toLowerCase();
+  const lowerFile = file.toLowerCase();
+  if (!lowerFile.startsWith(lowerRoot)) return '';
+  let rel = file.slice(root.length);
+  rel = rel.replace(/^[\\\/]+/, '');
+  rel = rel.replace(/\\/g, '/');
+  if (!rel || rel.includes('..')) return '';
+  return rel;
+};
+
+const isFileUnderRoot = (rootAbs = '', fileAbs = '') => {
+  const root = String(rootAbs || '').replace(/[\\\/]+$/, '');
+  const file = String(fileAbs || '');
+  if (!root || !file) return false;
+  return file.toLowerCase().startsWith(root.toLowerCase());
 };
 const readStoredTheme = () => {
   if (typeof window === 'undefined') return null;
@@ -36,6 +107,29 @@ const persistThemeChoice = (value) => {
 
 const SESSION_STORAGE_KEY = 'ai_agent_sessions_ping';
 const LAYOUT_STORAGE_KEY = 'ai_agent_layout_state';
+
+const GLOBAL_CONFIG_STORAGE_KEY = 'ai_agent_global_llm_config_v1';
+
+const readGlobalConfig = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+      const raw = window.localStorage.getItem(GLOBAL_CONFIG_STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+  } catch {
+      return null;
+  }
+};
+
+const persistGlobalConfig = (value) => {
+  if (typeof window === 'undefined') return;
+  try {
+      const payload = value || {};
+      window.localStorage.setItem(GLOBAL_CONFIG_STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+      console.warn('Persist global config failed', err);
+  }
+};
 
 const MODE_OPTIONS = [
   { key: 'chat', label: 'Chat', description: '纯聊天，无任何工具' },
@@ -78,6 +172,7 @@ const DEFAULT_PROJECT_CONFIG = {
   projectName: '',
   projectPath: '',
   backendRoot: '',
+  workspaceId: '',
   provider: 'openai',
   openai: { api_key: '', model: '', base_url: '', check_model: '' },
   anthropic: { api_key: '', model: '', base_url: '', check_model: '' },
@@ -173,7 +268,11 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       api_key: snapshot.api_key || '',
       model: snapshot.model || '',
       base_url: snapshot.base_url || '',
-      check_model: snapshot.check_model || ''
+      check_model: snapshot.check_model || '',
+      context_max_length: snapshot.context_max_length,
+      output_max_tokens: snapshot.output_max_tokens,
+      temperature: snapshot.temperature,
+      context_independent: snapshot.context_independent
   };
   const openai = { ...(fallback.openai || DEFAULT_PROJECT_CONFIG.openai), ...(provider === 'openai' ? shared : {}) };
   const anthropic = { ...(fallback.anthropic || DEFAULT_PROJECT_CONFIG.anthropic), ...(provider === 'anthropic' ? shared : {}) };
@@ -229,7 +328,11 @@ const initialWorkspaceState = {
   view: 'code',
   entryCandidates: [],
   previewEntry: '',
+  workspaceRoots: [],
 };
+
+const SETTINGS_TAB_PATH = '__system__/settings';
+const DIFF_TAB_PREFIX = '__diff__/';
 
 function App() {
   const mergeToolSettings = (incoming) => ({
@@ -237,12 +340,43 @@ function App() {
       canva: { ...DEFAULT_TOOL_SETTINGS.canva, ...(incoming?.canva || {}) }
   });
   const storedThemePreference = readStoredTheme();
+  const [language, setLanguage] = useState(readStoredLanguage);
+
+  const handleLanguageChange = (lang) => {
+    setLanguage(lang);
+    persistLanguageChoice(lang);
+  };
+
   // --- Config State ---
   const [projectConfig, setProjectConfig] = useState(DEFAULT_PROJECT_CONFIG);
-  const [config, setConfig] = useState({ 
-    provider: DEFAULT_PROJECT_CONFIG.provider, 
-    openai: { ...DEFAULT_PROJECT_CONFIG.openai },
-    anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic }
+  const workbench = useWorkbenchStateMachine();
+  const workspaceServices = useMemo(() => createWorkspaceServices(), []);
+  const {
+    model: workbenchModel,
+    boot: workbenchBoot,
+    syncFromLegacy: syncWorkbenchFromLegacy,
+    openRequested: workbenchOpenRequested,
+    closeRequested: workbenchCloseRequested,
+  } = workbench;
+  const [config, setConfig] = useState(() => {
+    const stored = readGlobalConfig();
+    if (stored) {
+      const provider = stored.provider || DEFAULT_PROJECT_CONFIG.provider;
+      return {
+        provider,
+        openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(stored.openai || {}) },
+        anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(stored.anthropic || {}) }
+      };
+    }
+    return {
+      provider: DEFAULT_PROJECT_CONFIG.provider,
+      openai: { ...DEFAULT_PROJECT_CONFIG.openai },
+      anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic }
+    };
+  });
+  const [uiDisplayPreferences, setUiDisplayPreferences] = useState(() => {
+    const stored = readGlobalConfig();
+    return stored?.uiDisplayPreferences || { settings: 'modal', diff: 'modal' };
   });
   const [showConfig, setShowConfig] = useState(false);
   const [configured, setConfigured] = useState(false);
@@ -261,16 +395,34 @@ function App() {
   const [loadingSessions, setLoadingSessions] = useState(new Set());
   const [currentMode, setCurrentMode] = useState('chat');
   const [workspaceState, setWorkspaceState] = useState(initialWorkspaceState);
+  const [diffTabs, setDiffTabs] = useState({});
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceDriver, setWorkspaceDriver] = useState(null);
   const [workspaceBindingStatus, setWorkspaceBindingStatus] = useState('idle'); // idle | checking | ready | error
   const [workspaceBindingError, setWorkspaceBindingError] = useState('');
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('');
   const [backendWorkspaceRoot, setBackendWorkspaceRoot] = useState('');
+  const [backendWorkspaceId, setBackendWorkspaceId] = useState('');
+  const [activeWorkspaces, setActiveWorkspaces] = useState([]);
   const [hotReloadToken, setHotReloadToken] = useState(0);
-  const [toolSettings, setToolSettings] = useState(DEFAULT_TOOL_SETTINGS);
+  const [toolSettings, setToolSettings] = useState(() => {
+    const stored = readGlobalConfig();
+    return mergeToolSettings(stored?.toolSettings || DEFAULT_TOOL_SETTINGS);
+  });
   const [theme, setTheme] = useState(() => storedThemePreference || DEFAULT_PROJECT_CONFIG.theme || detectSystemTheme());
   const abortControllerRef = useRef(null);
+  const pendingOpenFileRef = useRef({ absPath: '', expectedRoot: '' });
+  const clearPendingOpenFile = useCallback(() => {
+      pendingOpenFileRef.current = { absPath: '', expectedRoot: '' };
+  }, []);
+  const pendingStartActionRef = useRef({ type: null });
+  const clearPendingStartAction = useCallback(() => {
+      pendingStartActionRef.current = { type: null };
+  }, []);
+  const pendingTemplateRef = useRef(null);
+  const clearPendingTemplate = useCallback(() => {
+      pendingTemplateRef.current = null;
+  }, []);
   const saveTimersRef = useRef({});
   const configSaveTimerRef = useRef(null);
   const streamBufferRef = useRef('');
@@ -280,11 +432,16 @@ function App() {
   const workspaceInitializedRef = useRef(false);
   const taskSnapshotRef = useRef(null);
   const configHydratedRef = useRef(false);
+  const globalConfigHydratedRef = useRef(!!readGlobalConfig());
   const userThemePreferenceRef = useRef(!!storedThemePreference);
+  const diffTabCounterRef = useRef(0);
 
   // --- Modal State ---
   const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', onConfirm: () => {}, onClose: () => {} });
   const [diffModal, setDiffModal] = useState(null);
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  const [configFullscreen, setConfigFullscreen] = useState(false);
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -294,6 +451,13 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() => pickLayoutNumber('sidebarWidth', DEFAULT_PROJECT_CONFIG.sidebarWidth));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState('sessions');
+  
+  // --- Git State ---
+  const [gitStatus, setGitStatus] = useState(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitRemotes, setGitRemotes] = useState([]);
+  const [gitLog, setGitLog] = useState([]);
+
   const [chatPanelWidth, setChatPanelWidth] = useState(() => pickLayoutNumber('chatWidth', DEFAULT_PROJECT_CONFIG.chatPanelWidth));
   const [chatPanelCollapsed, setChatPanelCollapsed] = useState(false);
   const [activeResizeTarget, setActiveResizeTarget] = useState(null);
@@ -314,7 +478,8 @@ function App() {
 
   const projectReady = !!workspaceDriver;
   const backendBound = !!backendWorkspaceRoot && workspaceBindingStatus === 'ready';
-  const hasElectronPicker = () => typeof window !== 'undefined' && !!window.electronAPI?.openFolder;
+  const hasElectronPicker = () =>
+      typeof window !== 'undefined' && (!!window.electronAPI?.workspace?.pickFolder || !!window.electronAPI?.openFolder);
   const projectHeaders = useMemo(
       () => (backendWorkspaceRoot ? { 'X-Workspace-Root': backendWorkspaceRoot } : {}),
       [backendWorkspaceRoot]
@@ -338,8 +503,9 @@ function App() {
       merged.projectName = merged.projectName || projectMeta.name || merged.projectPath || '';
       merged.projectPath = merged.projectPath || merged.backendRoot || projectMeta.pathLabel || '';
       merged.backendRoot = merged.backendRoot || merged.projectPath || projectMeta.pathLabel || '';
+      merged.workspaceId = merged.workspaceId || backendWorkspaceId || '';
       return merged;
-  }, [mergeToolSettings, projectMeta.name, projectMeta.pathLabel]);
+  }, [mergeToolSettings, projectMeta.name, projectMeta.pathLabel, backendWorkspaceId]);
 
   // Helper to get flat config for backend
   const getBackendConfig = () => {
@@ -379,28 +545,9 @@ function App() {
   }, [config.anthropic, config.openai, config.provider]);
 
   const fetchPersistedBackendConfig = useCallback(async ({ silent = false } = {}) => {
-      if (!projectReady) return null;
-      try {
-          const res = await projectFetch('/api/config');
-          if (!res.ok) return null;
-          const data = await res.json();
-          if (data?.config) {
-              const applied = applyBackendConfigSnapshot(data.config);
-              if (data.config.api_key) {
-                  configHydratedRef.current = true;
-              }
-              if (!silent) {
-                  setApiStatus('unknown');
-              }
-              return applied;
-          }
-      } catch (err) {
-          if (!silent) {
-              console.error('Fetch backend config failed', err);
-          }
-      }
+      // Backend config persistence is deprecated in favor of local file config (.aichat/config.json)
       return null;
-  }, [applyBackendConfigSnapshot, projectFetch, projectReady]);
+  }, []);
 
   const checkApiStatus = async () => {
       if (!projectReady) {
@@ -429,20 +576,11 @@ function App() {
   const handleConfigSubmit = async (options = {}) => {
     const { silent = false } = options;
     try {
-      const res = await projectFetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(getBackendConfig()),
-      });
-      if (res.ok) {
+        // Backend config persistence is deprecated.
+        // We now rely on local file persistence via useEffect hook.
         setConfigured(true);
         setProjectConfig((prev) => ({ ...prev, provider: config.provider, openai: { ...config.openai }, anthropic: { ...config.anthropic } }));
         if (!silent) checkApiStatus();
-      } else {
-        const errData = await res.json();
-        if (!silent) alert(`Configuration failed: ${errData.detail || 'Unknown error'}`);
-        else console.error(`Configuration failed: ${errData.detail || 'Unknown error'}`);
-      }
     } catch (err) {
       console.error(err);
       if (!silent) alert(`Error configuring agent: ${err.message}`);
@@ -450,25 +588,10 @@ function App() {
   };
 
   const applyStoredConfig = useCallback(async ({ silent = false } = {}) => {
-      const payload = getBackendConfig();
-      if (!payload.api_key || !projectReady) return;
-      try {
-          const res = await projectFetch('/api/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-          });
-          if (res.ok) {
-              setConfigured(true);
-              checkApiStatus();
-          } else if (!silent) {
-              alert('Configuration failed');
-          }
-      } catch (err) {
-          console.error(err);
-          if (!silent) alert('Error configuring agent');
-      }
-  }, [getBackendConfig, checkApiStatus, projectFetch, projectReady]);
+      // Backend config persistence is deprecated.
+      setConfigured(true);
+      checkApiStatus();
+  }, [checkApiStatus]);
 
   // --- Workspace helpers ---
   const persistToolSettings = (updater) => {
@@ -479,18 +602,36 @@ function App() {
       });
   };
 
-  const bindBackendWorkspaceRoot = useCallback(async (rootPath, { silent = false } = {}) => {
+  const openBackendWorkspace = useCallback(async (workspaceOrRoot, { silent = false } = {}) => {
+      const descriptor = workspaceOrRoot && typeof workspaceOrRoot === 'object' ? workspaceOrRoot : null;
+      const rootPath = descriptor && Array.isArray(descriptor.folders) && descriptor.folders[0] && typeof descriptor.folders[0].path === 'string'
+          ? descriptor.folders[0].path
+          : workspaceOrRoot;
       const trimmed = (rootPath || '').trim();
       if (!trimmed) {
           setBackendWorkspaceRoot('');
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+                  window.__NODE_AGENT_WORKSPACE_ROOT__ = '';
+              }
+          } catch {}
           setProjectConfig((cfg) => ({ ...cfg, backendRoot: '' }));
           return;
       }
       if (!isAbsolutePath(trimmed)) {
-          const message = '请填写后端工作区的绝对路径，例如 H:\\\\04';
+          const message = '请填写 Workspace 的绝对路径，例如 H:\\\\04';
           setWorkspaceBindingStatus('error');
           setWorkspaceBindingError(message);
           setBackendWorkspaceRoot('');
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+                  window.__NODE_AGENT_WORKSPACE_ROOT__ = '';
+              }
+          } catch {}
           setProjectConfig((cfg) => ({ ...cfg, backendRoot: '' }));
           if (!silent) {
               console.warn(message);
@@ -499,57 +640,172 @@ function App() {
       }
       try {
           setWorkspaceBindingStatus('checking');
-          const res = await fetch('/api/workspace/bind-root', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
-              body: JSON.stringify({ root: trimmed })
-          });
-          let data = {};
+          const abort = new AbortController();
+          let timeoutId = null;
           try {
-              data = await res.json();
-          } catch {
-              data = {};
+              timeoutId = setTimeout(() => abort.abort(), 15000);
+              const res = await fetch('/api/workspace/bind-root', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
+                  body: JSON.stringify({
+                      root: trimmed,
+                      settings: {
+                          provider: config.provider,
+                          model: (config[config.provider] && config[config.provider].model) || '',
+                          toolSettings,
+                      },
+                  }),
+                  signal: abort.signal,
+              });
+              let data = {};
+              try {
+                  data = await res.json();
+              } catch {
+                  data = {};
+              }
+              if (!res.ok) {
+                  throw new Error(data.detail || res.statusText || '打开 Workspace 失败');
+              }
+              const applied = data.root || trimmed;
+              const workspaceId = typeof data.workspace_id === 'string' ? data.workspace_id.trim() : '';
+              setBackendWorkspaceId(workspaceId);
+              setBackendWorkspaceRoot(applied);
+              try {
+                  if (typeof window !== 'undefined') {
+                      window.__NODE_AGENT_WORKSPACE_ID__ = workspaceId;
+                      window.__NODE_AGENT_WORKSPACE_ROOT__ = applied;
+                  }
+              } catch {}
+              setProjectConfig((cfg) => ({
+                  ...cfg,
+                  backendRoot: applied,
+                  projectPath: cfg.projectPath || applied,
+                  workspaceId: workspaceId || cfg.workspaceId || '',
+              }));
+              setWorkspaceBindingError('');
+              setWorkspaceBindingStatus('ready');
+              if (GitDriver.isAvailable()) {
+                  try {
+                      setGitLoading(true);
+                      const status = await GitDriver.status(applied);
+                      setGitStatus(status);
+                      const remotes = await GitDriver.getRemotes(applied);
+                      setGitRemotes(remotes);
+                      const log = await GitDriver.log(applied);
+                      setGitLog(log?.all || []);
+                  } finally {
+                      setGitLoading(false);
+                  }
+              }
+              return { descriptor: descriptor || (data.workspace || null) || null, workspaceId, root: applied };
+          } finally {
+              if (timeoutId) clearTimeout(timeoutId);
           }
-          if (!res.ok) {
-              throw new Error(data.detail || res.statusText || '绑定后端工作区失败');
-          }
-          const applied = data.root || trimmed;
-          setBackendWorkspaceRoot(applied);
-          setProjectConfig((cfg) => ({
-              ...cfg,
-              backendRoot: applied,
-              projectPath: cfg.projectPath || applied
-          }));
-          setWorkspaceBindingError('');
-          setWorkspaceBindingStatus('ready');
       } catch (err) {
           console.error('Bind backend workspace failed', err);
+          setBackendWorkspaceId('');
+          try {
+              if (typeof window !== 'undefined') {
+                  window.__NODE_AGENT_WORKSPACE_ID__ = '';
+              }
+          } catch {}
           setWorkspaceBindingStatus('error');
-          setWorkspaceBindingError(err?.message || '绑定后端工作区失败');
+          const isAbort = err?.name === 'AbortError';
+          setWorkspaceBindingError(isAbort ? '打开 Workspace 超时：请确认后端服务已启动' : (err?.message || '打开 Workspace 失败'));
           if (!silent) {
-              console.warn(`绑定后端工作区失败：${err.message || err}`);
+              console.warn(`打开 Workspace 失败：${err.message || err}`);
           }
       }
-  }, []);
+  }, [config, toolSettings]);
 
   const refreshRecentProjects = useCallback(async () => {
       try {
-          const list = await LocalWorkspaceDriver.listRecent();
-          setRecentProjects(list);
+          const [list, electronRecent] = await Promise.all([
+              LocalWorkspaceDriver.listRecent(),
+              (async () => {
+                  try {
+                      const api = typeof window !== 'undefined' ? window.electronAPI?.recent : null;
+                      if (!api?.list) return [];
+                      const res = await api.list();
+                      return res?.ok ? (res.items || []) : [];
+                  } catch {
+                      return [];
+                  }
+              })(),
+          ]);
+
+          const mergedById = new Map();
+
+          (electronRecent || []).forEach((entry) => {
+              if (!entry?.id) return;
+              mergedById.set(entry.id, { ...entry });
+          });
+
+          (list || []).forEach((proj) => {
+              if (!proj?.id) return;
+              const existing = mergedById.get(proj.id);
+              mergedById.set(proj.id, existing ? { ...proj, ...existing } : { ...proj });
+          });
+
+          const merged = Array.from(mergedById.values()).sort((a, b) => (b?.lastOpened || 0) - (a?.lastOpened || 0));
+          setRecentProjects(merged);
       } catch {
           setRecentProjects([]);
       }
   }, []);
 
+  useEffect(() => {
+      let cancelled = false;
+      const load = async () => {
+          try {
+              const res = await fetch('/api/workspaces');
+              if (!res.ok) return;
+              const data = await res.json();
+              if (!Array.isArray(data)) return;
+              if (!cancelled) setActiveWorkspaces(data);
+          } catch {
+          }
+      };
+      load();
+      const timer = setInterval(load, 5000);
+      return () => {
+          cancelled = true;
+          clearInterval(timer);
+      };
+  }, []);
+
+  const removeRecentProject = useCallback(async (proj) => {
+      const id = proj?.id;
+      if (!id) return;
+      try {
+          await LocalWorkspaceDriver.removeRecent(id);
+      } catch (err) {
+          console.warn('Remove recent (LocalWorkspaceDriver) failed', err);
+      }
+      try {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.recent : null;
+          await api?.remove?.(id);
+      } catch (err) {
+          console.warn('Remove recent (electron) failed', err);
+      }
+      refreshRecentProjects();
+  }, [refreshRecentProjects]);
+
   const applyConfigToState = useCallback((cfg, driver = null) => {
       setProjectConfig(cfg);
-      setConfig({
-          provider: cfg.provider,
-          openai: { ...cfg.openai },
-          anthropic: { ...cfg.anthropic }
-      });
-      setConfigured(!!cfg?.[cfg.provider]?.api_key);
-      setToolSettings(mergeToolSettings(cfg.toolSettings));
+      if (!globalConfigHydratedRef.current) {
+          const provider = cfg.provider || DEFAULT_PROJECT_CONFIG.provider;
+          setConfig({
+              provider,
+              openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(cfg.openai || {}) },
+              anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(cfg.anthropic || {}) }
+          });
+          setToolSettings((prev) => mergeToolSettings(cfg.toolSettings || prev));
+          globalConfigHydratedRef.current = true;
+      }
+      const effectiveProvider = (config && config.provider) || cfg.provider || DEFAULT_PROJECT_CONFIG.provider;
+      const activeConfig = (config && config[config.provider]) || cfg[effectiveProvider] || {};
+      setConfigured(!!activeConfig.api_key);
       const storedTheme = readStoredTheme();
       const nextTheme = storedTheme || cfg.theme || detectSystemTheme();
       setTheme(nextTheme);
@@ -569,7 +825,7 @@ function App() {
       const initialBackendRoot = isAbsolutePath(cfg.backendRoot) ? cfg.backendRoot : (isAbsolutePath(cfg.projectPath) ? cfg.projectPath : '');
       setBackendWorkspaceRoot(initialBackendRoot);
       setWorkspaceRootLabel(initialBackendRoot || cfg.projectPath || driver?.pathLabel || driver?.rootName || '');
-  }, [mergeToolSettings, userThemePreferenceRef]);
+  }, [mergeToolSettings, userThemePreferenceRef, config]);
 
   const loadProjectConfigFromDisk = useCallback(async (driver) => {
       if (!driver) return normalizeProjectConfig(DEFAULT_PROJECT_CONFIG);
@@ -657,6 +913,7 @@ function App() {
                   activeFile: userClosedAll ? '' : activeFile,
                   openTabs: userClosedAll ? [] : (openTabs.length ? openTabs : (activeFile ? [activeFile] : [])),
                   entryCandidates: data.entry_candidates || prev.entryCandidates,
+                  workspaceRoots: Array.isArray(data.roots) ? data.roots : prev.workspaceRoots,
               };
           });
           lastSyncRef.current = Date.now();
@@ -737,7 +994,7 @@ function App() {
       if (!driver) return;
       setWorkspaceBindingStatus('checking');
       configHydratedRef.current = false;
-      setWorkspaceState(initialWorkspaceState);
+      setWorkspaceState({ ...initialWorkspaceState, openTabs: [WELCOME_TAB_PATH], activeFile: WELCOME_TAB_PATH, view: 'code' });
       setSessions([]);
       setMessages([]);
       setToolRuns({});
@@ -767,13 +1024,13 @@ function App() {
           setBackendWorkspaceRoot('');
           setProjectConfig((prev) => ({ ...prev, backendRoot: '' }));
       } else {
-          await bindBackendWorkspaceRoot(candidateRoot, { silent: false });
+          await openBackendWorkspace(candidateRoot, { silent: false });
           setWorkspaceRootLabel(candidateRoot);
       }
 
       await syncWorkspaceFromDisk({ includeContent: true, highlight: false, driver });
       return cfg;
-  }, [applyConfigToState, bindBackendWorkspaceRoot, loadProjectConfigFromDisk, refreshRecentProjects, syncWorkspaceFromDisk]);
+  }, [applyConfigToState, openBackendWorkspace, loadProjectConfigFromDisk, refreshRecentProjects, syncWorkspaceFromDisk]);
 
   useEffect(() => {
       if (!workspaceDriver) return;
@@ -848,23 +1105,43 @@ function App() {
       }
   }, [currentSessionId, projectFetch]);
 
+  const openDiffTabInWorkspace = useCallback((diff) => {
+      if (!diff) return;
+      const index = diffTabCounterRef.current++;
+      const idBase = diff.diff_id !== undefined ? String(diff.diff_id) : (diff.id !== undefined ? String(diff.id) : (diff.path || 'diff'));
+      const tabId = `${DIFF_TAB_PREFIX}${idBase}#${index}`;
+      setDiffTabs((prev) => ({ ...prev, [tabId]: diff }));
+      setWorkspaceState((prev) => {
+          const exists = prev.openTabs.includes(tabId);
+          const nextTabs = exists ? prev.openTabs : [...prev.openTabs, tabId];
+          return { ...prev, openTabs: nextTabs, activeFile: tabId, view: 'code' };
+      });
+  }, []);
+
   const handleOpenDiff = useCallback(async (payload = {}) => {
       const diffId = payload?.diff_id || payload?.id;
       const path = payload?.path;
       const direct = payload && payload.before !== undefined && payload.after !== undefined ? payload : null;
       const latest = await fetchDiffSnapshot({ diffId, path });
-      if (latest && latest.before !== undefined && latest.after !== undefined) {
-          openDiffModal(latest);
-          return;
-      }
-      if (direct) {
-          openDiffModal(direct);
+      const diff = latest && latest.before !== undefined && latest.after !== undefined ? latest : direct;
+      if (diff) {
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
           return;
       }
       alert('未找到可用的 diff 快照（请确认已触发文件写入操作）');
-  }, [fetchDiffSnapshot, openDiffModal]);
+  }, [fetchDiffSnapshot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   const closeDiffModal = useCallback(() => setDiffModal(null), []);
+
+  const handleOpenDiffInWorkspace = useCallback((diff) => {
+      openDiffTabInWorkspace(diff);
+      setDiffModal(null);
+  }, [openDiffTabInWorkspace]);
 
   const collectRunKeys = (run) => {
       const keys = [];
@@ -1188,7 +1465,12 @@ function App() {
 
   const requestElectronFolderPath = useCallback(async () => {
       try {
-          if (hasElectronPicker()) {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+          if (api?.pickFolder) {
+              const res = await api.pickFolder();
+              if (res?.ok && !res?.canceled && res?.fsPath) return String(res.fsPath).trim();
+          }
+          if (hasElectronPicker() && window.electronAPI?.openFolder) {
               const result = await window.electronAPI.openFolder();
               if (result && typeof result === 'string') return result.trim();
           }
@@ -1198,39 +1480,142 @@ function App() {
       return '';
   }, []);
 
-  const handleSelectWorkspace = useCallback(async (projectId = null) => {
-      setWorkspaceBindingError('');
-      try {
-          setWorkspaceBindingStatus('checking');
-          const driver = projectId ? await LocalWorkspaceDriver.fromPersisted(projectId) : await LocalWorkspaceDriver.pickFolder();
-          if (!driver) {
-              throw new Error('未找到可用的项目文件夹');
-          }
-          const electronPath = await requestElectronFolderPath();
-          const cfg = await hydrateProject(driver, electronPath);
-      } catch (err) {
-          setWorkspaceBindingStatus('error');
-          setWorkspaceBindingError(err?.message || '选择文件夹失败');
-      }
-  }, [hydrateProject, requestElectronFolderPath]);
+  const workspaceController = useMemo(() => createWorkspaceController({
+      workbenchOpenRequested,
+      workbenchCloseRequested,
+      workspaceServices,
+      abortControllerRef,
+      initialWorkspaceState,
+      welcomeTabPath: WELCOME_TAB_PATH,
+      LocalWorkspaceDriver,
+      BackendWorkspaceDriver,
+      requestElectronFolderPath,
+      hydrateProject,
+      refreshRecentProjects,
+      setWorkspaceState,
+      setWorkspaceDriver,
+      setWorkspaceBindingStatus,
+      setWorkspaceBindingError,
+      setWorkspaceRootLabel,
+      setBackendWorkspaceRoot,
+      setBackendWorkspaceId,
+      setProjectMeta,
+      setSessions,
+      setMessages,
+      setToolRuns,
+      setLogs,
+      setTaskReview,
+      setShowLogs,
+      setCurrentSessionId,
+      setDiffTabs,
+  }), [
+      abortControllerRef,
+      hydrateProject,
+      refreshRecentProjects,
+      requestElectronFolderPath,
+      setBackendWorkspaceRoot,
+      setBackendWorkspaceId,
+      setCurrentSessionId,
+      setDiffTabs,
+      setLogs,
+      setMessages,
+      setProjectMeta,
+      setSessions,
+      setShowLogs,
+      setTaskReview,
+      setToolRuns,
+      setWorkspaceBindingError,
+      setWorkspaceBindingStatus,
+      setWorkspaceDriver,
+      setWorkspaceRootLabel,
+      setWorkspaceState,
+      workbenchCloseRequested,
+      workbenchOpenRequested,
+      workspaceServices,
+  ]);
 
-  const promptBindBackendRoot = useCallback(() => {
+  const handleSelectWorkspace = useCallback(async (projectId = null) => {
+      await workspaceController.openWorkspace(projectId);
+  }, [workspaceController]);
+
+  const handleOpenBackendWorkspaceFromList = useCallback(async (descriptor) => {
+      if (!descriptor) return;
+      await openBackendWorkspace(descriptor, { silent: false });
+  }, [openBackendWorkspace]);
+
+  const handleOpenFileFromWelcome = useCallback(async () => {
+      try {
+          const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+          if (!api?.pickFile) {
+              throw new Error('Open File is not available in this build');
+          }
+          const res = await api.pickFile();
+          if (!res?.ok || res?.canceled) return;
+          const absPath = String(res?.fsPath || '').trim();
+          if (!absPath) return;
+
+          const expectedRoot = pathDirname(absPath);
+          pendingOpenFileRef.current = { absPath, expectedRoot };
+
+          const match = (recentProjects || []).find((p) => p?.id && p?.fsPath && isFileUnderRoot(p.fsPath, absPath));
+          if (match?.id) {
+              await workspaceController.openWorkspace(match.id, { preferredRoot: match.fsPath });
+              return;
+          }
+
+          await workspaceController.openWorkspace(null, { preferredRoot: expectedRoot });
+      } catch (err) {
+          console.warn('Open File failed', err);
+          setWorkspaceBindingError(err?.message || 'Open file failed');
+          setWorkspaceBindingStatus('error');
+      }
+  }, [recentProjects, workspaceController]);
+
+  const pickNativeFolderPath = useCallback(async () => {
+      const api = typeof window !== 'undefined' ? window.electronAPI?.workspace : null;
+      if (!api?.pickFolder) {
+          throw new Error('Pick Folder is not available in this build');
+      }
+      const res = await api.pickFolder();
+      if (!res?.ok || res?.canceled) return '';
+      return String(res?.fsPath || '').trim();
+  }, []);
+
+  const cloneRepositoryFromWelcome = useCallback(async ({ url, parentDir, folderName } = {}) => {
+      if (!GitDriver.isAvailable() || typeof GitDriver.clone !== 'function') {
+          throw new Error('Clone is not available. Please restart the application.');
+      }
+      const res = await GitDriver.clone(parentDir, url, folderName);
+      if (!res?.success) {
+          throw new Error(res?.error || 'Clone failed');
+      }
+      return { targetPath: res.targetPath };
+  }, []);
+
+  const openWorkspaceWithPreferredRoot = useCallback(async (preferredRoot) => {
+      const root = String(preferredRoot || '').trim();
+      if (!root) return;
+      clearPendingOpenFile();
+      await workspaceController.openWorkspace(null, { preferredRoot: root });
+  }, [clearPendingOpenFile, workspaceController]);
+
+  const promptOpenWorkspace = useCallback(() => {
       const suggestion = backendWorkspaceRoot || projectConfig.backendRoot || projectConfig.projectPath || '';
       
       setInputModal({
           isOpen: true,
-          title: '绑定后端工作区',
-          label: '请输入后端工作区的绝对路径（例如 H:\\04）',
+          title: '打开 Workspace',
+          label: '请输入 Workspace 的绝对路径（例如 H:\\04）',
           defaultValue: suggestion,
           onConfirm: (input) => {
               if (input) {
-                  bindBackendWorkspaceRoot(input, { silent: false });
+                  openBackendWorkspace(input, { silent: false });
               }
               setInputModal(prev => ({ ...prev, isOpen: false }));
           },
           onClose: () => setInputModal(prev => ({ ...prev, isOpen: false }))
       });
-  }, [backendWorkspaceRoot, projectConfig.backendRoot, projectConfig.projectPath, bindBackendWorkspaceRoot]);
+  }, [backendWorkspaceRoot, projectConfig.backendRoot, projectConfig.projectPath, openBackendWorkspace]);
 
   const scheduleSave = (path, content) => {
       if (!workspaceDriver) return;
@@ -1453,6 +1838,16 @@ function App() {
   }, [backendWorkspaceRoot]);
 
   useEffect(() => {
+      persistGlobalConfig({
+          provider: config.provider,
+          openai: { ...config.openai },
+          anthropic: { ...config.anthropic },
+          toolSettings,
+          uiDisplayPreferences
+      });
+  }, [config, toolSettings, uiDisplayPreferences]);
+
+  useEffect(() => {
       setProjectConfig((prev) => {
           const sameProvider = prev.provider === config.provider;
           const sameOpenai = JSON.stringify(prev.openai) === JSON.stringify(config.openai);
@@ -1482,10 +1877,11 @@ function App() {
   }, [applyStoredConfig, fetchPersistedBackendConfig, getBackendConfig, backendBound]);
 
   useEffect(() => {
+      if (!workspaceDriver) return;
       if (backendWorkspaceRoot) {
-          bindBackendWorkspaceRoot(backendWorkspaceRoot, { silent: true });
+          openBackendWorkspace(backendWorkspaceRoot, { silent: true });
       }
-  }, [backendWorkspaceRoot, bindBackendWorkspaceRoot]);
+  }, [backendWorkspaceRoot, openBackendWorkspace, workspaceDriver]);
 
   useEffect(() => {
       // ✅ 仅在挂载时执行一次，避免循环依赖
@@ -1495,9 +1891,9 @@ function App() {
       let cancelled = false;
       (async () => {
           try {
-              setWorkspaceBindingStatus('checking');
+              setWorkspaceBindingStatus('idle');
               await refreshRecentProjects();
-              const driver = await LocalWorkspaceDriver.fromPersisted();
+              const driver = await LocalWorkspaceDriver.fromPersisted(null, { allowPrompt: false });
               if (cancelled) return;
               if (driver) {
                   await hydrateProject(driver);
@@ -1506,8 +1902,8 @@ function App() {
               }
           } catch (err) {
               if (!cancelled) {
-                  setWorkspaceBindingStatus('error');
-                  setWorkspaceBindingError(err?.message || '工作区绑定失败');
+          setWorkspaceBindingStatus('error');
+          setWorkspaceBindingError(err?.message || 'Workspace 打开失败');
               }
           }
       })();
@@ -1515,6 +1911,64 @@ function App() {
           cancelled = true;
       };
   }, []);
+
+  useEffect(() => {
+      workbenchBoot();
+  }, [workbenchBoot]);
+
+  useEffect(() => {
+      syncWorkbenchFromLegacy({ workspaceDriver, workspaceBindingStatus, workspaceBindingError });
+  }, [syncWorkbenchFromLegacy, workspaceBindingError, workspaceBindingStatus, workspaceDriver]);
+
+  const closeWorkspaceToWelcome = useCallback(async () => {
+      clearPendingOpenFile();
+      clearPendingStartAction();
+      clearPendingTemplate();
+      await workspaceController.closeWorkspaceToWelcome({ recentTouchRef });
+  }, [clearPendingOpenFile, clearPendingStartAction, clearPendingTemplate, workspaceController]);
+
+  useEffect(() => {
+      if (!workspaceDriver && workspaceBindingStatus !== 'checking') {
+          clearPendingOpenFile();
+          clearPendingStartAction();
+          clearPendingTemplate();
+      }
+  }, [clearPendingOpenFile, clearPendingStartAction, clearPendingTemplate, workspaceBindingStatus, workspaceDriver]);
+
+  // Default editor on boot: Welcome tab (Editor Area), not a blocking full-screen page.
+  useEffect(() => {
+      workspaceController.effectEnsureWelcomeTabWhenNoWorkspace({ workspaceDriver });
+  }, [workspaceController, workspaceDriver]);
+
+  // If a workspace becomes ready, auto-close Welcome to preserve the current editing feel (it can be reopened).
+  useEffect(() => {
+      workspaceController.effectAutoCloseWelcomeTabOnReady({ workspaceDriver, workspaceBindingStatus });
+  }, [workspaceBindingStatus, workspaceController, workspaceDriver]);
+
+  const workspaceServicesKeyRef = useRef('');
+  useEffect(() => {
+      workspaceController.effectSyncWorkspaceServices({
+          isReady: workbenchModel.state === WorkbenchStates.WORKSPACE_READY,
+          backendWorkspaceRoot,
+          workspaceRootLabel,
+          workspaceDriver,
+          projectMeta,
+          workspaceServicesKeyRef,
+      });
+  }, [backendWorkspaceRoot, projectMeta, workbenchModel.state, workspaceController, workspaceDriver, workspaceRootLabel]);
+
+  const recentTouchRef = useRef({ id: null, fsPath: null });
+  useEffect(() => {
+      return workspaceController.effectSyncRecentsOnReady({
+          workspaceDriver,
+          workspaceBindingStatus,
+          backendWorkspaceRoot,
+          workspaceRootLabel,
+          projectMeta,
+          backendWorkspaceId,
+          recentTouchRef,
+      });
+  }, [backendWorkspaceId, backendWorkspaceRoot, projectMeta, refreshRecentProjects, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceRootLabel]);
 
   useEffect(() => {
       // 仅用于跨标签页同步
@@ -1622,7 +2076,12 @@ function App() {
     const enabledTools = getEnabledTools(currentMode);
     if (!configured || apiStatus !== 'ok') {
         alert('请先完成设置并确保后端已连接（点击左侧齿轮进入设置）。');
-        setShowConfig(true);
+        if (uiDisplayPreferences.settings === 'editor') {
+            handleOpenConfigInEditor();
+        } else {
+            setConfigFullscreen(false);
+            setShowConfig(true);
+        }
         return;
     }
     if ((!cleanedText.trim()) && safeAttachments.length === 0) return;
@@ -1911,12 +2370,145 @@ function App() {
       loadFileContent(path);
   };
 
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      const pending = pendingOpenFileRef.current;
+      if (!pending?.absPath) return;
+
+      const rootAbs = (backendWorkspaceRoot || workspaceRootLabel || pending.expectedRoot || '').trim();
+      const rel = pathRelativeToRoot(rootAbs, pending.absPath);
+      clearPendingOpenFile();
+      if (!rel) return;
+      openFile(rel);
+  }, [backendWorkspaceRoot, clearPendingOpenFile, workspaceBindingStatus, workspaceDriver, workspaceRootLabel]);
+
+  const sanitizeTemplateFolder = (raw) => {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      if (s.includes('..')) return '';
+      if (s.includes('/') || s.includes('\\')) return '';
+      if (/^[A-Za-z]:/.test(s)) return '';
+      return s.replace(/[:*?"<>|]+/g, '').trim();
+  };
+
+  const getTemplateSpec = (templateId) => {
+      const id = String(templateId || '').trim();
+      if (id === 'web') {
+          return {
+              id: 'web',
+              entry: 'index.html',
+              files: {
+                  'README.md': '# Web Template\n\nGenerated by Start Page Templates.\n',
+                  'index.html': '<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Web Template</title><link rel="stylesheet" href="./style.css"/></head><body><div id="app"></div><script type="module" src="./main.js"></script></body></html>\n',
+                  'style.css': 'body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;margin:0;padding:24px;background:#f6f7f9;color:#111827}#app{max-width:720px}\n',
+                  'main.js': "document.querySelector('#app').innerHTML = '<h1>Hello</h1><p>Template created.</p>';\n",
+              },
+          };
+      }
+      if (id === 'react') {
+          return {
+              id: 'react',
+              entry: 'src/App.jsx',
+              files: {
+                  'README.md': '# React Template\n\nGenerated by Start Page Templates.\n',
+                  'index.html': '<!doctype html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"/><title>React Template</title></head><body><div id=\"root\"></div><script type=\"module\" src=\"/src/main.jsx\"></script></body></html>\n',
+                  'src/main.jsx': "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App.jsx';\n\nReactDOM.createRoot(document.getElementById('root')).render(<App />);\n",
+                  'src/App.jsx': "import React from 'react';\n\nexport default function App() {\n  return (\n    <div style={{ fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif', padding: 24 }}>\n      <h1>Hello</h1>\n      <p>Template created.</p>\n    </div>\n  );\n}\n",
+              },
+          };
+      }
+      return {
+          id: 'blank',
+          entry: 'README.md',
+          files: {
+              'README.md': '# Blank Template\n\nGenerated by Start Page Templates.\n',
+          },
+      };
+  };
+
+  const createTemplateProjectInWorkspace = useCallback(async ({ templateId, projectName, parentDir } = {}) => {
+      const destParent = String(parentDir || '').trim();
+      if (destParent && isAbsolutePath(destParent) && BackendWorkspaceDriver?.fromFsPath) {
+          const folder = sanitizeTemplateFolder(projectName) || 'my-project';
+          const spec = getTemplateSpec(templateId);
+
+          const parentDriver = await BackendWorkspaceDriver.fromFsPath(destParent);
+          await parentDriver.createFolder(folder);
+
+          const targetRoot = pathJoinAbs(destParent, folder);
+          const targetDriver = await BackendWorkspaceDriver.fromFsPath(targetRoot);
+          for (const [rel, content] of Object.entries(spec.files || {})) {
+              // eslint-disable-next-line no-await-in-loop
+              await targetDriver.writeFile(rel, String(content || ''), { createDirectories: true });
+          }
+
+          clearPendingOpenFile();
+          pendingOpenFileRef.current = { absPath: pathJoinAbs(targetRoot, spec.entry), expectedRoot: targetRoot };
+          await workspaceController.openWorkspace(targetRoot, { preferredRoot: targetRoot });
+          return { queued: true, root: targetRoot };
+      }
+
+      if (!workspaceDriver) {
+          pendingStartActionRef.current = { type: 'template' };
+          pendingTemplateRef.current = { templateId, projectName };
+          await handleSelectWorkspace(null);
+          return { queued: true };
+      }
+      if (workspaceBindingStatus !== 'ready') {
+          pendingStartActionRef.current = { type: 'template' };
+          pendingTemplateRef.current = { templateId, projectName };
+          return { queued: true };
+      }
+
+      const folder = sanitizeTemplateFolder(projectName) || 'my-project';
+      const hasExisting =
+          (workspaceState.files || []).some((f) => f?.path === folder || String(f?.path || '').startsWith(`${folder}/`)) ||
+          (workspaceState.fileTree || []).some((e) => e?.path === folder || String(e?.path || '').startsWith(`${folder}/`));
+      if (hasExisting) {
+          throw new Error(`目标目录已存在：${folder}`);
+      }
+
+      const spec = getTemplateSpec(templateId);
+      await workspaceDriver.createFolder(folder);
+      for (const [rel, content] of Object.entries(spec.files || {})) {
+          // eslint-disable-next-line no-await-in-loop
+          await workspaceDriver.writeFile(`${folder}/${rel}`, String(content || ''), { createDirectories: true });
+      }
+      await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
+      openFile(`${folder}/${spec.entry}`);
+      return { ok: true, folder, entry: `${folder}/${spec.entry}` };
+  }, [clearPendingOpenFile, handleSelectWorkspace, openFile, syncWorkspaceFromDisk, workspaceBindingStatus, workspaceController, workspaceDriver, workspaceState.fileTree, workspaceState.files]);
+
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      if (pendingStartActionRef.current?.type !== 'template') return;
+      const pending = pendingTemplateRef.current;
+      if (!pending) return;
+      clearPendingStartAction();
+      clearPendingTemplate();
+      createTemplateProjectInWorkspace(pending).catch((err) => {
+          console.warn('Create template failed', err);
+          setWorkspaceBindingError(err?.message || 'Create template failed');
+          setWorkspaceBindingStatus('error');
+      });
+  }, [clearPendingStartAction, clearPendingTemplate, createTemplateProjectInWorkspace, workspaceBindingStatus, workspaceDriver]);
+
   const closeFile = (path) => {
       setWorkspaceState((prev) => {
           const nextTabs = prev.openTabs.filter((p) => p !== path);
           const nextActive = prev.activeFile === path ? (nextTabs[nextTabs.length - 1] || '') : prev.activeFile;
           return { ...prev, openTabs: nextTabs, activeFile: nextActive, previewEntry: nextActive || prev.previewEntry };
       });
+      if (path && path.startsWith(DIFF_TAB_PREFIX)) {
+          setDiffTabs((prev) => {
+              if (!prev || !prev[path]) return prev;
+              const next = { ...prev };
+              delete next[path];
+              return next;
+          });
+      }
   };
 
   const handleFileChange = (path, content) => {
@@ -1961,6 +2553,25 @@ function App() {
       });
   };
 
+  const handleNewFileFromWelcome = useCallback(async () => {
+      if (workspaceDriver && workspaceBindingStatus === 'ready') {
+          handleAddFile();
+          return;
+      }
+      pendingStartActionRef.current = { type: 'newFile' };
+      await handleSelectWorkspace(null);
+  }, [handleSelectWorkspace, handleAddFile, workspaceBindingStatus, workspaceDriver]);
+
+  useEffect(() => {
+      if (!workspaceDriver) return;
+      if (workspaceBindingStatus !== 'ready') return;
+      const pending = pendingStartActionRef.current;
+      if (!pending?.type) return;
+      if (pending.type !== 'newFile') return;
+      clearPendingStartAction();
+      handleAddFile();
+  }, [clearPendingStartAction, handleAddFile, workspaceBindingStatus, workspaceDriver]);
+
   const handleAddFolder = () => {
       if (!workspaceDriver) {
           alert('请先选择项目文件夹');
@@ -1984,6 +2595,15 @@ function App() {
           onClose: () => setInputModal(prev => ({ ...prev, isOpen: false }))
       });
   };
+
+  const handleConnectRemote = useCallback(async (data) => {
+      // TODO: Implement actual backend connection
+      console.log('Connecting to remote:', data);
+      // Simulate connection delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      alert(`Connected to ${data.username}@${data.host}:${data.port}`);
+      setShowRemoteModal(false);
+  }, []);
 
   const handleDeletePath = async (path) => {
       if (!workspaceDriver) {
@@ -2050,6 +2670,41 @@ function App() {
       setWorkspaceState((prev) => ({ ...prev, livePreview: `${now}` }));
   };
 
+  const handleChangeDisplayPreference = useCallback((key, mode) => {
+      setUiDisplayPreferences((prev) => {
+          const next = { ...prev, [key]: mode };
+          return next;
+      });
+  }, []);
+
+  const handleOpenConfigInEditor = useCallback(() => {
+      setConfigFullscreen(false);
+      setShowConfig(false);
+      setWorkspaceState((prev) => {
+          const exists = prev.openTabs.includes(SETTINGS_TAB_PATH);
+          const nextTabs = exists ? prev.openTabs : [...prev.openTabs, SETTINGS_TAB_PATH];
+          return { ...prev, openTabs: nextTabs, activeFile: SETTINGS_TAB_PATH, view: 'code' };
+      });
+  }, []);
+
+  const handleThemeModeChange = useCallback((mode) => {
+      if (mode === 'system') {
+          userThemePreferenceRef.current = false;
+          if (typeof window !== 'undefined') {
+              try {
+                  window.localStorage.removeItem(THEME_STORAGE_KEY);
+              } catch {
+              }
+          }
+          const systemTheme = detectSystemTheme();
+          setTheme(systemTheme);
+          return;
+      }
+      userThemePreferenceRef.current = true;
+      const nextTheme = mode === 'dark' ? 'dark' : 'light';
+      setTheme(nextTheme);
+  }, []);
+
   const handleToggleTheme = useCallback(() => {
       userThemePreferenceRef.current = true;
       setTheme((prev) => {
@@ -2092,6 +2747,294 @@ function App() {
           return panelKey;
       });
   }, [sidebarCollapsed]);
+
+  // --- Git Logic ---
+  const refreshGitStatus = useCallback(async () => {
+      if (!backendWorkspaceRoot || !GitDriver.isAvailable()) return;
+      setGitLoading(true);
+      const status = await GitDriver.status(backendWorkspaceRoot);
+      setGitStatus(status);
+      if (!status) {
+          setGitRemotes([]);
+          setGitLog([]);
+          setGitLoading(false);
+          return;
+      }
+      const remotes = await GitDriver.getRemotes(backendWorkspaceRoot);
+      setGitRemotes(remotes);
+      const log = await GitDriver.log(backendWorkspaceRoot);
+      setGitLog(log?.all || []);
+      setGitLoading(false);
+  }, [backendWorkspaceRoot]);
+
+  useEffect(() => {
+      if (backendBound && backendWorkspaceRoot) {
+          refreshGitStatus();
+          const timer = setInterval(refreshGitStatus, 5000);
+          return () => clearInterval(timer);
+      }
+  }, [backendBound, backendWorkspaceRoot, refreshGitStatus]);
+
+  const handleGitInit = async () => {
+      if (!backendWorkspaceRoot) {
+          promptBindBackendRoot();
+          return;
+      }
+      await GitDriver.init(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+
+  const handleGitAddRemote = async (name, url) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.addRemote(backendWorkspaceRoot, name, url);
+      refreshGitStatus();
+  };
+
+  const handleGitStage = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.stage(backendWorkspaceRoot, files);
+      refreshGitStatus();
+  };
+  const handleGitUnstage = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.unstage(backendWorkspaceRoot, files);
+      refreshGitStatus();
+  };
+  const handleGitStageAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.stage(backendWorkspaceRoot, ['.']);
+      refreshGitStatus();
+  };
+  const handleGitUnstageAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      const hasStaged = gitStatus?.files?.some(f => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index));
+      if (!hasStaged) return;
+      await GitDriver.unstage(backendWorkspaceRoot, '.');
+      refreshGitStatus();
+  };
+  const handleGitRestore = async (files) => {
+      if (!backendWorkspaceRoot) return;
+      if (!window.confirm(`Are you sure you want to discard changes in ${files.length > 1 ? files.length + ' files' : files[0]}?`)) return;
+      
+      const untracked = [];
+      const tracked = [];
+      
+      files.forEach(path => {
+          const file = gitStatus?.files?.find(f => f.path === path);
+          if (file && (file.working_dir === '?' || file.working_dir === 'U')) {
+              untracked.push(path);
+          } else {
+              tracked.push(path);
+          }
+      });
+
+      if (tracked.length > 0) {
+          await GitDriver.restore(backendWorkspaceRoot, tracked);
+      }
+      if (untracked.length > 0 && workspaceDriver) {
+          for (const p of untracked) {
+             try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+      }
+      refreshGitStatus();
+  };
+
+  const handleGitRestoreAll = async () => {
+      if (!backendWorkspaceRoot) return;
+      if (!window.confirm('Are you sure you want to discard ALL changes? This cannot be undone.')) return;
+      
+      const files = gitStatus?.files?.filter(f => ['A', 'M', 'D', 'R', '?'].includes(f.working_dir)) || [];
+      const untracked = [];
+      const tracked = [];
+      
+      files.forEach(f => {
+          if (f.working_dir === '?' || f.working_dir === 'U') {
+              untracked.push(f.path);
+          } else {
+              tracked.push(f.path);
+          }
+      });
+
+      if (tracked.length > 0) {
+          await GitDriver.restore(backendWorkspaceRoot, tracked.length === files.length ? '.' : tracked);
+      }
+      if (untracked.length > 0 && workspaceDriver) {
+          for (const p of untracked) {
+             try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+      }
+      refreshGitStatus();
+  };
+  const handleGitCommit = async (msg) => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.commit(backendWorkspaceRoot, msg);
+      refreshGitStatus();
+  };
+  const handleGitPull = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.pull(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+  const handleGitPush = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.push(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+  const handleGitPublishBranch = async (branch) => {
+      if (!backendWorkspaceRoot) return;
+      const target = branch || gitStatus?.current;
+      if (!target) return;
+      await GitDriver.publishBranch(backendWorkspaceRoot, target);
+      refreshGitStatus();
+  };
+  const handleGitSetUpstream = async (branch) => {
+      if (!backendWorkspaceRoot) return;
+      const target = branch || gitStatus?.current;
+      if (!target) return;
+      await GitDriver.setUpstream(backendWorkspaceRoot, target);
+      refreshGitStatus();
+  };
+  const handleGitSync = async () => {
+      if (!backendWorkspaceRoot) return;
+      await GitDriver.pull(backendWorkspaceRoot);
+      await GitDriver.push(backendWorkspaceRoot);
+      refreshGitStatus();
+  };
+  
+  const handleGenerateCommitMessage = async () => {
+      if (!gitStatus || !backendWorkspaceRoot) return '';
+      const diff = await GitDriver.diff(backendWorkspaceRoot);
+      if (!diff) return '';
+      const diffText = typeof diff === 'string' ? diff : JSON.stringify(diff);
+      const prompt = `Generate a concise git commit message (first line under 50 chars) for this diff:\n\n${diffText.slice(0, 2000)}`;
+      
+      if (!currentSessionId) return 'Error: Please open a chat session first.';
+      
+      try {
+           const res = await projectFetch(`/api/sessions/${currentSessionId}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: prompt, mode: 'chat' })
+          });
+          if (!res.body) return '';
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let result = '';
+          while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              result += decoder.decode(value, { stream: true });
+          }
+          return result.trim();
+      } catch (e) {
+          console.error(e);
+          return 'Error generating message';
+      }
+  };
+
+  const handleGetCommitDetails = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return [];
+      return await GitDriver.getCommitDetails(backendWorkspaceRoot, hash);
+  }, [backendWorkspaceRoot]);
+
+  const handleGetCommitStats = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return null;
+      return await GitDriver.getCommitStats(backendWorkspaceRoot, hash);
+  }, [backendWorkspaceRoot]);
+
+  const handleOpenCommitDiff = useCallback(async (hash, path) => {
+      if (!backendWorkspaceRoot) return;
+      try {
+          const before = await GitDriver.getFileContent(backendWorkspaceRoot, `${hash}~1`, path);
+          const after = await GitDriver.getFileContent(backendWorkspaceRoot, hash, path);
+          const diff = { path, before, after };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
+      } catch (e) {
+          console.error('Failed to open commit diff', e);
+      }
+  }, [backendWorkspaceRoot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
+
+  const handleOpenAllCommitDiffs = useCallback(async (hash) => {
+      if (!backendWorkspaceRoot) return;
+      try {
+          const files = await GitDriver.getCommitFileDiffs(backendWorkspaceRoot, hash);
+          if (!files || files.length === 0) return;
+          const diff = { files };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
+      } catch (e) {
+          console.error('Failed to open all commit diffs', e);
+      }
+  }, [backendWorkspaceRoot, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
+
+  const handleOpenWorkingCopyDiff = useCallback(async (path, staged = false) => {
+      if (!backendWorkspaceRoot || !workspaceDriver) return;
+      try {
+          let before = '';
+          let after = '';
+          
+          if (staged) {
+              // Staged: HEAD vs Index
+              before = await GitDriver.getFileContent(backendWorkspaceRoot, 'HEAD', path);
+              after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+          } else {
+              // Unstaged: Index vs Worktree
+              before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+              // For worktree, read directly from disk
+              const fileData = await workspaceDriver.readFile(path);
+              after = fileData.content || '';
+          }
+          const diff = { path, before, after };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
+      } catch (e) {
+          console.error('Failed to open working copy diff', e);
+          // Fallback to simple file open if diff fails
+          openFile(path);
+      }
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, openFile, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
+
+  const handleOpenBatchDiffs = useCallback(async (files, type = 'unstaged') => {
+      if (!backendWorkspaceRoot || !workspaceDriver || !files || files.length === 0) return;
+      try {
+          const diffs = await Promise.all(files.map(async (file) => {
+              const path = file.path;
+              let before = '';
+              let after = '';
+              if (type === 'staged') {
+                  before = await GitDriver.getFileContent(backendWorkspaceRoot, 'HEAD', path);
+                  after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+              } else {
+                  before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+                  const fileData = await workspaceDriver.readFile(path);
+                  after = fileData.content || '';
+              }
+              return { path, before, after };
+          }));
+          const diff = { files: diffs };
+          if (uiDisplayPreferences.diff === 'editor') {
+              openDiffTabInWorkspace(diff);
+              setDiffModal(null);
+          } else {
+              openDiffModal(diff);
+          }
+      } catch (e) {
+          console.error('Failed to open batch diffs', e);
+      }
+  }, [backendWorkspaceRoot, workspaceDriver, openDiffModal, uiDisplayPreferences.diff, openDiffTabInWorkspace]);
 
   // --- Resizer Logic ---
   const startResize = useCallback((target) => (mouseDownEvent) => {
@@ -2292,8 +3235,20 @@ function App() {
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const lastLog = logs && logs.length > 0 ? logs[0] : null;
   const logStatus = lastLog ? { requestOk: !!lastLog.success, parseOk: lastLog.parsed_success !== false } : null;
-  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || !!workspaceState.activeFile;
+  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || workspaceState.openTabs.length > 0 || Object.keys(diffTabs).length > 0 || !workspaceDriver || workspaceBindingStatus === 'checking' || workspaceBindingStatus === 'error';
   const workspaceShellVisible = workspaceVisible || showLogs;
+  const gitBranch = gitStatus?.current || '';
+  const gitBadgeCount = useMemo(() => {
+      const files = gitStatus?.files || [];
+      if (!Array.isArray(files) || files.length === 0) return 0;
+      return files.filter((f) => {
+          const wd = f.working_dir || '';
+          const idx = f.index || '';
+          const hasWorkingChange = ['A', 'M', 'D', 'R', '?'].includes(wd);
+          const hasIndexChange = ['A', 'M', 'D', 'R'].includes(idx);
+          return hasWorkingChange || hasIndexChange;
+      }).length;
+  }, [gitStatus]);
 
   // ✅ 使用受控渲染而非延迟值，避免闪烁
   // 直接传递最新状态，在 Workspace 组件内部使用 useMemo 优化
@@ -2301,54 +3256,20 @@ function App() {
     files: workspaceState.files,
     fileTree: workspaceState.fileTree,
     openTabs: workspaceState.openTabs,
-  }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs]);
-
-  if (!workspaceDriver) {
-      return (
-          <div className="welcome-shell" data-theme={theme}>
-              <div className="welcome-card">
-                  <div className="welcome-title">请先选择项目文件夹</div>
-                  <p className="welcome-subtitle">每个项目独立保存会话、配置和真实文件，完全隔离。</p>
-                  <button className="primary-btn jumbo" onClick={() => handleSelectWorkspace()}>
-                      📁 选择项目文件夹
-                  </button>
-              </div>
-              <div className="recent-list">
-                  <div className="recent-header">最近项目</div>
-                  {recentProjects.length === 0 && <div className="recent-empty">暂无记录</div>}
-                  {recentProjects.map((proj) => (
-                      <button key={proj.id} className="recent-item" onClick={() => handleSelectWorkspace(proj.id)}>
-                          <div className="recent-name">{proj.name || '未命名项目'}</div>
-                          <div className="recent-path">{proj.pathLabel || '未记录路径'}</div>
-                      </button>
-                  ))}
-              </div>
-          </div>
-      );
-  }
-
-  if (!projectReady) {
-      return (
-          <div className="welcome-shell" data-theme={theme}>
-              <div className="welcome-card">
-                  <div className="welcome-title">已绑定项目：{projectMeta.name || '未命名'}</div>
-                  <p className="welcome-subtitle">正在初始化项目工作区…</p>
-                  <div className="welcome-actions">
-                      <button className="primary-btn" onClick={() => handleSelectWorkspace()}>重新选择项目</button>
-                  </div>
-              </div>
-          </div>
-      );
-  }
+    workspaceRoots: workspaceState.workspaceRoots,
+  }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs, workspaceState.workspaceRoots]);
 
   return (
-    <div className="app-frame" data-theme={theme}>
+    <WorkbenchShell theme={theme}>
       <TitleBar 
           projectMeta={projectMeta}
           onSelectProject={handleSelectWorkspace}
-          onBindBackend={promptBindBackendRoot}
+          onOpenWelcome={() => workspaceController.openWelcomeTab({ focus: true })}
+          onCloseWorkspace={closeWorkspaceToWelcome}
+          onBindBackend={promptOpenWorkspace}
           onToggleTheme={handleToggleTheme}
           theme={theme}
+          language={language}
           viewMode={workspaceState.view}
           onToggleView={() => setWorkspaceState((prev) => ({ ...prev, view: prev.view === 'code' ? 'preview' : 'code' }))}
           onAddFile={() => handleAddFile()}
@@ -2357,6 +3278,12 @@ function App() {
           onRefreshPreview={handleRefreshPreview}
           hasDriver={!!workspaceDriver}
           bindingError={workspaceBindingError}
+          workspaceRoots={workspaceProps.workspaceRoots}
+          workspaceRootLabel={workspaceRootLabel}
+          recentProjects={recentProjects}
+          onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
+            onCloneRepository={() => setShowCloneModal(true)}
+          onConnectRemote={() => setShowRemoteModal(true)}
       />
             {showResizeOverlay && (
                 <div
@@ -2381,15 +3308,25 @@ function App() {
           toolSettings={toolSettings}
           onToolSettingsChange={persistToolSettings}
           onSave={handleConfigSubmit}
-          onClose={() => setShowConfig(false)}
+          onClose={() => { setConfigFullscreen(false); setShowConfig(false); }}
           checkApiStatus={checkApiStatus}
           apiStatus={apiStatus}
           apiMessage={apiMessage}
+          appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
+          onChangeAppearanceMode={handleThemeModeChange}
+          language={language}
+          onLanguageChange={handleLanguageChange}
+          displayPreferences={uiDisplayPreferences}
+          onChangeDisplayPreference={handleChangeDisplayPreference}
+          onOpenInEditor={handleOpenConfigInEditor}
+          fullscreen={configFullscreen}
+          onToggleFullscreen={() => setConfigFullscreen((prev) => !prev)}
+          variant="modal"
         />
       )}
 
       <div className="app-body">
-          <NavSidebar 
+            <NavSidebar 
             activeSidebar={activeSidebarPanel}
             sidebarCollapsed={sidebarCollapsed}
             explorerOpen={!sidebarCollapsed && activeSidebarPanel === 'explorer'}
@@ -2397,8 +3334,17 @@ function App() {
             onToggleChatPanel={toggleChatPanel}
             chatPanelCollapsed={chatPanelCollapsed}
             onCreateSession={createSession}
-            onToggleConfig={() => setShowConfig(true)}
+            onToggleConfig={() => {
+              if (uiDisplayPreferences.settings === 'editor') {
+                  handleOpenConfigInEditor();
+              } else {
+                  setConfigFullscreen(false);
+                  setShowConfig(true);
+              }
+            }}
             apiStatus={apiStatus}
+            gitBadgeCount={gitBadgeCount}
+            language={language}
           />
 
           <div
@@ -2436,6 +3382,7 @@ function App() {
                   files={workspaceProps.files}
                   fileTree={workspaceProps.fileTree}
                   projectLabel={workspaceRootLabel}
+                  workspaceRoots={workspaceProps.workspaceRoots}
                   loading={workspaceLoading}
                   activeFile={workspaceState.activeFile}
                   onOpenFile={openFile}
@@ -2445,7 +3392,40 @@ function App() {
                   onRenamePath={handleRenamePath}
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
                   hasWorkspace={!!workspaceDriver}
+                  gitStatus={gitStatus}
               />
+            )}
+            {!sidebarCollapsed && activeSidebarPanel === 'git' && (
+                <SourceControlPanel 
+                    gitStatus={gitStatus}
+                    gitRemotes={gitRemotes}
+                    gitLog={gitLog}
+                    onCommit={handleGitCommit}
+                    onStage={handleGitStage}
+                    onUnstage={handleGitUnstage}
+                    onStageAll={handleGitStageAll}
+                    onUnstageAll={handleGitUnstageAll}
+                    onDiscard={handleGitRestore}
+                    onDiscardAll={handleGitRestoreAll}
+                    onSync={handleGitSync}
+                    onPull={handleGitPull}
+                    onPush={handleGitPush}
+                    onPublishBranch={handleGitPublishBranch}
+                    onSetUpstream={handleGitSetUpstream}
+                    onRefresh={refreshGitStatus}
+                    onGenerateCommitMessage={handleGenerateCommitMessage}
+                    onInit={handleGitInit}
+                    onAddRemote={handleGitAddRemote}
+                    onOpenFile={openFile}
+                    onDiff={handleOpenWorkingCopyDiff}
+                    onGetCommitDetails={handleGetCommitDetails}
+                    onGetCommitStats={handleGetCommitStats}
+                    onOpenCommitDiff={handleOpenCommitDiff}
+                    onOpenAllDiffs={handleOpenAllCommitDiffs}
+                    onOpenBatchDiffs={handleOpenBatchDiffs}
+                    loading={gitLoading}
+                    repositoryLabel={workspaceRootLabel}
+                />
             )}
           </div>
 
@@ -2540,7 +3520,7 @@ function App() {
               overflow: 'hidden'
           }}>
               {workspaceVisible && (
-                <Workspace
+                <EditorArea
                   files={workspaceProps.files}
                   openTabs={workspaceProps.openTabs}
                   activeFile={workspaceState.activeFile}
@@ -2550,20 +3530,43 @@ function App() {
                   loading={workspaceLoading}
                   hasWorkspace={!!workspaceDriver}
                   workspaceRootLabel={workspaceRootLabel}
+                  workspaceRoots={workspaceProps.workspaceRoots}
                   bindingStatus={workspaceBindingStatus}
-                  bindingError={workspaceBindingError}
-                  hotReloadToken={hotReloadToken}
-                  theme={theme}
-                  backendRoot={backendWorkspaceRoot}
-                  onSelectFolder={handleSelectWorkspace}
-                  onBindBackendRoot={promptBindBackendRoot}
-                  onOpenFile={openFile}
-                  onCloseFile={closeFile}
-                  onFileChange={handleFileChange}
-                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path || prev.previewEntry }))} 
-                  onTabReorder={handleTabReorder}
-                  onAddFile={handleAddFile}
-                  onAddFolder={handleAddFolder}
+                   bindingError={workspaceBindingError}
+                   hotReloadToken={hotReloadToken}
+                    theme={theme}
+                    backendRoot={backendWorkspaceRoot}
+                    welcomeTabPath={WELCOME_TAB_PATH}
+                    onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
+                    renderWelcomeTab={() => (
+                      <WelcomeEditor
+                        theme={theme}
+                        bindingStatus={workspaceBindingStatus}
+                        bindingError={workspaceBindingError}
+                        recentProjects={recentProjects}
+                        backendWorkspaces={activeWorkspaces}
+                        onOpenFolder={() => handleSelectWorkspace()}
+                        onOpenFile={handleOpenFileFromWelcome}
+                        onNewFile={handleNewFileFromWelcome}
+                        onPickFolderPath={pickNativeFolderPath}
+                        onCloneRepository={cloneRepositoryFromWelcome}
+                        onCreateTemplate={createTemplateProjectInWorkspace}
+                        onOpenFolderWithPreferredRoot={openWorkspaceWithPreferredRoot}
+                        onCancelOpen={() => closeWorkspaceToWelcome()}
+                        onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
+                        onRemoveRecent={(proj) => removeRecentProject(proj)}
+                        onOpenBackendWorkspace={handleOpenBackendWorkspaceFromList}
+                      />
+                    )}
+                   onSelectFolder={handleSelectWorkspace}
+                   onBindBackendRoot={promptOpenWorkspace}
+                   onOpenFile={openFile}
+                   onCloseFile={closeFile}
+                   onFileChange={handleFileChange}
+                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path && path !== WELCOME_TAB_PATH ? path : prev.previewEntry }))} 
+                   onTabReorder={handleTabReorder}
+                   onAddFile={handleAddFile}
+                   onAddFolder={handleAddFolder}
                   onRefreshPreview={handleRefreshPreview}
                   onToggleTheme={handleToggleTheme}
                   onToggleView={() => setWorkspaceState((prev) => {
@@ -2574,6 +3577,32 @@ function App() {
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
                   previewEntry={workspaceState.previewEntry}
                   onPreviewEntryChange={(value) => setWorkspaceState((prev) => ({ ...prev, previewEntry: value }))}
+                  settingsTabPath={SETTINGS_TAB_PATH}
+                  renderSettingsTab={() => (
+                    <ConfigPanel
+                      config={config}
+                      setConfig={setConfig}
+                      toolSettings={toolSettings}
+                      onToolSettingsChange={persistToolSettings}
+                      onSave={handleConfigSubmit}
+                      onClose={() => closeFile(SETTINGS_TAB_PATH)}
+                      checkApiStatus={checkApiStatus}
+                      apiStatus={apiStatus}
+                      apiMessage={apiMessage}
+                      appearanceMode={userThemePreferenceRef.current ? (theme === 'dark' ? 'dark' : 'light') : 'system'}
+                      onChangeAppearanceMode={handleThemeModeChange}
+                      language={language}
+                      onLanguageChange={setLanguage}
+                      displayPreferences={uiDisplayPreferences}
+                      onChangeDisplayPreference={handleChangeDisplayPreference}
+                      onOpenInEditor={handleOpenConfigInEditor}
+                      fullscreen={false}
+                      onToggleFullscreen={() => {}}
+                      variant="inline"
+                    />
+                  )}
+                  diffTabPrefix={DIFF_TAB_PREFIX}
+                  diffTabs={diffTabs}
                 />
               )}
               {showLogs && (
@@ -2584,6 +3613,42 @@ function App() {
               )}
           </div>
       </div>
+      
+      <div className="status-bar" style={{
+          height: '22px',
+          background: 'var(--accent)',
+          color: '#fff',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          fontSize: '11px',
+          cursor: 'default',
+          userSelect: 'none',
+          zIndex: 100
+      }}>
+          <div 
+            className="status-item" 
+            style={{ display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer', marginRight: '10px' }}
+            onClick={() => {
+                if (sidebarCollapsed) setSidebarCollapsed(false);
+                setActiveSidebarPanel('git');
+            }}
+            title="Switch Branch"
+          >
+              <span className="codicon codicon-git-branch" aria-hidden style={{ fontSize: '13px' }} />
+              <span>{gitBranch || 'Git'}</span>
+              {gitStatus && (
+                  <span style={{ marginLeft: '4px' }}>
+                      {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
+                      {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
+                  </span>
+              )}
+          </div>
+          {workspaceBindingStatus === 'error' && (
+              <div style={{ background: 'var(--danger)', padding: '0 4px' }}>Connection Error</div>
+          )}
+      </div>
+
       {resizeTooltip && (
         <div style={{
             position: 'fixed',
@@ -2603,10 +3668,28 @@ function App() {
             {resizeTooltip.text}
         </div>
       )}
+      <ConnectRemoteModal 
+          isOpen={showRemoteModal} 
+          onClose={() => setShowRemoteModal(false)}
+          onConnect={handleConnectRemote}
+      />
+      <CloneRepositoryModal 
+          isOpen={showCloneModal}
+          onClose={() => setShowCloneModal(false)}
+          onClone={async (data) => {
+              const res = await cloneRepositoryFromWelcome(data);
+              if (res?.targetPath) {
+                   await workspaceController.openWorkspace(null, { preferredRoot: res.targetPath });
+              }
+          }}
+          onPickFolder={pickNativeFolderPath}
+      />
       <DiffModal 
           diff={diffModal} 
           onClose={closeDiffModal} 
           theme={theme} 
+          onOpenFile={openFile}
+          onOpenDiffInWorkspace={handleOpenDiffInWorkspace}
       />
       <InputModal 
           isOpen={inputModal.isOpen}
@@ -2616,7 +3699,7 @@ function App() {
           onConfirm={inputModal.onConfirm}
           onClose={inputModal.onClose}
       />
-    </div>
+    </WorkbenchShell>
   );
 }
 

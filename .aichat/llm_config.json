@@ -1,0 +1,9 @@
+{
+  "provider": "anthropic",
+  "api_key": "ms-ff39341e-74c0-4061-b12f-5b2e4c1d54aa",
+  "model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+  "base_url": "https://api-inference.modelscope.cn",
+  "check_model": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+  "context_max_length": 128000,
+  "output_max_tokens": 65536
+}

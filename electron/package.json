@@ -19,6 +19,7 @@
     "appId": "com.aiagent.app",
     "files": [
       "../frontend/dist/**/*",
+      "main/**/*",
       "main.js",
       "preload.js",
       "package.json"
@@ -27,5 +28,8 @@
       "output": "dist"
     },
     "asar": true
+  },
+  "dependencies": {
+    "simple-git": "^3.30.0"
   }
 }

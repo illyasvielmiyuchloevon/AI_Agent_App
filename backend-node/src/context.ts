@@ -1,16 +1,32 @@
-import { AsyncLocalStorage } from 'async_hooks';
+import { AsyncLocalStorage } from "async_hooks";
 
-export const workspaceContext = new AsyncLocalStorage<{ root: string }>();
+export interface WorkspaceContextValue {
+  id: string;
+  root: string;
+}
+
+export const workspaceContext = new AsyncLocalStorage<WorkspaceContextValue>();
 
 export function getWorkspaceRoot(): string {
-    const store = workspaceContext.getStore();
-    if (!store?.root) {
-        console.error("[Context] Accessing workspace root but it is not bound!");
-        throw new Error("Workspace root is not bound. Please select a project folder first.");
-    }
-    return store.root;
+  const store = workspaceContext.getStore();
+  if (!store?.root) {
+    throw new Error("Workspace root is not bound. Please select a project folder first.");
+  }
+  return store.root;
 }
 
 export function tryGetWorkspaceRoot(): string | undefined {
-    return workspaceContext.getStore()?.root;
+  return workspaceContext.getStore()?.root;
+}
+
+export function getWorkspaceId(): string {
+  const store = workspaceContext.getStore();
+  if (!store?.id) {
+    throw new Error("Workspace is not bound.");
+  }
+  return store.id;
+}
+
+export function tryGetWorkspaceId(): string | undefined {
+  return workspaceContext.getStore()?.id;
 }
