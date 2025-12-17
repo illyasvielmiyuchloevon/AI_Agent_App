@@ -79,8 +79,9 @@ async function walkDir(dir, root, entries, folderIndex = 0, folderName) {
         // Basic ignore
         if (item.name === 'node_modules' || item.name === '.git' || item.name === '__pycache__')
             continue;
-        if (item.name.startsWith('.'))
-            continue; // ignore hidden files/dirs by default for now
+        // Keep common dotfiles visible (.gitignore/.vscode/.env etc), but hide internal agent data.
+        if (item.name === '.aichat')
+            continue;
         if (item.isDirectory()) {
             entries.push({
                 path: relPath,

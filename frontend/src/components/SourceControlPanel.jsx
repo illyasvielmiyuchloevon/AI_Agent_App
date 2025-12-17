@@ -163,6 +163,16 @@ const SourceControlPanel = ({
     };
 
     useEffect(() => {
+        const el = messageRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        const lineHeight = 18;
+        const maxHeight = lineHeight * 6;
+        const next = Math.min(el.scrollHeight, maxHeight);
+        el.style.height = `${next}px`;
+    }, [message]);
+
+    useEffect(() => {
         if (!repoMenu) return;
         const handler = (e) => {
             if (e.key === 'Escape') {
@@ -273,16 +283,6 @@ const SourceControlPanel = ({
         const msg = await onGenerateCommitMessage();
         if (msg) setMessage(msg);
     };
-
-    useEffect(() => {
-        const el = messageRef.current;
-        if (!el) return;
-        el.style.height = 'auto';
-        const lineHeight = 18;
-        const maxHeight = lineHeight * 6;
-        const next = Math.min(el.scrollHeight, maxHeight);
-        el.style.height = `${next}px`;
-    }, [message]);
 
     const canCommit = !!message.trim() && staged.length > 0;
 

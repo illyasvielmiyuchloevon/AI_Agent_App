@@ -198,7 +198,10 @@ app.post("/sessions/:id/chat", async (req, res) => {
   const root = req.headers["x-workspace-root"] as string;
   workspaceContext.run({ id: root || sessionId, root }, async () => {
     try {
-      const config = await db.loadLlmConfig();
+      const bodyConfig = (req.body && typeof req.body === "object" && (req.body as any).llm_config && typeof (req.body as any).llm_config === "object")
+        ? (req.body as any).llm_config
+        : null;
+      const config = bodyConfig || await db.loadLlmConfig();
       if (!config) {
         res.status(400).json({ detail: "Agent not configured" });
         return;

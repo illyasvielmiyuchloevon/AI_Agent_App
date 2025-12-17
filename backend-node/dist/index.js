@@ -232,7 +232,10 @@ app.post("/sessions/:id/chat", async (req, res) => {
     const root = req.headers["x-workspace-root"];
     context_1.workspaceContext.run({ id: root || sessionId, root }, async () => {
         try {
-            const config = await db.loadLlmConfig();
+            const bodyConfig = (req.body && typeof req.body === "object" && req.body.llm_config && typeof req.body.llm_config === "object")
+                ? req.body.llm_config
+                : null;
+            const config = bodyConfig || await db.loadLlmConfig();
             if (!config) {
                 res.status(400).json({ detail: "Agent not configured" });
                 return;
@@ -337,6 +340,31 @@ app.get("/workspace/structure", async (req, res) => {
         const root = (0, context_1.getWorkspaceRoot)();
         const structure = await (0, filesystem_1.getProjectStructure)(root);
         res.json(structure);
+    }
+    catch (e) {
+        res.status(400).json({ detail: e.message });
+    }
+});
+app.post("/workspace/search", async (req, res) => {
+    try {
+        const root = (0, context_1.getWorkspaceRoot)();
+        const { query, case_sensitive, regex } = req.body;
+        if (!query) {
+            res.status(400).json({ detail: "Query is required" });
+            return;
+        }
+        const tool = new filesystem_1.SearchInFilesTool();
+        const result = await tool.execute({
+            query,
+            path: '.',
+            case_sensitive: !!case_sensitive,
+            regex: !!regex,
+            max_results: 500
+        });
+        if (result.status === 'error') {
+            throw new Error(result.message);
+        }
+        res.json(result);
     }
     catch (e) {
         res.status(400).json({ detail: e.message });

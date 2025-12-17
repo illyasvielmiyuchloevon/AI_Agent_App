@@ -2144,17 +2144,18 @@ function App() {
         return next;
     });
 
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    streamBufferRef.current = '';
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      streamBufferRef.current = '';
 
-    try {
-      const response = await projectFetch(`/api/sessions/${sessionIdToUse}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: cleanedText, attachments: safeAttachments, mode: currentMode, tool_overrides: enabledTools }),
-        signal: controller.signal
-      });
+      try {
+      const llmConfig = getBackendConfig();
+       const response = await projectFetch(`/api/sessions/${sessionIdToUse}/chat`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ message: cleanedText, attachments: safeAttachments, mode: currentMode, tool_overrides: enabledTools, llm_config: llmConfig }),
+         signal: controller.signal
+       });
 
       if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -2955,14 +2956,15 @@ function App() {
       if (!currentSessionId) return 'Error: Please open a chat session first.';
       
       try {
-           const res = await projectFetch(`/api/sessions/${currentSessionId}/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: prompt, mode: 'chat' })
-          });
-          if (!res.body) return '';
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
+           const llmConfig = getBackendConfig();
+            const res = await projectFetch(`/api/sessions/${currentSessionId}/chat`, {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ message: prompt, mode: 'chat', llm_config: llmConfig })
+           });
+           if (!res.body) return '';
+           const reader = res.body.getReader();
+           const decoder = new TextDecoder();
           let result = '';
           while (true) {
               const { value, done } = await reader.read();
