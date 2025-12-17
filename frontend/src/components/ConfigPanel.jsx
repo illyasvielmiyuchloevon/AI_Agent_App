@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getTranslation } from '../utils/i18n';
+import SettingsEditor from './SettingsEditor';
 
 const ConfigSlider = ({ label, value, min, max, step, onChange, helpText, unit = '', defaultValue }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -456,13 +457,19 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                     >
                         Theme & Appearance
                     </div>
-                    <div 
+                    <div
                         className={`config-sidebar-item ${activeTab === 'general' ? 'active' : ''}`}
                         onClick={() => setActiveTab('general')}
                     >
                         LLM & Session
                     </div>
-                    <div 
+                    <div
+                        className={`config-sidebar-item ${activeTab === 'ai-core' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('ai-core')}
+                    >
+                        AI Core / Models
+                    </div>
+                    <div
                         className={`config-sidebar-item ${activeTab === 'agent' ? 'active' : ''}`}
                         onClick={() => setActiveTab('agent')}
                     >
@@ -480,6 +487,7 @@ function ConfigPanel({ config, setConfig, toolSettings, onToolSettingsChange, on
                     {activeTab === 'app' && renderAppSettings()}
                     {activeTab === 'appearance' && renderAppearanceSettings()}
                     {activeTab === 'general' && renderGeneralSettings()}
+                    {activeTab === 'ai-core' && <SettingsEditor />}
                     {activeTab === 'agent' && renderToolSettings('agent', 'Agent Mode Tools')}
                     {activeTab === 'canva' && renderToolSettings('canva', 'Canva Mode Tools')}
                 </div>

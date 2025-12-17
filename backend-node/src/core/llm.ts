@@ -4,6 +4,7 @@ import { UnifiedMessage, BaseTool } from './types';
 import * as db from '../db';
 
 export abstract class LLMClient {
+    providerName = 'openai';
     abstract chatCompletion(
         messages: UnifiedMessage[],
         tools?: BaseTool[],
@@ -24,6 +25,7 @@ export abstract class LLMClient {
 export class OpenAIProvider extends LLMClient {
     private client: OpenAI;
     private model: string;
+    providerName = 'openai';
 
     constructor(apiKey: string, model = "gpt-4-turbo", baseUrl?: string) {
         super();
@@ -139,7 +141,7 @@ export class OpenAIProvider extends LLMClient {
 
             // Log success
             if (sessionId) {
-                await db.addLog(sessionId, 'openai', 'chat_completion', 'https://api.openai.com/v1/chat/completions', logData, responseBody, statusCode, true, true);
+                await db.addLog(sessionId, this.providerName, 'chat_completion', 'https://api.openai.com/v1/chat/completions', logData, responseBody, statusCode, true, true);
             }
 
             return result;
@@ -148,7 +150,7 @@ export class OpenAIProvider extends LLMClient {
             console.error(`[LLM] Completion error: ${e.message}`);
             // Log error
              if (sessionId) {
-                await db.addLog(sessionId, 'openai', 'chat_completion', 'https://api.openai.com/v1/chat/completions', logData, { error: e.message }, e.status || 500, false, false, e.message);
+                await db.addLog(sessionId, this.providerName, 'chat_completion', 'https://api.openai.com/v1/chat/completions', logData, { error: e.message }, e.status || 500, false, false, e.message);
             }
             throw e;
         }
@@ -271,7 +273,7 @@ export class OpenAIProvider extends LLMClient {
 
              // Log success
              if (sessionId) {
-                await db.addLog(sessionId, 'openai', 'chat_completion_stream', 'https://api.openai.com/v1/chat/completions', logData, { content: fullContent, tool_calls: toolCalls }, 200, true, true);
+                await db.addLog(sessionId, this.providerName, 'chat_completion_stream', 'https://api.openai.com/v1/chat/completions', logData, { content: fullContent, tool_calls: toolCalls }, 200, true, true);
             }
 
             return result;
@@ -279,7 +281,7 @@ export class OpenAIProvider extends LLMClient {
         } catch (e: any) {
             console.error(`[LLM] Stream error: ${e.message}`);
              if (sessionId) {
-                await db.addLog(sessionId, 'openai', 'chat_completion_stream', 'https://api.openai.com/v1/chat/completions', logData, { error: e.message }, 500, false, false, e.message);
+                await db.addLog(sessionId, this.providerName, 'chat_completion_stream', 'https://api.openai.com/v1/chat/completions', logData, { error: e.message }, 500, false, false, e.message);
             }
             throw e;
         }
@@ -300,6 +302,13 @@ export class OpenAIProvider extends LLMClient {
             console.error(`[LLM] Health check failed: ${e.message}`);
             return false;
         }
+    }
+}
+
+export class OpenAICompatibleProvider extends OpenAIProvider {
+    constructor(apiKey: string, model = "gpt-4o", baseUrl?: string, name = 'openai-compatible') {
+        super(apiKey, model, baseUrl);
+        this.providerName = name;
     }
 }
 

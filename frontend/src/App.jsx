@@ -23,6 +23,7 @@ import CloneRepositoryModal from './components/CloneRepositoryModal';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
 import { getTranslation } from './utils/i18n';
+import { AICoreProvider } from './ai-core/AICoreProvider.jsx';
 
 const DEBUG_SEPARATORS = false;
 
@@ -3315,7 +3316,8 @@ function App() {
   }), [workspaceState.files, workspaceState.fileTree, workspaceState.openTabs, workspaceState.workspaceRoots]);
 
   return (
-    <WorkbenchShell theme={theme}>
+    <AICoreProvider projectFetch={projectFetch}>
+      <WorkbenchShell theme={theme}>
       <TitleBar 
           projectMeta={projectMeta}
           onSelectProject={handleSelectWorkspace}
@@ -3783,7 +3785,8 @@ function App() {
           onConfirm={inputModal.onConfirm}
           onClose={inputModal.onClose}
       />
-    </WorkbenchShell>
+      </WorkbenchShell>
+    </AICoreProvider>
   );
 }
 

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, Suspense } from 'react';
+import EditorAIActions from './EditorAIActions';
 
 const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
 const MonacoDiffEditor = React.lazy(() =>
@@ -289,6 +290,8 @@ function Workspace({
   );
 
   const activeContent = files.find((f) => f.path === activeFile)?.content || '';
+  const [aiActionResult, setAiActionResult] = useState('');
+  const [selectionProvider, setSelectionProvider] = useState(null);
   
   const updatedPaths = useMemo(
     () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
@@ -437,17 +440,39 @@ function Workspace({
                             </Suspense>
                           )
                           : (
-                            <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
-                              <MonacoEditor
-                                key={`editor-${activeFile}`}
-                                height="100%"
-                                language={inferLanguage(activeFile)}
-                                theme={monacoTheme}
-                                value={activeContent}
-                                options={monacoOptions}
-                                onChange={(value) => onFileChange(activeFile, value ?? '')}
+                            <>
+                              <EditorAIActions
+                                code={activeContent}
+                                path={activeFile}
+                                selectionProvider={selectionProvider}
+                                onResult={setAiActionResult}
                               />
-                            </Suspense>
+                              {aiActionResult ? (
+                                <div className="ai-action-result" role="status">
+                                  <div className="muted">AI Core 输出</div>
+                                  <pre>{aiActionResult}</pre>
+                                </div>
+                              ) : null}
+                              <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
+                                <MonacoEditor
+                                  key={`editor-${activeFile}`}
+                                  height="100%"
+                                  language={inferLanguage(activeFile)}
+                                  theme={monacoTheme}
+                                  value={activeContent}
+                                  options={monacoOptions}
+                                  onChange={(value) => onFileChange(activeFile, value ?? '')}
+                                  onMount={(editor) => {
+                                    setSelectionProvider(() => () => {
+                                      const selection = editor.getSelection();
+                                      if (!selection) return '';
+                                      const model = editor.getModel();
+                                      return model ? model.getValueInRange(selection) : '';
+                                    });
+                                  }}
+                                />
+                              </Suspense>
+                            </>
                           )
                         )
                     )
