@@ -518,7 +518,7 @@ function ConfigPanel({
         </div>
       </div>
 
-      {page}
+      <div className="settings-main-scroll">{page}</div>
 
       <div className="settings-footer" aria-label={language === 'zh' ? '设置操作' : 'Settings actions'}>
         <div className={`config-status ${apiStatus || 'unknown'}`} aria-live="polite">

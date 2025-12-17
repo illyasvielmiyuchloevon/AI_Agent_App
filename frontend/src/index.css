@@ -40,10 +40,30 @@
   --settings-card-bg: var(--panel);
   --settings-border: var(--border);
   --settings-muted: var(--muted);
-  --settings-radius: 14px;
-  --settings-shadow: 0 14px 40px rgba(0, 0, 0, 0.12);
-  --settings-row-hover: rgba(37, 99, 235, 0.06);
   --settings-focus: var(--focus-ring);
+  --settings-row-hover: rgba(37, 99, 235, 0.06);
+
+  /* Settings layout */
+  --settings-canvas-max: 1040px;
+  --settings-canvas-padding: clamp(24px, 6vw, 72px);
+  --settings-gap: 22px;
+  --settings-sidebar-width: 232px;
+  --settings-control-col: 240px;
+
+  /* Settings surface */
+  --settings-radius: 12px;
+  --settings-card-radius: 12px;
+  --settings-card-shadow: 0 6px 16px rgba(0, 0, 0, 0.07);
+  --settings-modal-shadow: 0 14px 40px rgba(0, 0, 0, 0.14);
+
+  /* Settings typography */
+  --settings-title-size: 20px;
+  --settings-section-size: 15px;
+  --settings-body-size: 14px;
+  --settings-help-size: 12px;
+
+  /* Settings controls */
+  --settings-control-height: 34px;
 }
 
 *, *::before, *::after {
@@ -82,6 +102,9 @@
   --danger: #f87171;
   --warning: #fbbf24;
   --success: #22c55e;
+
+  --settings-card-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  --settings-modal-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
 }
 
 body {
@@ -1573,11 +1596,11 @@ input:focus, select:focus, textarea:focus {
 .config-modal {
   width: 1600px;
   max-width: 96vw;
-  background: var(--settings-panel-bg);
+  background: var(--settings-page-bg);
   border: 1px solid var(--settings-border);
   border-radius: var(--settings-radius);
   padding: 0;
-  box-shadow: var(--settings-shadow);
+  box-shadow: var(--settings-modal-shadow);
   color: var(--text);
   overflow: hidden;
   display: flex;
@@ -1683,44 +1706,64 @@ input:focus, select:focus, textarea:focus {
 }
 
 /* Settings (revamp) */
-.settings-shell {
-  display: flex;
-  width: 100%;
-  height: 100%;
+.settings-page {
+  flex: 1;
   min-height: 0;
+  overflow: auto;
   background: var(--settings-page-bg);
+  padding: var(--settings-canvas-padding);
+}
+
+.settings-shell {
+  position: relative;
+  width: min(var(--settings-canvas-max), 100%);
+  margin: 0 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
+  gap: var(--settings-gap);
+  align-items: start;
 }
 
 .settings-overlay {
   display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.25);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
 }
 
 .settings-sidebar {
-  width: 280px;
-  flex: 0 0 280px;
-  border-right: 1px solid var(--settings-border);
   background: var(--settings-sidebar-bg);
-  padding: 18px 16px;
+  border: 1px solid var(--settings-border);
+  border-radius: var(--settings-card-radius);
+  box-shadow: var(--settings-card-shadow);
+  padding: 14px 12px;
   overflow: auto;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 48px);
 }
 
 .settings-sidebar-inner {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .settings-user {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 6px 10px;
+  gap: 10px;
+  padding: 6px 6px 8px;
 }
 
 .settings-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   background: #65a30d;
   color: #fff;
   font-weight: 800;
@@ -1739,9 +1782,9 @@ input:focus, select:focus, textarea:focus {
 }
 
 .settings-user-name {
-  font-weight: 700;
-  font-size: 0.98rem;
-  line-height: 1.1;
+  font-weight: 650;
+  font-size: var(--settings-body-size);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1749,9 +1792,9 @@ input:focus, select:focus, textarea:focus {
 
 .settings-pro-pill {
   align-self: flex-start;
-  font-size: 0.75rem;
-  padding: 2px 7px;
-  border-radius: 8px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 7px;
   border: 1px solid var(--pill-border);
   background: var(--pill-bg);
   color: var(--tag-text);
@@ -1772,10 +1815,12 @@ input:focus, select:focus, textarea:focus {
 
 .settings-search-input {
   width: 100%;
-  padding: 10px 74px 10px 36px;
+  height: var(--settings-control-height);
+  padding: 0 68px 0 34px;
   border-radius: 10px;
   background: var(--panel-sub);
   border: 1px solid var(--settings-border);
+  font-size: var(--settings-body-size);
 }
 
 .settings-search-input:focus {
@@ -1785,7 +1830,7 @@ input:focus, select:focus, textarea:focus {
 .settings-search-kbd {
   position: absolute;
   right: 10px;
-  font-size: 0.72rem;
+  font-size: 11px;
   padding: 2px 6px;
   border-radius: 6px;
   border: 1px solid var(--settings-border);
@@ -1798,7 +1843,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-top: 8px;
+  padding-top: 6px;
 }
 
 .settings-nav-item {
@@ -1806,8 +1851,8 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text);
@@ -1829,9 +1874,16 @@ input:focus, select:focus, textarea:focus {
   border-color: rgba(37, 99, 235, 0.18);
 }
 
+.settings-sidebar-divider {
+  height: 1px;
+  background: var(--settings-border);
+  margin: 2px 6px 4px;
+  opacity: 0.9;
+}
+
 .settings-nav-icon {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1844,14 +1896,26 @@ input:focus, select:focus, textarea:focus {
 
 .settings-nav-label {
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--settings-body-size);
 }
 
 .settings-main {
-  flex: 1;
   min-width: 0;
-  padding: 26px 32px;
+  background: var(--settings-panel-bg);
+  border: 1px solid var(--settings-border);
+  border-radius: var(--settings-card-radius);
+  box-shadow: var(--settings-card-shadow);
+  padding: 18px 20px 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-main-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
+  padding-right: 2px;
 }
 
 .settings-toolbar {
@@ -1859,7 +1923,7 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .settings-toolbar-left {
@@ -1870,8 +1934,8 @@ input:focus, select:focus, textarea:focus {
 
 .settings-menu-btn {
   display: none;
-  height: 34px;
-  width: 34px;
+  height: var(--settings-control-height);
+  width: var(--settings-control-height);
   border-radius: 10px;
   border: 1px solid var(--settings-border);
   background: var(--settings-panel-bg);
@@ -1886,38 +1950,40 @@ input:focus, select:focus, textarea:focus {
 }
 
 .settings-page-title {
-  font-size: 30px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: var(--settings-title-size);
+  font-weight: 650;
+  letter-spacing: -0.01em;
   margin: 0;
 }
 
 .settings-page-intro {
   margin: 6px 0 18px;
   color: var(--settings-muted);
-  font-size: 0.95rem;
-  max-width: 860px;
+  font-size: var(--settings-body-size);
+  line-height: 1.45;
+  max-width: 72ch;
 }
 
 .settings-group-title {
-  margin: 22px 0 10px;
-  font-size: 1.02rem;
-  font-weight: 700;
+  margin: 20px 0 10px;
+  font-size: var(--settings-section-size);
+  font-weight: 650;
   color: var(--text);
 }
 
 .settings-card {
   background: var(--settings-card-bg);
   border: 1px solid var(--settings-border);
-  border-radius: var(--settings-radius);
+  border-radius: var(--settings-card-radius);
   overflow: hidden;
+  box-shadow: var(--settings-card-shadow);
 }
 
 .setting-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) auto;
-  gap: 16px;
-  padding: 16px 18px;
+  grid-template-columns: minmax(260px, 1fr) var(--settings-control-col);
+  gap: 14px;
+  padding: 14px 16px;
   align-items: center;
 }
 
@@ -1929,6 +1995,10 @@ input:focus, select:focus, textarea:focus {
   background: var(--settings-row-hover);
 }
 
+.setting-row:focus-within {
+  background: var(--settings-row-hover);
+}
+
 .setting-left {
   display: flex;
   flex-direction: column;
@@ -1937,13 +2007,13 @@ input:focus, select:focus, textarea:focus {
 }
 
 .setting-title {
-  font-weight: 700;
-  font-size: 0.98rem;
+  font-weight: 600;
+  font-size: var(--settings-body-size);
   color: var(--text);
 }
 
 .setting-desc {
-  font-size: 0.88rem;
+  font-size: var(--settings-help-size);
   color: var(--settings-muted);
   line-height: 1.4;
 }
@@ -1953,20 +2023,26 @@ input:focus, select:focus, textarea:focus {
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
-  min-width: 240px;
+  width: var(--settings-control-col);
+  min-width: 0;
 }
 
 .settings-control {
-  width: 320px;
-  max-width: 44vw;
+  width: 100%;
+  max-width: 100%;
+  height: var(--settings-control-height);
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: var(--settings-body-size);
+  line-height: 1.2;
 }
 
 .settings-control.compact {
-  width: 240px;
+  max-width: 200px;
 }
 
 .settings-help {
-  font-size: 0.8rem;
+  font-size: var(--settings-help-size);
   color: var(--settings-muted);
 }
 
@@ -2024,13 +2100,16 @@ input:focus, select:focus, textarea:focus {
 .settings-slider {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 420px;
-  max-width: 60vw;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px 10px;
+  width: 100%;
+  max-width: 440px;
 }
 
 .settings-slider input[type="range"] {
-  flex: 1;
+  flex: 1 1 180px;
+  min-width: 160px;
 }
 
 .settings-slider-number {
@@ -2062,8 +2141,9 @@ input:focus, select:focus, textarea:focus {
   gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--settings-border);
-  border-radius: var(--settings-radius);
+  border-radius: var(--settings-card-radius);
   background: var(--settings-panel-bg);
+  box-shadow: var(--settings-card-shadow);
 }
 
 .settings-footer-actions {
@@ -2074,19 +2154,30 @@ input:focus, select:focus, textarea:focus {
 }
 
 @media (max-width: 900px) {
+  .settings-page {
+    padding: 16px;
+  }
+
+  .settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
   .settings-menu-btn {
     display: inline-flex;
   }
 
   .settings-sidebar {
-    position: fixed;
+    position: absolute;
     z-index: 200001;
     top: 0;
     bottom: 0;
     left: 0;
+    width: min(320px, 86vw);
+    max-height: none;
     transform: translateX(-104%);
     transition: transform 0.18s ease;
-    box-shadow: var(--settings-shadow);
+    box-shadow: var(--settings-modal-shadow);
   }
 
   .settings-shell[data-sidebar-open="true"] .settings-sidebar {
@@ -2094,14 +2185,8 @@ input:focus, select:focus, textarea:focus {
   }
 
   .settings-overlay {
-    position: fixed;
-    inset: 0;
     z-index: 200000;
-    background: rgba(15, 23, 42, 0.25);
     display: block;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.18s ease;
   }
 
   .settings-shell[data-sidebar-open="true"] .settings-overlay {
@@ -2110,7 +2195,7 @@ input:focus, select:focus, textarea:focus {
   }
 
   .settings-main {
-    padding: 18px 18px;
+    padding: 0 0 22px;
   }
 
   .setting-row {
@@ -2118,7 +2203,7 @@ input:focus, select:focus, textarea:focus {
   }
 
   .setting-right {
-    min-width: 0;
+    width: 100%;
     justify-content: flex-start;
   }
 

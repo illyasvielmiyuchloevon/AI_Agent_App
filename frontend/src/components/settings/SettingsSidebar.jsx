@@ -55,6 +55,8 @@ function SettingsSidebar({
         </kbd>
       </div>
 
+      <div className="settings-sidebar-divider" aria-hidden />
+
       <nav className="settings-nav" aria-label={language === 'zh' ? '设置导航' : 'Settings navigation'}>
         {items.map((item) => {
           const active = item.id === activeId;
@@ -82,4 +84,3 @@ function SettingsSidebar({
 }
 
 export default SettingsSidebar;
-
