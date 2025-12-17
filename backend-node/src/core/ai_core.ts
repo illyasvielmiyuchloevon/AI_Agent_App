@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { tryGetWorkspaceRoot } from '../context';
 import { loadAiCoreSettings, saveAiCoreSettings } from '../db';
 import { LLMClient, OpenAIProvider, AnthropicProvider, OpenAICompatibleProvider } from './llm';
 
@@ -85,10 +86,22 @@ function ensureModel(model?: string, provider?: ProviderConfig): string | undefi
 
 export class AiCore {
     private settings: AiCoreSettings = DEFAULT_SETTINGS;
+    private loaded = false;
+    private loadedWorkspaceRoot?: string;
 
     async load() {
-        const stored = await loadAiCoreSettings();
+        const currentRoot = tryGetWorkspaceRoot();
+        let stored: AiCoreSettings | null = null;
+        if (currentRoot) {
+            try {
+                stored = await loadAiCoreSettings();
+            } catch (e) {
+                // ignore and fall back to defaults
+            }
+        }
         this.settings = stored || DEFAULT_SETTINGS;
+        this.loaded = true;
+        this.loadedWorkspaceRoot = currentRoot;
         return this.settings;
     }
 
@@ -158,7 +171,10 @@ export class AiCore {
     }
 
     async getClientForCapability(capability: Capability, workspaceId?: string) {
-        if (!this.settings) await this.load();
+        const currentRoot = tryGetWorkspaceRoot();
+        if (!this.loaded || this.loadedWorkspaceRoot !== currentRoot) {
+            await this.load();
+        }
         const { provider, model } = this.route(capability, workspaceId);
         const client = this.buildClient(provider, model);
         return { client, provider, model };
