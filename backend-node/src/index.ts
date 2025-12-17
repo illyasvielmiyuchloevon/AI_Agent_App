@@ -6,6 +6,7 @@ import { workspaceContext, getWorkspaceRoot } from "./context";
 import * as db from "./db";
 import { Agent } from "./agent";
 import { OpenAIProvider, AnthropicProvider, LLMClient } from "./core/llm";
+import { aiCore, Capability } from "./core/ai_core";
 import { getProjectStructure, resolveWorkspaceFilePath, SearchInFilesTool } from "./tools/filesystem";
 import { takeSnapshot, persistDiffSafely } from "./diffs";
 import { workspaceManager } from "./workspace/manager";
@@ -39,6 +40,8 @@ let globalLlmConfig: any = null;
 async function initLlm() {
 }
 
+aiCore.load().catch((e) => console.warn('[AI Core] init failed', (e as any)?.message));
+
 function buildLlmClient(config: any): LLMClient {
   if (config.provider === "openai") {
     return new OpenAIProvider(config.api_key, config.model, config.base_url);
@@ -57,14 +60,18 @@ app.post("/health", async (req, res) => {
   if (root) {
     try {
       await db.initDb();
+      const capability = (req.body?.capability as Capability) || 'chat';
       if (req.body && req.body.provider) {
-        console.log("[Health] Using config from body");
-      }
-      const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
-      if (config) {
-        const client = buildLlmClient(config);
-        isHealthy = await client.checkHealth();
+        console.log("[Health] Using legacy config from body");
+        const client = buildLlmClient(req.body);
+        isHealthy = await client.checkHealth(req.body.model);
         message = isHealthy ? "Connected" : "Health check failed";
+      } else {
+        const { client, provider, model } = await aiCore.getClientForCapability(capability);
+        isHealthy = await client.checkHealth(model);
+        message = isHealthy
+          ? `Connected (${provider.displayName || provider.provider})`
+          : "Health check failed";
       }
     } catch (e: any) {
       message = e.message;
@@ -79,6 +86,90 @@ app.post("/config", async (req, res) => {
     const client = buildLlmClient(config);
     await db.saveLlmConfig(config);
     res.json({ status: "configured", provider: config.provider, config });
+  } catch (e: any) {
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+app.get("/api/ai/providers", async (_req, res) => {
+  try {
+    const settings = await aiCore.getSettings();
+    res.json(settings.providers);
+  } catch (e: any) {
+    res.status(500).json({ detail: e.message });
+  }
+});
+
+app.post("/api/ai/providers", async (req, res) => {
+  try {
+    const provider = await aiCore.upsertProvider(req.body);
+    res.json(provider);
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.post("/api/ai/providers/:id/test", async (req, res) => {
+  try {
+    const result = await aiCore.testProvider(req.params.id);
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.get("/api/ai/settings", async (_req, res) => {
+  try {
+    const settings = await aiCore.getSettings();
+    res.json(settings);
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.post("/api/ai/settings", async (req, res) => {
+  try {
+    const { defaults, workspaceId } = req.body || {};
+    const settings = await aiCore.setDefaults(defaults, workspaceId);
+    res.json(settings);
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.get("/api/ai/models", async (_req, res) => {
+  try {
+    const settings = await aiCore.getSettings();
+    const models = settings.providers.flatMap((p) => (p.models || []).map((m) => ({
+      id: m,
+      providerId: p.id,
+      provider: p.provider,
+      displayName: m,
+      supportsTools: !!p.declaredCapabilities?.tools,
+      supportsVision: !!p.declaredCapabilities?.vision,
+      supportsEmbeddings: !!p.declaredCapabilities?.embeddings,
+    })));
+    res.json({ models, defaults: settings.defaults });
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
+app.post("/api/ai/editor-action", async (req, res) => {
+  const capability: Capability = (req.body?.capability as Capability) || 'editorAction';
+  try {
+    const { client, model } = await aiCore.getClientForCapability(capability);
+    const action = req.body?.action || 'explain';
+    const source = req.body?.source || '';
+    const path = req.body?.path || '';
+    const instruction = req.body?.instruction || '';
+    const prompt = `You are an IDE AI core. Perform the requested editor action in a concise, actionable way. Action: ${action}. Path: ${path}. Instruction: ${instruction}. Return plain text unless the request asks for code.`;
+    const userMessage = `${prompt}\n\nCode:\n${source}`;
+    const result = await client.chatCompletion([
+      { role: 'system', content: 'You are an IDE assistant that produces deterministic, developer-ready output.' },
+      { role: 'user', content: userMessage }
+    ], undefined, req.body?.sessionId, { model });
+    res.json({ message: result });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
   }
@@ -196,15 +287,12 @@ app.post("/sessions/:id/chat", async (req, res) => {
     ? (tool_overrides as any[]).filter(t => typeof t === "string" && t.trim().length > 0)
     : [];
   const root = req.headers["x-workspace-root"] as string;
+  const capability: Capability = (req.body?.capability as Capability) || 'chat';
   workspaceContext.run({ id: root || sessionId, root }, async () => {
     try {
-      const config = await db.loadLlmConfig();
-      if (!config) {
-        res.status(400).json({ detail: "Agent not configured" });
-        return;
-      }
-      const llm = buildLlmClient(config);
-      const contextMaxLength = config.context_max_length || 128000;
+      const { client: llm, model } = await aiCore.getClientForCapability(capability);
+      const legacyConfig = await db.loadLlmConfig();
+      const contextMaxLength = (req.body?.context_max_length || legacyConfig?.context_max_length) || 128000;
       const agent = new Agent(llm, sessionId, contextMaxLength);
       const session = await db.getSession(sessionId);
       const resolvedMode = mode || session?.mode;
@@ -218,8 +306,9 @@ app.post("/sessions/:id/chat", async (req, res) => {
       }
       const activeTools = agent.getActiveTools();
       const chatOptions: any = {
-        max_tokens: config.output_max_tokens,
-        temperature: config.temperature,
+        max_tokens: req.body?.output_max_tokens || legacyConfig?.output_max_tokens,
+        temperature: req.body?.temperature ?? legacyConfig?.temperature,
+        model,
       };
       if (activeTools.length > 0) {
         chatOptions.tool_choice = "auto";

@@ -5,6 +5,7 @@ import { getWorkspaceRoot } from './context';
 
 const DATA_FILE_NAME = "sessions.json";
 const LLM_CONFIG_FILE = "llm_config.json";
+const AI_CORE_FILE = "ai_core.json";
 
 interface Session {
     id: string;
@@ -81,6 +82,10 @@ async function ensureDataDir(): Promise<string> {
 
 function getDataFilePath(): string {
     return path.join(getDataDir(), DATA_FILE_NAME);
+}
+
+function getAiCoreConfigPath(): string {
+    return path.join(getDataDir(), AI_CORE_FILE);
 }
 
 async function loadState(): Promise<DBState> {
@@ -387,4 +392,30 @@ export async function saveLlmConfig(config: any): Promise<any> {
         }
     }
     return config;
+}
+
+// AI Core settings
+export async function loadAiCoreSettings(): Promise<any | null> {
+    const filePath = getAiCoreConfigPath();
+    try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        return JSON.parse(content);
+    } catch (e) {
+        return null;
+    }
+}
+
+export async function saveAiCoreSettings(settings: any): Promise<any> {
+    const dir = await ensureDataDir();
+    const filePath = path.join(dir, AI_CORE_FILE);
+    const payload = JSON.stringify(settings, null, 2);
+    const tmp = `${filePath}.tmp`;
+    await fs.writeFile(tmp, payload, 'utf-8');
+    try {
+        await fs.rename(tmp, filePath);
+    } catch (e) {
+        await fs.writeFile(filePath, payload, 'utf-8');
+        try { await fs.unlink(tmp); } catch {}
+    }
+    return settings;
 }
