@@ -93,7 +93,7 @@ app.post("/config", async (req, res) => {
 
 app.get("/api/ai/providers", async (_req, res) => {
   try {
-    const settings = aiCore.getSettings();
+    const settings = await aiCore.getSettings();
     res.json(settings.providers);
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
@@ -120,7 +120,7 @@ app.post("/api/ai/providers/:id/test", async (req, res) => {
 
 app.get("/api/ai/settings", async (_req, res) => {
   try {
-    const settings = aiCore.getSettings();
+    const settings = await aiCore.getSettings();
     res.json(settings);
   } catch (e: any) {
     res.status(400).json({ detail: e.message });
@@ -139,7 +139,7 @@ app.post("/api/ai/settings", async (req, res) => {
 
 app.get("/api/ai/models", async (_req, res) => {
   try {
-    const settings = aiCore.getSettings();
+    const settings = await aiCore.getSettings();
     const models = settings.providers.flatMap((p) => (p.models || []).map((m) => ({
       id: m,
       providerId: p.id,

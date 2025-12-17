@@ -89,6 +89,13 @@ export class AiCore {
     private loaded = false;
     private loadedWorkspaceRoot?: string;
 
+    private async ensureWorkspaceLoaded() {
+        const currentRoot = tryGetWorkspaceRoot();
+        if (!this.loaded || this.loadedWorkspaceRoot !== currentRoot) {
+            await this.load();
+        }
+    }
+
     async load() {
         const currentRoot = tryGetWorkspaceRoot();
         let stored: AiCoreSettings | null = null;
@@ -105,7 +112,8 @@ export class AiCore {
         return this.settings;
     }
 
-    getSettings(): AiCoreSettings {
+    async getSettings(): Promise<AiCoreSettings> {
+        await this.ensureWorkspaceLoaded();
         return this.settings;
     }
 
@@ -116,6 +124,7 @@ export class AiCore {
     }
 
     async upsertProvider(input: Omit<ProviderConfig, 'id'> & { id?: string }): Promise<ProviderConfig> {
+        await this.ensureWorkspaceLoaded();
         const id = input.id || uuidv4();
         const provider: ProviderConfig = { ...input, id } as ProviderConfig;
         const existingIndex = this.settings.providers.findIndex((p) => p.id === id);
@@ -129,6 +138,7 @@ export class AiCore {
     }
 
     async setDefaults(defaults: Partial<Record<Capability, CapabilityModel>>, workspaceId?: string): Promise<AiCoreSettings> {
+        await this.ensureWorkspaceLoaded();
         if (workspaceId) {
             if (!this.settings.workspaces) this.settings.workspaces = {};
             const current = this.settings.workspaces[workspaceId] || {};
@@ -171,16 +181,14 @@ export class AiCore {
     }
 
     async getClientForCapability(capability: Capability, workspaceId?: string) {
-        const currentRoot = tryGetWorkspaceRoot();
-        if (!this.loaded || this.loadedWorkspaceRoot !== currentRoot) {
-            await this.load();
-        }
+        await this.ensureWorkspaceLoaded();
         const { provider, model } = this.route(capability, workspaceId);
         const client = this.buildClient(provider, model);
         return { client, provider, model };
     }
 
     async testProvider(providerId: string): Promise<{ ok: boolean; message?: string }> {
+        await this.ensureWorkspaceLoaded();
         const provider = findProvider(this.settings, providerId);
         if (!provider) return { ok: false, message: 'Provider not found' };
         try {
