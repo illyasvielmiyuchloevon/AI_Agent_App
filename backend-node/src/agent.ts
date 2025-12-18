@@ -16,6 +16,7 @@ export class Agent {
     private tools: BaseTool[] = [];
     private activeToolNames: Set<string> = new Set();
     private systemPrompt: string = getPrompt('chat');
+    private systemContext: string = '';
     private contextMaxLength: number = 128000;
     private registry: ToolRegistry;
 
@@ -65,7 +66,8 @@ export class Agent {
     async loadHistory() {
         if (!this.sessionId) return;
         const messages = await db.getMessages(this.sessionId);
-        this.history = messages.map(m => ({
+        const recent = messages.slice(Math.max(0, messages.length - 10));
+        this.history = recent.map(m => ({
             role: m.role as any,
             content: m.content,
             tool_calls: (m as any).tool_calls,
@@ -109,11 +111,19 @@ export class Agent {
 
     private ensureSystemPrompt() {
         const existingSystem = this.history.find(m => m.role === 'system');
+        const combined = this.systemContext && this.systemContext.trim().length > 0
+          ? `${this.systemPrompt}\n\n${this.systemContext}`
+          : this.systemPrompt;
         if (existingSystem) {
-            existingSystem.content = this.systemPrompt;
+            existingSystem.content = combined;
         } else {
-            this.history.unshift({ role: 'system', content: this.systemPrompt });
+            this.history.unshift({ role: 'system', content: combined });
         }
+    }
+
+    setSystemContext(context: string) {
+        this.systemContext = context || '';
+        this.ensureSystemPrompt();
     }
 
     private async saveMessage(message: UnifiedMessage) {

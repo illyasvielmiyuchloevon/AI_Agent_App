@@ -4,12 +4,11 @@ import fs from "fs/promises";
 import path from "path";
 import { workspaceContext, getWorkspaceRoot } from "./context";
 import * as db from "./db";
-import { Agent } from "./agent";
-import { OpenAIProvider, AnthropicProvider, LLMClient } from "./core/llm";
 import { getProjectStructure, resolveWorkspaceFilePath, SearchInFilesTool } from "./tools/filesystem";
 import { takeSnapshot, persistDiffSafely } from "./diffs";
 import { workspaceManager } from "./workspace/manager";
 import { createWorkspaceRpcEnvelope } from "./workspace/rpc";
+import { AiEngine, registerAiEngineRoutes } from "./ai-engine";
 
 const app = express();
 app.use(cors());
@@ -33,20 +32,11 @@ app.use(async (req, res, next) => {
   }
 });
 
-let globalLlmClient: LLMClient | null = null;
-let globalLlmConfig: any = null;
-
-async function initLlm() {
-}
-
-function buildLlmClient(config: any): LLMClient {
-  if (config.provider === "openai") {
-    return new OpenAIProvider(config.api_key, config.model, config.base_url);
-  } else if (config.provider === "anthropic") {
-    return new AnthropicProvider(config.api_key, config.model, config.base_url);
-  }
-  throw new Error("Invalid provider");
-}
+const aiEngine = new AiEngine();
+aiEngine.init().catch((e) => {
+  console.error(`[AIEngine] init failed: ${(e as any)?.message || e}`);
+});
+registerAiEngineRoutes(app, aiEngine);
 
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
@@ -55,14 +45,9 @@ app.post("/health", async (req, res) => {
   let message = "Agent not configured";
   try {
     await db.initDb();
-    if (req.body && req.body.provider) {
-      console.log("[Health] Using config from body");
-    }
     const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
     if (config) {
-      const client = buildLlmClient(config);
-      const checkModel = typeof config.check_model === "string" ? config.check_model.trim() : "";
-      isHealthy = await client.checkHealth(checkModel || undefined);
+      isHealthy = await aiEngine.checkHealth(config);
       message = isHealthy ? "Connected" : "Health check failed";
     }
   } catch (e: any) {
@@ -74,7 +59,6 @@ app.post("/health", async (req, res) => {
 app.post("/config", async (req, res) => {
   try {
     const config = req.body;
-    const client = buildLlmClient(config);
     await db.saveLlmConfig(config);
     res.json({ status: "configured", provider: config.provider, config });
   } catch (e: any) {
@@ -196,41 +180,27 @@ app.post("/sessions/:id/chat", async (req, res) => {
   const root = typeof req.headers["x-workspace-root"] === "string" ? (req.headers["x-workspace-root"] as string) : "";
   workspaceContext.run({ id: root || sessionId, root }, async () => {
     try {
-      const bodyConfig = (req.body && typeof req.body === "object" && (req.body as any).llm_config && typeof (req.body as any).llm_config === "object")
-        ? (req.body as any).llm_config
-        : null;
-      const config = bodyConfig || await db.loadLlmConfig();
-      if (!config) {
-        res.status(400).json({ detail: "Agent not configured" });
-        return;
-      }
-      const llm = buildLlmClient(config);
-      const contextMaxLength = config.context_max_length || 128000;
-      const agent = new Agent(llm, sessionId, contextMaxLength);
       const session = await db.getSession(sessionId);
       const resolvedMode = mode || session?.mode;
       if (session) {
-        agent.setMode(resolvedMode || session.mode, enabledTools);
         if (resolvedMode && resolvedMode !== session.mode) {
           await db.updateSessionMeta(sessionId, { mode: resolvedMode });
         }
-      } else {
-        agent.setMode(resolvedMode || "chat", enabledTools);
-      }
-      const activeTools = agent.getActiveTools();
-      const parsedTopP = Number(config.top_p);
-      const chatOptions: any = {
-        max_tokens: config.output_max_tokens,
-        temperature: config.temperature,
-        top_p: Number.isFinite(parsedTopP) ? Math.min(1.0, Math.max(0.1, parsedTopP)) : 0.9,
-      };
-      if (activeTools.length > 0) {
-        chatOptions.tool_choice = "auto";
-        chatOptions.parallel_tool_calls = true;
       }
       res.setHeader("Content-Type", "text/plain");
       try {
-        for await (const chunk of agent.chat(message, attachments, chatOptions)) {
+        const llmConfig = (req.body && typeof req.body === "object" && (req.body as any).llm_config && typeof (req.body as any).llm_config === "object")
+          ? (req.body as any).llm_config
+          : undefined;
+        for await (const chunk of aiEngine.chatStream({
+          capability: "chat",
+          sessionId,
+          message,
+          mode: resolvedMode || "chat",
+          attachments,
+          toolOverrides: enabledTools,
+          llmConfig
+        } as any)) {
           res.write(chunk);
         }
       } catch (streamError: any) {

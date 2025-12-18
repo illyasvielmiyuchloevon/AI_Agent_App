@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "start": "ts-node src/index.ts",
-    "test": "ts-node src/verify_tools.ts",
+    "test": "ts-node src/verify_tools.ts && ts-node src/verify_ai_engine.ts",
     "build": "tsc"
   },
   "dependencies": {

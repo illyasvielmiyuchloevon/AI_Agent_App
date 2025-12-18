@@ -49,6 +49,7 @@ class Agent {
     tools = [];
     activeToolNames = new Set();
     systemPrompt = (0, prompts_1.getPrompt)('chat');
+    systemContext = '';
     contextMaxLength = 128000;
     registry;
     // Toolsets
@@ -92,7 +93,8 @@ class Agent {
         if (!this.sessionId)
             return;
         const messages = await db.getMessages(this.sessionId);
-        this.history = messages.map(m => ({
+        const recent = messages.slice(Math.max(0, messages.length - 10));
+        this.history = recent.map(m => ({
             role: m.role,
             content: m.content,
             tool_calls: m.tool_calls,
@@ -131,12 +133,19 @@ class Agent {
     }
     ensureSystemPrompt() {
         const existingSystem = this.history.find(m => m.role === 'system');
+        const combined = this.systemContext && this.systemContext.trim().length > 0
+            ? `${this.systemPrompt}\n\n${this.systemContext}`
+            : this.systemPrompt;
         if (existingSystem) {
-            existingSystem.content = this.systemPrompt;
+            existingSystem.content = combined;
         }
         else {
-            this.history.unshift({ role: 'system', content: this.systemPrompt });
+            this.history.unshift({ role: 'system', content: combined });
         }
+    }
+    setSystemContext(context) {
+        this.systemContext = context || '';
+        this.ensureSystemPrompt();
     }
     async saveMessage(message) {
         if (!this.sessionId)
