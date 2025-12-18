@@ -176,8 +176,8 @@ const DEFAULT_PROJECT_CONFIG = {
   backendRoot: '',
   workspaceId: '',
   provider: 'openai',
-  openai: { api_key: '', model: '', base_url: '', check_model: '' },
-  anthropic: { api_key: '', model: '', base_url: '', check_model: '' },
+  openai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9 },
+  anthropic: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9 },
   toolSettings: DEFAULT_TOOL_SETTINGS,
   theme: detectSystemTheme(),
   sidebarWidth: 260,
@@ -274,7 +274,7 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       context_max_length: snapshot.context_max_length,
       output_max_tokens: snapshot.output_max_tokens,
       temperature: snapshot.temperature,
-      top_p: snapshot.top_p,
+      top_p: snapshot.top_p ?? 0.9,
       context_independent: snapshot.context_independent
   };
   const openai = { ...(fallback.openai || DEFAULT_PROJECT_CONFIG.openai), ...(provider === 'openai' ? shared : {}) };
@@ -511,6 +511,7 @@ function App() {
   // Helper to get flat config for backend
   const getBackendConfig = () => {
       const current = config[config.provider];
+      const parsedTopP = Number(current.top_p);
       return {
           provider: config.provider,
           api_key: current.api_key,
@@ -521,7 +522,7 @@ function App() {
           context_max_length: current.context_max_length,
           output_max_tokens: current.output_max_tokens,
           temperature: current.temperature,
-          top_p: current.top_p,
+          top_p: Number.isFinite(parsedTopP) ? Math.min(1.0, Math.max(0.1, parsedTopP)) : 0.9,
           context_independent: current.context_independent
       };
   };
