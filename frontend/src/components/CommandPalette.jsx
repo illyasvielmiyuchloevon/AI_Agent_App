@@ -8,7 +8,8 @@ const CommandPalette = ({
     files = [],
     onOpenFile,
     onSearchText,
-    workspaceRoots = []
+    workspaceRoots = [],
+    aiInvoker
 }) => {
     const [query, setQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -26,9 +27,23 @@ const CommandPalette = ({
     const filteredItems = useMemo(() => {
         const items = [];
         const q = query.toLowerCase();
+        const inCommandMode = query.trim().startsWith('>');
+        const commandQuery = inCommandMode ? query.trim().slice(1).trim().toLowerCase() : '';
         
-        // 1. "Search text" action (if query exists)
-        if (query) {
+        const pushIfMatch = (it) => {
+            if (!inCommandMode) {
+                items.push(it);
+                return;
+            }
+            if (!commandQuery) {
+                items.push(it);
+                return;
+            }
+            const hay = `${it.label || ''} ${it.description || ''}`.toLowerCase();
+            if (hay.includes(commandQuery)) items.push(it);
+        };
+
+        if (!inCommandMode && query) {
             items.push({
                 type: 'action',
                 id: 'search-text',
@@ -40,9 +55,8 @@ const CommandPalette = ({
             });
         }
 
-        // 2. Default actions when query is empty
-        if (!query) {
-             items.push({
+        if (inCommandMode || !query) {
+             pushIfMatch({
                 type: 'action',
                 id: 'search-files',
                 label: 'Go to File...',
@@ -51,7 +65,7 @@ const CommandPalette = ({
                 icon: 'codicon-file',
                 shortcut: 'Ctrl + P'
             });
-            items.push({
+            pushIfMatch({
                 type: 'action',
                 id: 'show-commands',
                 label: 'Show and Run Commands >',
@@ -60,7 +74,7 @@ const CommandPalette = ({
                 icon: 'codicon-terminal',
                 shortcut: 'Ctrl + Shift + P'
             });
-             items.push({
+             pushIfMatch({
                 type: 'action',
                 id: 'search-text-placeholder',
                 label: 'Search text %',
@@ -68,7 +82,7 @@ const CommandPalette = ({
                 action: () => onSearchText(''),
                 icon: 'codicon-search'
             });
-             items.push({
+             pushIfMatch({
                 type: 'action',
                 id: 'go-to-symbol',
                 label: 'Go to Symbol in Editor @',
@@ -77,10 +91,20 @@ const CommandPalette = ({
                 icon: 'codicon-symbol-class',
                 shortcut: 'Ctrl + Shift + O'
             });
+
+            if (aiInvoker && typeof aiInvoker.run === 'function') {
+                pushIfMatch({ type: 'action', id: 'ai-explain', label: 'AI: Explain Code', description: 'Explain selection or file', action: () => aiInvoker.run('explain'), icon: 'codicon-lightbulb', shortcut: 'Ctrl + Alt + E' });
+                pushIfMatch({ type: 'action', id: 'ai-tests', label: 'AI: Generate Unit Tests', description: 'Generate tests for selection or file', action: () => aiInvoker.run('generateTests'), icon: 'codicon-beaker', shortcut: 'Ctrl + Alt + T' });
+                pushIfMatch({ type: 'action', id: 'ai-optimize', label: 'AI: Optimize Code', description: 'Optimize selection or file', action: () => aiInvoker.run('optimize'), icon: 'codicon-rocket', shortcut: 'Ctrl + Alt + O' });
+                pushIfMatch({ type: 'action', id: 'ai-comments', label: 'AI: Generate Comments', description: 'Add comments following style', action: () => aiInvoker.run('generateComments'), icon: 'codicon-comment', shortcut: 'Ctrl + Alt + C' });
+                pushIfMatch({ type: 'action', id: 'ai-review', label: 'AI: Code Review', description: 'Review selection or file', action: () => aiInvoker.run('review'), icon: 'codicon-checklist', shortcut: 'Ctrl + Alt + R' });
+                pushIfMatch({ type: 'action', id: 'ai-rewrite', label: 'AI: Rewrite', description: 'Rewrite selection or file', action: () => aiInvoker.run('rewrite'), icon: 'codicon-replace', shortcut: 'Ctrl + Alt + W' });
+                pushIfMatch({ type: 'action', id: 'ai-modify', label: 'AI: Modify with Instructions…', description: 'Edit using a custom instruction', action: () => aiInvoker.run('modify'), icon: 'codicon-edit', shortcut: 'Ctrl + Alt + M' });
+                pushIfMatch({ type: 'action', id: 'ai-docs', label: 'AI: Generate Docs', description: 'Generate Markdown docs', action: () => aiInvoker.run('generateDocs'), icon: 'codicon-book', shortcut: 'Ctrl + Alt + D' });
+            }
         }
 
-        // 3. Files
-        if (query) {
+        if (!inCommandMode && query) {
             // Simple fuzzy match: all chars must exist in order (or just includes for now for performance)
             const matchedFiles = files.filter(f => f.path.toLowerCase().includes(q)).slice(0, 50); // Limit to 50
             
@@ -97,7 +121,7 @@ const CommandPalette = ({
         }
 
         return items;
-    }, [query, files, onSearchText, onOpenFile]);
+    }, [aiInvoker, query, files, onSearchText, onOpenFile]);
 
     useEffect(() => {
         setSelectedIndex(0);

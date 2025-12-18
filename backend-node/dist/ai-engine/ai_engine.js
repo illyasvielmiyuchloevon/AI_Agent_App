@@ -55,16 +55,70 @@ function mergeRuntimeConfig(base, llmConfig) {
     const apiKey = typeof llmConfig.api_key === 'string' ? llmConfig.api_key : undefined;
     const baseUrl = typeof llmConfig.base_url === 'string' ? llmConfig.base_url : undefined;
     const model = typeof llmConfig.model === 'string' ? llmConfig.model : undefined;
-    const checkModel = typeof llmConfig.check_model === 'string' ? llmConfig.check_model : undefined;
+    const poolIdRaw = typeof llmConfig.pool_id === 'string' ? String(llmConfig.pool_id) : undefined;
+    const defaultModelsRaw = llmConfig.default_models;
+    const routingRaw = llmConfig.routing;
     const next = (0, runtime_config_1.normalizeRuntimeConfig)(base);
-    if (provider === 'openai' && apiKey)
-        next.providers = { ...next.providers, openai: { apiKey, baseUrl } };
-    if (provider === 'anthropic' && apiKey)
-        next.providers = { ...next.providers, anthropic: { apiKey, baseUrl } };
+    const supportedProviders = new Set(['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio']);
+    if (provider && supportedProviders.has(provider))
+        next.defaultProvider = provider;
+    const poolId = (poolIdRaw && poolIdRaw.trim().length > 0 ? poolIdRaw.trim() : 'default');
+    if (provider && supportedProviders.has(provider) && apiKey) {
+        const prev = next.providers?.[provider];
+        const prevPools = (prev && typeof prev === 'object' && prev.pools && typeof prev.pools === 'object') ? prev.pools : {};
+        next.providers = {
+            ...next.providers,
+            [provider]: {
+                defaultPoolId: poolId,
+                pools: {
+                    ...prevPools,
+                    [poolId]: { apiKey, baseUrl }
+                }
+            }
+        };
+    }
+    if (defaultModelsRaw && typeof defaultModelsRaw === 'object') {
+        const incoming = {};
+        for (const key of ['general', 'fast', 'reasoning', 'tools', 'embeddings']) {
+            const val = defaultModelsRaw[key];
+            if (typeof val === 'string' && val.trim().length > 0)
+                incoming[key] = val.trim();
+        }
+        if (Object.keys(incoming).length > 0) {
+            next.defaultModels = { ...next.defaultModels, ...incoming };
+        }
+    }
+    if (routingRaw && typeof routingRaw === 'object') {
+        const nextRouting = { ...(next.routing || {}) };
+        const capabilities = ['chat', 'inline', 'editorAction', 'tools', 'embeddings'];
+        for (const cap of capabilities) {
+            const list = routingRaw[cap];
+            if (!Array.isArray(list))
+                continue;
+            const normalized = list
+                .map((t) => {
+                const p = typeof t?.provider === 'string' ? String(t.provider) : '';
+                if (!p || !supportedProviders.has(p))
+                    return null;
+                const out = { provider: p };
+                if (typeof t?.model === 'string' && String(t.model).trim().length > 0)
+                    out.model = String(t.model).trim();
+                const poolId = typeof t?.poolId === 'string' ? String(t.poolId).trim() : '';
+                if (poolId)
+                    out.poolId = poolId;
+                const tags = Array.isArray(t?.tags) ? t.tags.filter((x) => typeof x === 'string' && x.trim().length > 0) : null;
+                if (tags && tags.length > 0)
+                    out.tags = tags;
+                return out;
+            })
+                .filter(Boolean);
+            if (normalized.length > 0)
+                nextRouting[cap] = normalized;
+        }
+        next.routing = nextRouting;
+    }
     if (model)
         next.defaultModels = { ...next.defaultModels, general: model };
-    if (checkModel)
-        next.defaultModels = { ...next.defaultModels, tools: checkModel };
     return next;
 }
 async function delay(ms) {
@@ -109,8 +163,13 @@ class AiEngine {
         const baseCfg = this.configStore.get();
         const cfg = mergeRuntimeConfig(baseCfg, llmConfig);
         const route = (0, router_1.decideRoute)({ capability: 'chat', message: 'ping', stream: false }, cfg).primary;
-        const { client } = this.llmFactory.get(route, cfg);
-        const model = route.model || cfg.defaultModels?.general;
+        const requestModel = llmConfig && typeof llmConfig.check_model === 'string' && String(llmConfig.check_model).trim().length > 0
+            ? String(llmConfig.check_model).trim()
+            : (llmConfig && typeof llmConfig.model === 'string' && String(llmConfig.model).trim().length > 0
+                ? String(llmConfig.model).trim()
+                : undefined);
+        const { client } = this.llmFactory.get({ ...route, model: requestModel || route.model }, cfg);
+        const model = requestModel || route.model || cfg.defaultModels?.general;
         return client.checkHealth(model);
     }
     async *chatStream(req) {

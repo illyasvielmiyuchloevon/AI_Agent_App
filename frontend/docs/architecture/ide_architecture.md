@@ -90,6 +90,114 @@ Git 功能完全由前端驱动，通过 Electron IPC 调用底层 Git 命令。
 *   **Flex 布局**: `App.jsx` 使用 Flexbox 管理侧边栏、编辑器区域和面板的自适应排列。
 *   **Resize**: 支持面板拖拽调整大小。
 
+### 3.4 编辑器 AI 集成（Monaco）
+
+编辑器内 AI 主要覆盖两类能力：
+1) **Editor Action（编辑器动作）**：解释/审阅/重写/优化/生成测试/按指令修改等，面向“当前文件或选区”输出结果，并可一键应用到编辑器。
+2) **Inline（行内补全）**：基于可见文本的续写式补全（当前实现由后端提供统一能力，前端可按需接入）。
+
+#### 3.4.1 触发入口
+
+编辑器动作通过 Monaco Action 注册到右键菜单与快捷键（`frontend/src/components/Workspace.jsx:568-593`）：
+- `Ctrl/Cmd + Alt + E`：解释（`explain`）
+- `Ctrl/Cmd + Alt + T`：生成单元测试（`generateTests`）
+- `Ctrl/Cmd + Alt + O`：优化（`optimize`）
+- `Ctrl/Cmd + Alt + C`：生成注释（`generateComments`）
+- `Ctrl/Cmd + Alt + R`：审阅（`review`）
+- `Ctrl/Cmd + Alt + W`：重写（`rewrite`）
+- `Ctrl/Cmd + Alt + M`：按指令修改（`modify`，会先弹出输入框）
+- `Ctrl/Cmd + Alt + D`：生成文档（`generateDocs`）
+
+当用户产生“非空选区”时，会计算光标位置并显示一个轻量的 Inline AI 触发按钮（用于交互入口与可发现性），逻辑在 `frontend/src/components/Workspace.jsx:604-633`。
+
+#### 3.4.2 上下文快照（Editor Snapshot）
+
+前端对 Monaco 的运行态进行一次“轻量快照”，并将快照作为请求体的一部分传给后端：
+- `filePath`、`languageId`、光标位置
+- `selection`（起止行列）
+- `selectedText`（裁剪到 8000 字符）
+- `visibleText`（裁剪到 14000 字符，作为主要上下文来源）
+
+实现见 `getEditorSnapshot()`：`frontend/src/components/Workspace.jsx:354-392`。
+
+之所以以 `visibleText` 为主，是为了降低 token 成本并尽量让模型聚焦用户当前视窗范围；后端会基于该上下文补充“文件 outline / 项目结构摘要”等系统上下文（见 `backend-node/src/ai-engine/context_manager.ts:68-98`）。
+
+#### 3.4.3 指令构建（Instruction Builder）
+
+前端根据动作类型与是否存在选区，生成稳定且可预期的中文指令模板（`frontend/src/components/Workspace.jsx:394-438`）。其中：
+- 选区存在时：要求“输出可直接替换选中代码的新实现”
+- 无选区时：要求“输出修改后的完整文件内容”
+- `modify` 动作为开放指令：会拼接用户输入的自然语言约束
+
+这套约束是为了让“可应用（apply）”的结果尽量稳定：选区替换使用代码块/纯文本，文件替换要求全量输出。
+
+#### 3.4.4 调用链与协议
+
+调用链（前端 -> 后端）：
+- `Workspace` 组装 `instruction + editor snapshot + llmConfig` 后发起请求：`frontend/src/components/Workspace.jsx:440-517`
+- 统一 HTTP client：`frontend/src/utils/aiEngineClient.js:52-134`
+- 后端路由入口：`POST /ai/editor-action`（Vite 会通过 `/api` 代理）：`backend-node/src/ai-engine/http.ts:86-94`
+- 请求/响应契约：`AiEditorActionRequest`、`AiEditorActionResponse`：`backend-node/src/ai-engine/contracts.ts:62-136`
+
+请求体的关键字段：
+- `action`: 动作类型（如 `rewrite`/`review`/`modify`）
+- `instruction`: 前端构建的动作指令
+- `editor.visibleText`: 必填（后端将其作为核心上下文）
+- `llmConfig`: 可选（承载 Provider/模型/路由/实例池等设置，详见 Provider 文档）
+
+后端的 `editorAction()` 当前返回形态以 `content` 为主（`backend-node/src/ai-engine/ai_engine.ts:291-317`）。契约里虽然预留了 `edits?: AiEditorEdit[]`，但当前实现未生成结构化 edits。
+
+#### 3.4.5 结果展示与应用（Apply）
+
+前端会将 AI 返回内容展示在一个可操作的面板中（`aiPanel`），并根据动作 + 是否选区决定是否允许“应用到选区/应用到文件”（`frontend/src/components/Workspace.jsx:457-506`）。
+
+应用策略：
+- 仅对 `optimize`、`generateComments`、`rewrite`、`modify` 这类“会产出可替换代码”的动作提供 Apply（`applyActions` 集合，见 `frontend/src/components/Workspace.jsx:339`）
+- 应用前会尝试提取响应中的第一个 Markdown 代码块；如果没有代码块，则使用原文本（`extractFirstCodeBlock()`：`frontend/src/components/Workspace.jsx:347-352`）
+- 应用到选区：以 Monaco `executeEdits` 替换选区范围（`frontend/src/components/Workspace.jsx:539-551`）
+- 应用到文件：构造整文件 range 并替换（`frontend/src/components/Workspace.jsx:553-566`）
+
+当前设计的关键取舍：
+- 以“文本替换”作为 MVP，避免引入复杂的结构化 patch 协议与冲突处理
+- 结构化 `edits[]` 已在后端契约预留，未来可升级为“多处编辑/跨文件 edits”，并与工作区文件系统联动
+
+### 3.5 Provider 与模型配置（前端）
+
+前端的 Provider 与模型配置需要同时满足两个目标：
+1) 面向用户：在 UI 中可编辑、可持久化、支持多个实例（多账号/多 endpoint）。
+2) 面向后端：每次调用 AI Engine 时，都能把“当前生效的 provider/实例/模型/路由”映射成请求级 `llmConfig` 并透传。
+
+#### 3.5.1 存储位置与作用域
+
+- **全局（跨工作区）**：`localStorage`（`GLOBAL_CONFIG_STORAGE_KEY`，见 `frontend/src/App.jsx:92-126`）
+  - 用于记住用户常用的 Provider 设置与 UI 偏好（例如 Settings 显示方式）。
+- **工作区级（跟随项目）**：工作区根目录 `.aichat/config.json`（自动保存逻辑见 `frontend/src/App.jsx:1202-1213`）
+  - 用于项目相关的配置（例如 `backendRoot`、`workspaceId`、`toolSettings` 等）以及当前项目默认采用的 provider/模型。
+
+#### 3.5.2 多实例（Instance）与当前生效实例
+
+每个 provider 的配置支持 `instances[]` 与 `active_instance_id`：
+- `instances[]`：多个 endpoint/账号组合（`api_key` + `base_url`）
+- `active_instance_id`：指向当前生效的实例 id
+
+UI 与编辑逻辑在 `frontend/src/components/ConfigPanel.jsx`；初始化与归一化逻辑在 `frontend/src/App.jsx:371-436`。
+
+#### 3.5.3 默认模型（按能力）与路由（Routing）
+
+除了 provider 的 `model/check_model`，前端还维护一份按能力划分的默认模型 `default_models`（`general/fast/reasoning/tools/embeddings`），并支持 `routing` 针对不同 capability 指定 provider/model/pool。
+
+关键映射在 `getBackendConfig()`（`frontend/src/App.jsx:595-639`）：
+- 组合当前 provider + 活动实例，输出 `provider/pool_id/api_key/base_url`
+- 将 `default_models` 透传为后端可合并的 `default_models`
+- 将前端的 `routing` map 归一化成后端需要的 `routing[capability] = [AiRouteTarget]`（数组形式）
+
+#### 3.5.4 模型列表获取（Model List）
+
+Settings 中可通过按钮触发模型列表获取并下拉选择（`frontend/src/components/ConfigPanel.jsx`）：
+- 前端调用：`aiEngineClient.listModels()`（`frontend/src/utils/aiEngineClient.js:58-65`）
+- 后端入口：`POST /ai-engine/models/list`（`backend-node/src/ai-engine/http.ts:11-51`）
+- 行为差异：Ollama 走 `/api/tags`；OpenAI 兼容 provider 走 `models.list()`；Anthropic 需要手动配置
+
 ## 4. 数据流向
 
 1.  **用户操作**: 用户点击 "打开文件夹"。

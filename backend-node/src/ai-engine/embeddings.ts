@@ -1,10 +1,11 @@
 import OpenAI from 'openai';
 import crypto from 'crypto';
+import { AiProviderId } from './contracts';
 import { AiEngineRuntimeConfig } from './runtime_config';
 
 export interface EmbeddingsResult {
   vectors: number[][];
-  provider: 'openai' | 'local';
+  provider: AiProviderId;
   model?: string;
 }
 
@@ -19,19 +20,27 @@ function localEmbed(text: string, dims: number) {
 }
 
 export async function embedTexts(texts: string[], cfg: AiEngineRuntimeConfig, modelOverride?: string): Promise<EmbeddingsResult> {
-  const openaiPool = cfg.providers?.openai;
   const model = modelOverride || cfg.defaultModels?.embeddings || 'text-embedding-3-small';
-  if (openaiPool?.apiKey) {
+  const openAiCompatibleProviders: AiProviderId[] = ['openai', 'openrouter', 'xai', 'lmstudio', 'ollama'];
+  const preferred = cfg.defaultProvider && openAiCompatibleProviders.includes(cfg.defaultProvider) ? [cfg.defaultProvider, ...openAiCompatibleProviders] : openAiCompatibleProviders;
+  const candidates = Array.from(new Set(preferred));
+
+  for (const provider of candidates) {
+    const providerCfg = cfg.providers?.[provider];
+    const pools = providerCfg?.pools;
+    if (!pools) continue;
+    const poolId = providerCfg.defaultPoolId || Object.keys(pools)[0];
+    const pool = pools[poolId];
+    if (!pool?.apiKey) continue;
     const client = new OpenAI({
-      apiKey: openaiPool.apiKey,
-      baseURL: openaiPool.baseUrl && openaiPool.baseUrl.trim().length > 0 ? openaiPool.baseUrl.trim() : undefined
+      apiKey: pool.apiKey,
+      baseURL: pool.baseUrl && pool.baseUrl.trim().length > 0 ? pool.baseUrl.trim() : undefined
     });
     const resp = await client.embeddings.create({ model, input: texts });
     const vectors = resp.data.map(d => d.embedding as number[]);
-    return { vectors, provider: 'openai', model };
+    return { vectors, provider, model };
   }
 
   const dims = 384;
   return { vectors: texts.map(t => localEmbed(t, dims)), provider: 'local', model: 'local-hash-384' };
 }
-

@@ -24,8 +24,10 @@ function estimateSizeHint(req: AiEngineRequest): number {
 }
 
 function hasProvider(cfg: AiEngineRuntimeConfig, provider: AiProviderId) {
-  const pool = cfg.providers?.[provider];
-  return !!pool && typeof pool.apiKey === 'string' && pool.apiKey.trim().length > 0;
+  const providerCfg = cfg.providers?.[provider];
+  const pools = providerCfg?.pools;
+  if (!pools || typeof pools !== 'object') return false;
+  return Object.values(pools).some((p) => !!p && typeof p.apiKey === 'string' && p.apiKey.trim().length > 0);
 }
 
 function defaultRouteFromConfig(cfg: AiEngineRuntimeConfig, capability: AiCapability): AiRouteDecision {
@@ -78,4 +80,3 @@ export function decideRoute(req: AiEngineRequest, cfg: AiEngineRuntimeConfig): A
 
   return base;
 }
-

@@ -15,8 +15,8 @@ async function testRouterDecisions() {
         env: 'test',
         defaultProvider: 'openai',
         providers: {
-            openai: { apiKey: 'sk-test-openai', baseUrl: '' },
-            anthropic: { apiKey: 'sk-test-anthropic', baseUrl: '' }
+            openai: { defaultPoolId: 'default', pools: { default: { apiKey: 'sk-test-openai', baseUrl: '' } } },
+            anthropic: { defaultPoolId: 'default', pools: { default: { apiKey: 'sk-test-anthropic', baseUrl: '' } } }
         },
         thresholds: { longTextChars: 10 }
     });
@@ -53,8 +53,8 @@ async function testRouterBenchmark() {
         env: 'test',
         defaultProvider: 'openai',
         providers: {
-            openai: { apiKey: 'sk-test-openai' },
-            anthropic: { apiKey: 'sk-test-anthropic' }
+            openai: { defaultPoolId: 'default', pools: { default: { apiKey: 'sk-test-openai' } } },
+            anthropic: { defaultPoolId: 'default', pools: { default: { apiKey: 'sk-test-anthropic' } } }
         },
         thresholds: { longTextChars: 12000 }
     });

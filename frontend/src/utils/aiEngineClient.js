@@ -55,6 +55,15 @@ export function createAiEngineClient({ fetch: fetcher }) {
             return { ok: !!data?.ok, detail: data?.detail };
         },
 
+        async listModels(req, { signal } = {}) {
+            const payload = {
+                provider: req?.provider,
+                api_key: req?.api_key,
+                base_url: req?.base_url,
+            };
+            return await postJson('/api/ai-engine/models/list', payload, { signal });
+        },
+
         async chatStream(req, { signal } = {}) {
             const payload = {
                 requestId: req?.requestId,
@@ -124,4 +133,3 @@ export function createAiEngineClient({ fetch: fetcher }) {
         },
     };
 }
-

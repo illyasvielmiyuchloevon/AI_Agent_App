@@ -16,16 +16,26 @@ function localEmbed(text, dims) {
     return out;
 }
 async function embedTexts(texts, cfg, modelOverride) {
-    const openaiPool = cfg.providers?.openai;
     const model = modelOverride || cfg.defaultModels?.embeddings || 'text-embedding-3-small';
-    if (openaiPool?.apiKey) {
+    const openAiCompatibleProviders = ['openai', 'openrouter', 'xai', 'lmstudio', 'ollama'];
+    const preferred = cfg.defaultProvider && openAiCompatibleProviders.includes(cfg.defaultProvider) ? [cfg.defaultProvider, ...openAiCompatibleProviders] : openAiCompatibleProviders;
+    const candidates = Array.from(new Set(preferred));
+    for (const provider of candidates) {
+        const providerCfg = cfg.providers?.[provider];
+        const pools = providerCfg?.pools;
+        if (!pools)
+            continue;
+        const poolId = providerCfg.defaultPoolId || Object.keys(pools)[0];
+        const pool = pools[poolId];
+        if (!pool?.apiKey)
+            continue;
         const client = new openai_1.default({
-            apiKey: openaiPool.apiKey,
-            baseURL: openaiPool.baseUrl && openaiPool.baseUrl.trim().length > 0 ? openaiPool.baseUrl.trim() : undefined
+            apiKey: pool.apiKey,
+            baseURL: pool.baseUrl && pool.baseUrl.trim().length > 0 ? pool.baseUrl.trim() : undefined
         });
         const resp = await client.embeddings.create({ model, input: texts });
         const vectors = resp.data.map(d => d.embedding);
-        return { vectors, provider: 'openai', model };
+        return { vectors, provider, model };
     }
     const dims = 384;
     return { vectors: texts.map(t => localEmbed(t, dims)), provider: 'local', model: 'local-hash-384' };

@@ -177,8 +177,14 @@ const DEFAULT_PROJECT_CONFIG = {
   backendRoot: '',
   workspaceId: '',
   provider: 'openai',
-  openai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9 },
-  anthropic: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9 },
+  default_models: { general: '', fast: '', reasoning: '', tools: '', embeddings: '' },
+  routing: {},
+  openai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
+  anthropic: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
+  openrouter: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
+  xai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
+  ollama: { api_key: '', model: '', base_url: 'http://localhost:11434/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'ollama', base_url: 'http://localhost:11434/v1' }], active_instance_id: 'default' },
+  lmstudio: { api_key: '', model: '', base_url: 'http://localhost:1234/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'lm-studio', base_url: 'http://localhost:1234/v1' }], active_instance_id: 'default' },
   toolSettings: DEFAULT_TOOL_SETTINGS,
   theme: detectSystemTheme(),
   sidebarWidth: 260,
@@ -278,9 +284,25 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       top_p: snapshot.top_p ?? 0.9,
       context_independent: snapshot.context_independent
   };
-  const openai = { ...(fallback.openai || DEFAULT_PROJECT_CONFIG.openai), ...(provider === 'openai' ? shared : {}) };
-  const anthropic = { ...(fallback.anthropic || DEFAULT_PROJECT_CONFIG.anthropic), ...(provider === 'anthropic' ? shared : {}) };
-  return { provider, openai, anthropic };
+  const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+  const out = {
+      provider,
+      default_models: { ...(DEFAULT_PROJECT_CONFIG.default_models || {}), ...((fallback.default_models && typeof fallback.default_models === 'object') ? fallback.default_models : {}) },
+      routing: ((fallback.routing && typeof fallback.routing === 'object') ? fallback.routing : {}),
+  };
+  providerIds.forEach((providerId) => {
+      const base = DEFAULT_PROJECT_CONFIG[providerId] || {};
+      const prev = fallback[providerId] || {};
+      const nextProviderCfg = { ...base, ...prev, ...(provider === providerId ? shared : {}) };
+      if (!Array.isArray(nextProviderCfg.instances)) {
+          nextProviderCfg.instances = Array.isArray(prev.instances) ? prev.instances : (Array.isArray(base.instances) ? base.instances : [{ id: 'default', label: 'Default', api_key: '', base_url: '' }]);
+      }
+      if (!nextProviderCfg.active_instance_id) {
+          nextProviderCfg.active_instance_id = (nextProviderCfg.instances[0] && nextProviderCfg.instances[0].id) ? String(nextProviderCfg.instances[0].id) : 'default';
+      }
+      out[providerId] = nextProviderCfg;
+  });
+  return out;
 };
 
 const InputModal = ({ isOpen, title, label, defaultValue, onConfirm, onClose }) => {
@@ -364,18 +386,47 @@ function App() {
   } = workbench;
   const [config, setConfig] = useState(() => {
     const stored = readGlobalConfig();
-    if (stored) {
-      const provider = stored.provider || DEFAULT_PROJECT_CONFIG.provider;
-      return {
-        provider,
-        openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(stored.openai || {}) },
-        anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(stored.anthropic || {}) }
+    const base = { ...DEFAULT_PROJECT_CONFIG, ...(stored || {}) };
+    if (!base.default_models || typeof base.default_models !== 'object') base.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
+    if (!base.routing || typeof base.routing !== 'object') base.routing = {};
+
+    const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+    providerIds.forEach((providerId) => {
+      const def = DEFAULT_PROJECT_CONFIG[providerId] || {};
+      const incoming = base[providerId] || {};
+      const instancesRaw = Array.isArray(incoming.instances) ? incoming.instances : null;
+      const instances = (instancesRaw && instancesRaw.length > 0)
+        ? instancesRaw.map((inst) => ({
+            id: String(inst?.id || 'default'),
+            label: typeof inst?.label === 'string' ? inst.label : String(inst?.id || 'default'),
+            api_key: inst?.api_key ?? inst?.apiKey ?? '',
+            base_url: inst?.base_url ?? inst?.baseUrl ?? '',
+          }))
+        : [{
+            id: 'default',
+            label: 'Default',
+            api_key: incoming.api_key || def.api_key || '',
+            base_url: incoming.base_url || def.base_url || '',
+          }];
+      const activeId = incoming.active_instance_id || incoming.activeInstanceId || instances[0]?.id || 'default';
+      base[providerId] = {
+        ...def,
+        ...incoming,
+        instances,
+        active_instance_id: activeId,
       };
-    }
+    });
+
     return {
-      provider: DEFAULT_PROJECT_CONFIG.provider,
-      openai: { ...DEFAULT_PROJECT_CONFIG.openai },
-      anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic }
+      provider: base.provider || DEFAULT_PROJECT_CONFIG.provider,
+      default_models: base.default_models,
+      routing: base.routing,
+      openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(base.openai || {}) },
+      anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(base.anthropic || {}) },
+      openrouter: { ...DEFAULT_PROJECT_CONFIG.openrouter, ...(base.openrouter || {}) },
+      xai: { ...DEFAULT_PROJECT_CONFIG.xai, ...(base.xai || {}) },
+      ollama: { ...DEFAULT_PROJECT_CONFIG.ollama, ...(base.ollama || {}) },
+      lmstudio: { ...DEFAULT_PROJECT_CONFIG.lmstudio, ...(base.lmstudio || {}) },
     };
   });
   const [uiDisplayPreferences, setUiDisplayPreferences] = useState(() => {
@@ -448,6 +499,7 @@ function App() {
   const [configFullscreen, setConfigFullscreen] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [editorAiInvoker, setEditorAiInvoker] = useState(null);
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -499,6 +551,35 @@ function App() {
           ...DEFAULT_PROJECT_CONFIG,
           ...raw,
       };
+      if (!merged.default_models || typeof merged.default_models !== 'object') merged.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
+      if (!merged.routing || typeof merged.routing !== 'object') merged.routing = {};
+
+      const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+      providerIds.forEach((providerId) => {
+          const base = DEFAULT_PROJECT_CONFIG[providerId] || {};
+          const incoming = merged[providerId] || {};
+          const instancesRaw = Array.isArray(incoming.instances) ? incoming.instances : null;
+          const instances = (instancesRaw && instancesRaw.length > 0)
+              ? instancesRaw.map((inst) => ({
+                    id: String(inst?.id || 'default'),
+                    label: typeof inst?.label === 'string' ? inst.label : String(inst?.id || 'default'),
+                    api_key: inst?.api_key ?? inst?.apiKey ?? '',
+                    base_url: inst?.base_url ?? inst?.baseUrl ?? '',
+                }))
+              : [{
+                    id: 'default',
+                    label: 'Default',
+                    api_key: incoming.api_key || '',
+                    base_url: incoming.base_url || '',
+                }];
+          const activeId = incoming.active_instance_id || incoming.activeInstanceId || instances[0]?.id || 'default';
+          merged[providerId] = {
+              ...base,
+              ...incoming,
+              instances,
+              active_instance_id: activeId,
+          };
+      });
       merged.toolSettings = mergeToolSettings(raw.toolSettings || DEFAULT_PROJECT_CONFIG.toolSettings);
       merged.sidebarWidth = Number(merged.sidebarWidth || merged.sessionPanelWidth) || DEFAULT_PROJECT_CONFIG.sidebarWidth;
       merged.chatPanelWidth = Number(merged.chatPanelWidth) || DEFAULT_PROJECT_CONFIG.chatPanelWidth;
@@ -511,44 +592,93 @@ function App() {
       return merged;
   }, [mergeToolSettings, projectMeta.name, projectMeta.pathLabel, backendWorkspaceId]);
 
-  // Helper to get flat config for backend
-  const getBackendConfig = () => {
-      const current = config[config.provider];
+  const getBackendConfig = useCallback(() => {
+      const providerId = config.provider;
+      const current = config[providerId] || {};
+      const instances = Array.isArray(current.instances) ? current.instances : [];
+      const poolId = String(current.active_instance_id || (instances[0]?.id || 'default'));
+      const active = instances.find((i) => String(i?.id) === poolId) || instances[0] || {};
       const parsedTopP = Number(current.top_p);
+      const dm = (config.default_models && typeof config.default_models === 'object') ? config.default_models : {};
+      const defaultModels = {
+          general: typeof dm.general === 'string' ? dm.general : '',
+          fast: typeof dm.fast === 'string' ? dm.fast : '',
+          reasoning: typeof dm.reasoning === 'string' ? dm.reasoning : '',
+          tools: typeof dm.tools === 'string' ? dm.tools : '',
+          embeddings: typeof dm.embeddings === 'string' ? dm.embeddings : '',
+      };
+      if (!defaultModels.general && current.model) defaultModels.general = String(current.model);
+      if (!defaultModels.tools && current.check_model) defaultModels.tools = String(current.check_model);
+      const routing = (config.routing && typeof config.routing === 'object') ? config.routing : {};
+      const routingPayload = {};
+      Object.entries(routing).forEach(([cap, rule]) => {
+          if (!rule || typeof rule !== 'object') return;
+          const p = rule.provider;
+          if (typeof p !== 'string' || p.trim().length === 0) return;
+          const target = { provider: p.trim() };
+          if (typeof rule.model === 'string' && rule.model.trim().length > 0) target.model = rule.model.trim();
+          const rPool = typeof rule.pool_id === 'string' ? rule.pool_id.trim() : (typeof rule.poolId === 'string' ? rule.poolId.trim() : '');
+          if (rPool) target.poolId = rPool;
+          routingPayload[cap] = [target];
+      });
       return {
-          provider: config.provider,
-          api_key: current.api_key,
+          provider: providerId,
+          pool_id: poolId,
+          api_key: active.api_key ?? current.api_key,
           model: current.model,
-          base_url: current.base_url,
+          base_url: active.base_url ?? current.base_url,
           check_model: current.check_model,
-          // New parameters
+          default_models: defaultModels,
+          routing: routingPayload,
           context_max_length: current.context_max_length,
           output_max_tokens: current.output_max_tokens,
           temperature: current.temperature,
           top_p: Number.isFinite(parsedTopP) ? Math.min(1.0, Math.max(0.1, parsedTopP)) : 0.9,
           context_independent: current.context_independent
       };
-  };
+  }, [config]);
 
   const applyBackendConfigSnapshot = useCallback((snapshot = {}) => {
-      const mapped = mapFlatConfigToState(snapshot, { provider: config.provider, openai: config.openai, anthropic: config.anthropic });
+      const mapped = mapFlatConfigToState(snapshot, {
+          provider: config.provider,
+          default_models: config.default_models,
+          routing: config.routing,
+          openai: config.openai,
+          anthropic: config.anthropic,
+          openrouter: config.openrouter,
+          xai: config.xai,
+          ollama: config.ollama,
+          lmstudio: config.lmstudio,
+      });
       setConfig((prev) => ({
           ...prev,
           provider: mapped.provider,
+          default_models: { ...(prev.default_models || {}), ...(mapped.default_models || {}) },
+          routing: mapped.routing || prev.routing,
           openai: { ...prev.openai, ...mapped.openai },
-          anthropic: { ...prev.anthropic, ...mapped.anthropic }
+          anthropic: { ...prev.anthropic, ...mapped.anthropic },
+          openrouter: { ...prev.openrouter, ...mapped.openrouter },
+          xai: { ...prev.xai, ...mapped.xai },
+          ollama: { ...prev.ollama, ...mapped.ollama },
+          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio }
       }));
       setProjectConfig((prev) => ({
           ...prev,
           provider: mapped.provider,
+          default_models: { ...(prev.default_models || {}), ...(mapped.default_models || {}) },
+          routing: mapped.routing || prev.routing,
           openai: { ...prev.openai, ...mapped.openai },
-          anthropic: { ...prev.anthropic, ...mapped.anthropic }
+          anthropic: { ...prev.anthropic, ...mapped.anthropic },
+          openrouter: { ...prev.openrouter, ...mapped.openrouter },
+          xai: { ...prev.xai, ...mapped.xai },
+          ollama: { ...prev.ollama, ...mapped.ollama },
+          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio }
       }));
       if (mapped[mapped.provider]?.api_key) {
           setConfigured(true);
       }
       return mapped;
-  }, [config.anthropic, config.openai, config.provider]);
+  }, [config]);
 
   const fetchPersistedBackendConfig = useCallback(async ({ silent = false } = {}) => {
       // Backend config persistence is deprecated in favor of local file config (.aichat/config.json)
@@ -569,13 +699,48 @@ function App() {
       }
   };
 
+  useEffect(() => {
+      const onKeyDown = (e) => {
+          const tag = String(e.target?.tagName || '').toUpperCase();
+          const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable;
+          if (isEditable) return;
+
+          const mod = !!(e.metaKey || e.ctrlKey);
+          if (!mod) return;
+
+          const key = String(e.key || '').toLowerCase();
+          if (key === 'p' && e.shiftKey) {
+              e.preventDefault();
+              setShowCommandPalette(true);
+              return;
+          }
+          if (key === 'p' && !e.shiftKey) {
+              e.preventDefault();
+              setShowCommandPalette(true);
+          }
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const handleConfigSubmit = async (options = {}) => {
     const { silent = false } = options;
     try {
         // Backend config persistence is deprecated.
         // We now rely on local file persistence via useEffect hook.
         setConfigured(true);
-        setProjectConfig((prev) => ({ ...prev, provider: config.provider, openai: { ...config.openai }, anthropic: { ...config.anthropic } }));
+        setProjectConfig((prev) => ({
+            ...prev,
+            provider: config.provider,
+            default_models: { ...(config.default_models || {}) },
+            routing: { ...(config.routing || {}) },
+            openai: { ...config.openai },
+            anthropic: { ...config.anthropic },
+            openrouter: { ...config.openrouter },
+            xai: { ...config.xai },
+            ollama: { ...config.ollama },
+            lmstudio: { ...config.lmstudio },
+        }));
         if (!silent) checkApiStatus();
     } catch (err) {
       console.error(err);
@@ -793,8 +958,14 @@ function App() {
           const provider = cfg.provider || DEFAULT_PROJECT_CONFIG.provider;
           setConfig({
               provider,
+              default_models: { ...DEFAULT_PROJECT_CONFIG.default_models, ...((cfg.default_models && typeof cfg.default_models === 'object') ? cfg.default_models : {}) },
+              routing: (cfg.routing && typeof cfg.routing === 'object') ? cfg.routing : {},
               openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(cfg.openai || {}) },
-              anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(cfg.anthropic || {}) }
+              anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(cfg.anthropic || {}) },
+              openrouter: { ...DEFAULT_PROJECT_CONFIG.openrouter, ...(cfg.openrouter || {}) },
+              xai: { ...DEFAULT_PROJECT_CONFIG.xai, ...(cfg.xai || {}) },
+              ollama: { ...DEFAULT_PROJECT_CONFIG.ollama, ...(cfg.ollama || {}) },
+              lmstudio: { ...DEFAULT_PROJECT_CONFIG.lmstudio, ...(cfg.lmstudio || {}) }
           });
           setToolSettings((prev) => mergeToolSettings(cfg.toolSettings || prev));
           globalConfigHydratedRef.current = true;
@@ -1814,8 +1985,14 @@ function App() {
   useEffect(() => {
       persistGlobalConfig({
           provider: config.provider,
+          default_models: { ...(config.default_models || {}) },
+          routing: { ...(config.routing || {}) },
           openai: { ...config.openai },
           anthropic: { ...config.anthropic },
+          openrouter: { ...config.openrouter },
+          xai: { ...config.xai },
+          ollama: { ...config.ollama },
+          lmstudio: { ...config.lmstudio },
           toolSettings,
           uiDisplayPreferences
       });
@@ -1824,10 +2001,27 @@ function App() {
   useEffect(() => {
       setProjectConfig((prev) => {
           const sameProvider = prev.provider === config.provider;
+          const sameDefaults = JSON.stringify(prev.default_models) === JSON.stringify(config.default_models);
+          const sameRouting = JSON.stringify(prev.routing) === JSON.stringify(config.routing);
           const sameOpenai = JSON.stringify(prev.openai) === JSON.stringify(config.openai);
           const sameAnthropic = JSON.stringify(prev.anthropic) === JSON.stringify(config.anthropic);
-          if (sameProvider && sameOpenai && sameAnthropic) return prev;
-          return { ...prev, provider: config.provider, openai: { ...config.openai }, anthropic: { ...config.anthropic } };
+          const sameOpenrouter = JSON.stringify(prev.openrouter) === JSON.stringify(config.openrouter);
+          const sameXai = JSON.stringify(prev.xai) === JSON.stringify(config.xai);
+          const sameOllama = JSON.stringify(prev.ollama) === JSON.stringify(config.ollama);
+          const sameLmstudio = JSON.stringify(prev.lmstudio) === JSON.stringify(config.lmstudio);
+          if (sameProvider && sameDefaults && sameRouting && sameOpenai && sameAnthropic && sameOpenrouter && sameXai && sameOllama && sameLmstudio) return prev;
+          return {
+              ...prev,
+              provider: config.provider,
+              default_models: { ...(config.default_models || {}) },
+              routing: { ...(config.routing || {}) },
+              openai: { ...config.openai },
+              anthropic: { ...config.anthropic },
+              openrouter: { ...config.openrouter },
+              xai: { ...config.xai },
+              ollama: { ...config.ollama },
+              lmstudio: { ...config.lmstudio }
+          };
       });
   }, [config]);
 
@@ -3292,6 +3486,7 @@ function App() {
               setGlobalSearchQuery(text);
               handleSidebarTabChange('search');
           }}
+          aiInvoker={editorAiInvoker}
       />
 
       <div className="app-body">
@@ -3482,6 +3677,11 @@ function App() {
                    hotReloadToken={hotReloadToken}
                     theme={theme}
                     backendRoot={backendWorkspaceRoot}
+                    aiEngineClient={aiEngineClient}
+                    getBackendConfig={getBackendConfig}
+                    currentSessionId={currentSessionId}
+                    backendWorkspaceId={backendWorkspaceId}
+                    onRegisterEditorAiInvoker={setEditorAiInvoker}
                     welcomeTabPath={WELCOME_TAB_PATH}
                     onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
                     renderWelcomeTab={() => (

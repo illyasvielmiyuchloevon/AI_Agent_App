@@ -79,14 +79,34 @@ AI Engine 配置分两层：
 配置字段定义见：
 - `backend-node/src/ai-engine/runtime_config.ts`
 
+支持的 provider（见 `backend-node/src/ai-engine/llm_factory.ts:13-15`）：
+- OpenAI 兼容：`openai` / `openrouter` / `xai` / `ollama` / `lmstudio`
+- 原生：`anthropic`
+
 关键字段示例：
 ```json
 {
   "env": "dev",
   "defaultProvider": "openai",
   "providers": {
-    "openai": { "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" },
-    "anthropic": { "apiKey": "sk-...", "baseUrl": "https://api.anthropic.com" }
+    "openai": {
+      "defaultPoolId": "default",
+      "pools": {
+        "default": { "apiKey": "sk-...", "baseUrl": "https://api.openai.com/v1" }
+      }
+    },
+    "anthropic": {
+      "defaultPoolId": "default",
+      "pools": {
+        "default": { "apiKey": "sk-...", "baseUrl": "https://api.anthropic.com" }
+      }
+    },
+    "openrouter": {
+      "defaultPoolId": "default",
+      "pools": {
+        "default": { "apiKey": "sk-...", "baseUrl": "https://openrouter.ai/api/v1" }
+      }
+    }
   },
   "defaultModels": {
     "general": "gpt-4o-mini",
@@ -103,15 +123,38 @@ AI Engine 配置分两层：
 }
 ```
 
+说明：
+- `providers[provider].pools` 支持配置多个“实例池”（例如多账号/多 endpoint），路由目标可用 `poolId` 指定具体池（见 `backend-node/src/ai-engine/llm_factory.ts:20-37`、`backend-node/src/ai-engine/contracts.ts:90-95`）。
+- 兼容旧写法：如果全局配置仍使用 `{ "apiKey": "...", "baseUrl": "..." }` 的扁平结构，也会在 `normalizeRuntimeConfig()` 中自动归一化成 `pools.default`（`backend-node/src/ai-engine/runtime_config.ts:39-65`）。
+
 ### 4.2 请求级覆盖（llmConfig）
 
 部分接口支持携带 `llmConfig`，用于在本次请求覆盖 provider key/baseUrl/model 等（便于前端从本地设置传入）。
 
-合并逻辑见 `backend-node/src/ai-engine/ai_engine.ts:32-47`，可覆盖：
-- `provider`、`api_key`、`base_url`
-- `model`（写入 `defaultModels.general`）
-- `check_model`（写入 `defaultModels.tools`）
-- 以及聊天请求中的 `context_max_length`、`output_max_tokens`、`temperature`、`top_p` 等参数（由 Agent 传给 LLM client）
+合并逻辑见 `backend-node/src/ai-engine/ai_engine.ts:32-99`，可覆盖：
+- `provider`：将其写入 `defaultProvider`
+- `pool_id`：将其写入 `providers[provider].defaultPoolId`（当同时提供 `api_key` 时）
+- `api_key`、`base_url`：写入到 `providers[provider].pools[pool_id]`
+- `model`：写入 `defaultModels.general`
+- `check_model`：用于健康检查时的 `model` 覆盖（`backend-node/src/ai-engine/ai_engine.ts:153-161`）
+- `default_models`：按能力覆盖 `defaultModels`（`general/fast/reasoning/tools/embeddings`）
+- `routing`：按 capability 覆盖 `cfg.routing`（支持 `chat/inline/editorAction/tools/embeddings`，每个 capability 是 `AiRouteTarget[]`）
+- 以及聊天请求中的 `context_max_length`、`output_max_tokens`、`temperature`、`top_p` 等参数（由 `Agent` 传给 LLM client）
+
+### 4.3 前端 Provider/模型设置与 llmConfig 映射
+
+前端的 Provider 与模型设置主要由两部分组成：
+- 工作区级配置：保存于工作区根目录的 `.aichat/config.json`（写入逻辑：`frontend/src/App.jsx:1202-1213`）
+- UI 临时/全局配置：保存于 `localStorage`（`GLOBAL_CONFIG_STORAGE_KEY`，见 `frontend/src/App.jsx:92-126`）
+
+核心映射函数是 `getBackendConfig()`（`frontend/src/App.jsx:595-639`），它会把“当前选中的 Provider + 活动实例（instance）”转换成请求级 `llmConfig`：
+- `provider`：当前 provider id
+- `pool_id`：当前实例 id（等价后端的 poolId）
+- `api_key`、`base_url`：来自当前实例（用于本次请求覆盖/补齐后端 Config Store）
+- `default_models`：从 UI 的“按能力默认模型”生成，缺省会从 `model/check_model` 兜底
+- `routing`：将 UI 的 routing map 归一化为 `routing[capability] = [AiRouteTarget]`
+
+所有 AI Engine 的前端调用最终都把该 `llmConfig` 透传给后端（例如 `frontend/src/utils/aiEngineClient.js:67-133`）。
 
 ## 5. 路由策略（provider/model 选择）
 
@@ -135,7 +178,37 @@ capability 到模型 role 的映射（默认）：
 - 这些路由由 `registerAiEngineRoutes()` 注册（`backend-node/src/ai-engine/http.ts`）
 - 当前实现为本地 IDE 场景，未增加鉴权
 
-### 6.1 `POST /ai-engine/health`
+### 6.1 `POST /ai-engine/models/list`
+
+用途：拉取某个 provider 的“可选模型列表”，用于前端下拉选择与联调校验。
+
+请求体：
+```json
+{
+  "provider": "openai | openrouter | xai | ollama | lmstudio | anthropic",
+  "api_key": "optional",
+  "base_url": "optional"
+}
+```
+
+响应：
+```json
+{ "ok": true, "models": ["..."] }
+```
+失败时：
+```json
+{ "ok": false, "detail": "..." }
+```
+
+行为差异（实现：`backend-node/src/ai-engine/http.ts:11-51`）：
+- `anthropic`：不支持 model listing，返回空列表并提示手动配置
+- `ollama`：请求 `http://<host>:11434/api/tags` 获取已拉取的模型名称
+  - 如果 `base_url` 形如 `http://localhost:11434/v1`，会自动剥离 `/v1` 后再请求 `/api/tags`
+- 其他 OpenAI 兼容 provider：需要 `api_key`，使用 OpenAI SDK `client.models.list()` 返回 `id` 列表
+
+前端调用入口：`frontend/src/utils/aiEngineClient.js:58-65`。
+
+### 6.2 `POST /ai-engine/health`
 
 用途：检查当前配置下模型可用性。
 
@@ -152,7 +225,7 @@ capability 到模型 role 的映射（默认）：
 
 对应实现：`backend-node/src/ai-engine/http.ts:10`、`backend-node/src/ai-engine/ai_engine.ts:97`
 
-### 6.2 `POST /ai/chat/stream`
+### 6.3 `POST /ai/chat/stream`
 
 用途：聊天/Agent 模式统一流式接口。
 
@@ -183,7 +256,7 @@ capability 到模型 role 的映射（默认）：
 
 对应实现：`backend-node/src/ai-engine/http.ts:19`、`backend-node/src/ai-engine/ai_engine.ts:106`
 
-### 6.3 `POST /ai/inline`
+### 6.4 `POST /ai/inline`
 
 用途：IDE inline completion。
 
@@ -200,7 +273,7 @@ capability 到模型 role 的映射（默认）：
 }
 ```
 
-### 6.4 `POST /ai/editor-action`
+### 6.5 `POST /ai/editor-action`
 
 用途：编辑器动作（重构/解释/优化等）。
 
@@ -211,7 +284,7 @@ capability 到模型 role 的映射（默认）：
 
 响应：`AiEditorActionResponse`（当前实现主要返回 `content`，未生成结构化 edits）
 
-### 6.5 `POST /ai/tools`
+### 6.6 `POST /ai/tools`
 
 用途：直接调用工具系统（不经 Agent 编排）。
 
@@ -227,7 +300,7 @@ capability 到模型 role 的映射（默认）：
 
 工具注册表见：`backend-node/src/ai-engine/tool_executor.ts`
 
-### 6.6 `POST /ai/embeddings`
+### 6.7 `POST /ai/embeddings`
 
 用途：文本向量化。
 
@@ -283,4 +356,3 @@ capability 到模型 role 的映射（默认）：
 2) 增加 `editorAction` 返回 `edits[]` 并与前端编辑器/工作区应用联动
 3) 将 session/消息/日志接口封装为 “AI Engine Session API” 层（避免业务层直连 db）
 4) 将 toolOverrides 与权限策略统一：按 workspace、mode、用户设置做白名单与审计
-

@@ -112,6 +112,7 @@ function ConfigPanel({
   const currentProvider = config?.provider || 'openai';
   const currentConfig = config?.[currentProvider] || {};
   const isFirstRun = useRef(true);
+  const [modelListState, setModelListState] = useState({ loading: false, models: [], error: '' });
 
   useEffect(() => {
     if (isFirstRun.current) {
@@ -132,6 +133,95 @@ function ConfigPanel({
         [field]: value
       }
     }));
+  };
+
+  const updateProviderConfig = (patch = {}) => {
+    setConfig((prev) => ({
+      ...prev,
+      [prev.provider]: {
+        ...prev[prev.provider],
+        ...patch
+      }
+    }));
+  };
+
+  const getActiveInstance = () => {
+    const instances = Array.isArray(currentConfig.instances) ? currentConfig.instances : [];
+    const activeId = String(currentConfig.active_instance_id || instances[0]?.id || 'default');
+    const active = instances.find((i) => String(i?.id) === activeId) || instances[0] || null;
+    return { instances, activeId, active };
+  };
+
+  const updateActiveInstance = (field, value) => {
+    setConfig((prev) => {
+      const providerId = prev.provider;
+      const providerCfg = prev?.[providerId] || {};
+      const instances = Array.isArray(providerCfg.instances) ? providerCfg.instances : [];
+      const activeId = String(providerCfg.active_instance_id || instances[0]?.id || 'default');
+      const nextInstances = instances.length
+        ? instances.map((inst) => (String(inst?.id) === activeId ? { ...inst, [field]: value } : inst))
+        : [{ id: activeId, label: 'Default', api_key: '', base_url: '', [field]: value }];
+      const syncPatch = (field === 'api_key' || field === 'base_url') ? { [field]: value } : {};
+      return {
+        ...prev,
+        [providerId]: {
+          ...providerCfg,
+          ...syncPatch,
+          instances: nextInstances,
+          active_instance_id: activeId
+        }
+      };
+    });
+  };
+
+  const updateDefaultModel = (field, value) => {
+    setConfig((prev) => ({
+      ...prev,
+      default_models: {
+        ...((prev.default_models && typeof prev.default_models === 'object') ? prev.default_models : {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const baseUrlPlaceholder =
+    currentProvider === 'openai'
+      ? 'https://api.openai.com/v1'
+      : currentProvider === 'anthropic'
+        ? 'https://api.anthropic.com'
+        : currentProvider === 'openrouter'
+          ? 'https://openrouter.ai/api/v1'
+          : currentProvider === 'xai'
+            ? 'https://api.x.ai/v1'
+            : currentProvider === 'ollama'
+              ? 'http://localhost:11434/v1'
+              : currentProvider === 'lmstudio'
+                ? 'http://localhost:1234/v1'
+                : '';
+
+  const listModelsLabel = language === 'zh' ? '获取模型列表' : 'Fetch models';
+  const listModels = async () => {
+    setModelListState({ loading: true, models: [], error: '' });
+    try {
+      const { active } = getActiveInstance();
+      const apiKey = (active && typeof active.api_key === 'string') ? active.api_key : currentConfig.api_key;
+      const baseUrl = (active && typeof active.base_url === 'string') ? active.base_url : currentConfig.base_url;
+      const res = await fetch('/api/ai-engine/models/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: currentProvider,
+          api_key: apiKey,
+          base_url: baseUrl
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || res.statusText || 'Request failed');
+      const models = Array.isArray(data?.models) ? data.models.filter(Boolean) : [];
+      setModelListState({ loading: false, models, error: '' });
+    } catch (e) {
+      setModelListState({ loading: false, models: [], error: e?.message || String(e) });
+    }
   };
 
   const resetParameters = () => {
@@ -288,6 +378,11 @@ function ConfigPanel({
 
   const renderModelPage = () => {
     const pageTitle = language === 'zh' ? '模型与会话' : t('llmAndSession');
+    const { instances, activeId, active } = getActiveInstance();
+    const activeLabel = language === 'zh' ? '实例' : 'Instance';
+    const addLabel = language === 'zh' ? '新增' : 'Add';
+    const removeLabel = language === 'zh' ? '删除' : 'Remove';
+    const defaultModelsTitle = language === 'zh' ? '默认模型（按能力）' : 'Default models (by capability)';
     return (
       <>
         <h1 className="settings-page-title">{pageTitle}</h1>
@@ -308,7 +403,69 @@ function ConfigPanel({
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="xai">xAI</option>
+              <option value="ollama">Ollama</option>
+              <option value="lmstudio">LM Studio</option>
             </select>
+          </SettingRow>
+
+          <SettingRow title={activeLabel} description={language === 'zh' ? '选择当前 Provider 的连接实例' : 'Select the active connection instance.'} htmlFor="settings-provider-instance">
+            <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+              <select
+                id="settings-provider-instance"
+                className="settings-control"
+                value={activeId}
+                onChange={(e) => updateProviderConfig({ active_instance_id: e.target.value })}
+              >
+                {instances.map((inst) => (
+                  <option key={String(inst?.id)} value={String(inst?.id)}>
+                    {String(inst?.label || inst?.id || 'default')}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 34, whiteSpace: 'nowrap' }}
+                onClick={() => {
+                  const id = `inst-${Date.now()}`;
+                  const nextInst = { id, label: `Instance ${instances.length + 1}`, api_key: '', base_url: baseUrlPlaceholder };
+                  updateProviderConfig({
+                    instances: [...instances, nextInst],
+                    active_instance_id: id
+                  });
+                }}
+              >
+                {addLabel}
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 34, whiteSpace: 'nowrap' }}
+                disabled={instances.length <= 1}
+                onClick={() => {
+                  if (instances.length <= 1) return;
+                  const nextInstances = instances.filter((inst) => String(inst?.id) !== activeId);
+                  const nextActive = String(nextInstances[0]?.id || 'default');
+                  updateProviderConfig({ instances: nextInstances, active_instance_id: nextActive });
+                }}
+              >
+                {removeLabel}
+              </button>
+            </div>
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '实例名称' : 'Instance name'} description={language === 'zh' ? '仅用于区分多个连接' : 'Label shown in the instance selector.'} htmlFor="settings-instance-label">
+            <input
+              id="settings-instance-label"
+              type="text"
+              className="settings-control"
+              value={(active && typeof active.label === 'string') ? active.label : ''}
+              onChange={(e) => updateActiveInstance('label', e.target.value)}
+              placeholder={language === 'zh' ? '例如：公司代理 / 本地' : 'e.g. Work proxy / Local'}
+              autoComplete="off"
+            />
           </SettingRow>
 
           <SettingRow title={t('apiKey')} description={language === 'zh' ? '用于调用模型 API 的密钥' : 'API key for provider.'} htmlFor="settings-api-key">
@@ -316,9 +473,9 @@ function ConfigPanel({
               id="settings-api-key"
               type="password"
               className="settings-control"
-              value={currentConfig.api_key || ''}
-              onChange={(e) => updateCurrent('api_key', e.target.value)}
-              placeholder="sk-..."
+              value={(active && typeof active.api_key === 'string') ? active.api_key : (currentConfig.api_key || '')}
+              onChange={(e) => updateActiveInstance('api_key', e.target.value)}
+              placeholder={currentProvider === 'ollama' || currentProvider === 'lmstudio' ? (language === 'zh' ? '无需填写（可留空）' : 'Optional') : 'sk-...'}
               autoComplete="off"
             />
           </SettingRow>
@@ -328,9 +485,9 @@ function ConfigPanel({
               id="settings-base-url"
               type="text"
               className="settings-control"
-              value={currentConfig.base_url || ''}
-              onChange={(e) => updateCurrent('base_url', e.target.value)}
-              placeholder={currentProvider === 'openai' ? 'https://api.openai.com/v1' : 'https://api.anthropic.com'}
+              value={(active && typeof active.base_url === 'string') ? active.base_url : (currentConfig.base_url || '')}
+              onChange={(e) => updateActiveInstance('base_url', e.target.value)}
+              placeholder={baseUrlPlaceholder}
             />
           </SettingRow>
 
@@ -343,6 +500,29 @@ function ConfigPanel({
               onChange={(e) => updateCurrent('model', e.target.value)}
               placeholder={currentProvider === 'openai' ? 'gpt-4-turbo' : 'claude-3-opus-20240229'}
             />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '模型列表' : 'Model list'} description={language === 'zh' ? '从当前 Provider 获取可用模型' : 'Fetch available models from the provider.'}>
+            <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
+              <button type="button" className="ghost-btn" onClick={listModels} style={{ height: 34, whiteSpace: 'nowrap' }} disabled={modelListState.loading}>
+                {modelListState.loading ? (language === 'zh' ? '获取中…' : 'Loading…') : listModelsLabel}
+              </button>
+              {modelListState.models.length > 0 ? (
+                <select
+                  className="settings-control"
+                  value={currentConfig.model || ''}
+                  onChange={(e) => updateCurrent('model', e.target.value)}
+                >
+                  <option value="">{language === 'zh' ? '选择模型…' : 'Select a model…'}</option>
+                  {modelListState.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+            {modelListState.error ? <div style={{ marginTop: 6, color: 'var(--danger)' }}>{modelListState.error}</div> : null}
           </SettingRow>
 
           <SettingRow
@@ -362,6 +542,51 @@ function ConfigPanel({
               onChange={(e) => updateCurrent('check_model', e.target.value)}
               placeholder={currentProvider === 'openai' ? 'gpt-4o-mini' : 'claude-3-haiku-20240307'}
               autoComplete="off"
+            />
+          </SettingRow>
+        </SectionCard>
+
+        <div className="settings-group-title">{defaultModelsTitle}</div>
+        <SectionCard>
+          <SettingRow title={language === 'zh' ? '通用' : 'General'} description={language === 'zh' ? '默认聊天/生成模型' : 'Default model for chat/generation.'}>
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.general || ''}
+              onChange={(e) => updateDefaultModel('general', e.target.value)}
+              placeholder={language === 'zh' ? '留空则使用上方 Model' : 'Empty uses the provider model above'}
+            />
+          </SettingRow>
+          <SettingRow title={language === 'zh' ? '快速' : 'Fast'} description={language === 'zh' ? '更快/更便宜的模型（可选）' : 'Faster/cheaper model (optional).'}>
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.fast || ''}
+              onChange={(e) => updateDefaultModel('fast', e.target.value)}
+            />
+          </SettingRow>
+          <SettingRow title={language === 'zh' ? '推理' : 'Reasoning'} description={language === 'zh' ? '需要更强推理的模型（可选）' : 'Model used for stronger reasoning (optional).'}>
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.reasoning || ''}
+              onChange={(e) => updateDefaultModel('reasoning', e.target.value)}
+            />
+          </SettingRow>
+          <SettingRow title={language === 'zh' ? '工具' : 'Tools'} description={language === 'zh' ? '用于工具调用/函数调用（可选）' : 'Model used for tool/function calls (optional).'}>
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.tools || ''}
+              onChange={(e) => updateDefaultModel('tools', e.target.value)}
+            />
+          </SettingRow>
+          <SettingRow title={language === 'zh' ? '向量' : 'Embeddings'} description={language === 'zh' ? '向量模型（可选）' : 'Embeddings model (optional).'}>
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.embeddings || ''}
+              onChange={(e) => updateDefaultModel('embeddings', e.target.value)}
             />
           </SettingRow>
         </SectionCard>

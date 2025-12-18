@@ -24,8 +24,11 @@ function estimateSizeHint(req) {
     return 0;
 }
 function hasProvider(cfg, provider) {
-    const pool = cfg.providers?.[provider];
-    return !!pool && typeof pool.apiKey === 'string' && pool.apiKey.trim().length > 0;
+    const providerCfg = cfg.providers?.[provider];
+    const pools = providerCfg?.pools;
+    if (!pools || typeof pools !== 'object')
+        return false;
+    return Object.values(pools).some((p) => !!p && typeof p.apiKey === 'string' && p.apiKey.trim().length > 0);
 }
 function defaultRouteFromConfig(cfg, capability) {
     const preferred = cfg.routing?.[capability]?.[0];

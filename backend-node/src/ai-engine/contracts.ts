@@ -1,6 +1,6 @@
 export type AiCapability = 'chat' | 'inline' | 'editorAction' | 'tools' | 'embeddings';
 
-export type AiProviderId = 'openai' | 'anthropic' | 'local';
+export type AiProviderId = 'openai' | 'anthropic' | 'openrouter' | 'xai' | 'ollama' | 'lmstudio' | 'local';
 
 export type AiEnvironment = 'dev' | 'test' | 'prod';
 
@@ -48,7 +48,16 @@ export interface AiInlineRequest extends AiEngineRequestBase {
   llmConfig?: Record<string, unknown>;
 }
 
-export type AiEditorActionKind = 'refactor' | 'explain' | 'optimize';
+export type AiEditorActionKind =
+  | 'refactor'
+  | 'explain'
+  | 'optimize'
+  | 'generateTests'
+  | 'generateComments'
+  | 'review'
+  | 'generateDocs'
+  | 'rewrite'
+  | 'modify';
 
 export interface AiEditorActionRequest extends AiEngineRequestBase {
   capability: 'editorAction';
@@ -80,6 +89,7 @@ export type AiEngineRequest =
 
 export interface AiRouteTarget {
   provider: AiProviderId;
+  poolId?: string;
   model?: string;
   tags?: string[];
 }
@@ -141,4 +151,3 @@ export type AiEngineResponse =
   | AiEditorActionResponse
   | AiToolsResponse
   | AiEmbeddingsResponse;
-
