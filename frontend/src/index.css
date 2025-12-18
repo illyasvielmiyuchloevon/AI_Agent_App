@@ -48,7 +48,7 @@
   --settings-canvas-padding: clamp(24px, 6vw, 72px);
   --settings-gap: 22px;
   --settings-sidebar-width: 232px;
-  --settings-control-col: 240px;
+  --settings-control-col: 320px;
 
   /* Settings surface */
   --settings-radius: 12px;
@@ -1916,12 +1916,20 @@ input:focus, select:focus, textarea:focus {
   height: var(--settings-control-height);
   padding: 0 68px 0 34px;
   border-radius: 10px;
-  background: var(--panel-sub);
-  border: 1px solid var(--settings-border);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text);
   font-size: var(--settings-body-size);
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
-.settings-search-input:focus {
+.settings-search-input:hover {
+  border-color: var(--border-strong);
+}
+
+.settings-search-input:focus-visible {
+  border-color: var(--accent);
   box-shadow: var(--settings-focus);
 }
 
@@ -2129,14 +2137,54 @@ input:focus, select:focus, textarea:focus {
   width: 100%;
   max-width: 100%;
   height: var(--settings-control-height);
-  padding: 0 10px;
+  padding: 0 12px;
   border-radius: 10px;
   font-size: var(--settings-body-size);
   line-height: 1.2;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text);
+  outline: none;
+  box-shadow: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.settings-control:hover {
+  border-color: var(--border-strong);
+}
+
+.settings-control:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--settings-focus);
+}
+
+.settings-control:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--panel-sub);
+}
+
+select.settings-control {
+  appearance: none;
+  padding-right: 36px;
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px 14px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+[data-theme="dark"] select.settings-control {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+select.settings-control option,
+select.settings-control optgroup {
+  background: var(--panel);
+  color: var(--text);
 }
 
 .settings-control.compact {
-  max-width: 200px;
+  max-width: 266px;
 }
 
 .settings-help {
@@ -2212,7 +2260,7 @@ input:focus, select:focus, textarea:focus {
 
 .settings-slider-number {
   position: relative;
-  width: 120px;
+  width: 160px;
 }
 
 .settings-slider-number input[type="number"] {

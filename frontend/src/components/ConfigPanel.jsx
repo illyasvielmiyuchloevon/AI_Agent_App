@@ -150,7 +150,8 @@ function ConfigPanel({
         context_min_length: 32000,
         output_max_tokens: 32768,
         output_min_tokens: 1,
-        temperature: 0.8
+        temperature: 0.8,
+        top_p: 0.9
       }
     }));
   };
@@ -405,6 +406,21 @@ function ConfigPanel({
               step={0.1}
               defaultValue={0.8}
               onChange={(val) => updateCurrent('temperature', val)}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? 'Top P' : 'Top P'}
+            description={language === 'zh' ? '控制采样的截断概率（0.1–1.0）' : 'Nucleus sampling probability (0.1–1.0).'}
+          >
+            <SliderControl
+              language={language}
+              value={currentConfig.top_p ?? 0.9}
+              min={0.1}
+              max={1.0}
+              step={0.05}
+              defaultValue={0.9}
+              onChange={(val) => updateCurrent('top_p', val)}
             />
           </SettingRow>
 

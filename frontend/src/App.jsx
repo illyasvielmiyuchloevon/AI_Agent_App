@@ -274,6 +274,7 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       context_max_length: snapshot.context_max_length,
       output_max_tokens: snapshot.output_max_tokens,
       temperature: snapshot.temperature,
+      top_p: snapshot.top_p,
       context_independent: snapshot.context_independent
   };
   const openai = { ...(fallback.openai || DEFAULT_PROJECT_CONFIG.openai), ...(provider === 'openai' ? shared : {}) };
@@ -520,6 +521,7 @@ function App() {
           context_max_length: current.context_max_length,
           output_max_tokens: current.output_max_tokens,
           temperature: current.temperature,
+          top_p: current.top_p,
           context_independent: current.context_independent
       };
   };

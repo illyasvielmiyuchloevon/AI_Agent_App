@@ -252,9 +252,11 @@ app.post("/sessions/:id/chat", async (req, res) => {
                 agent.setMode(resolvedMode || "chat", enabledTools);
             }
             const activeTools = agent.getActiveTools();
+            const parsedTopP = Number(config.top_p);
             const chatOptions = {
                 max_tokens: config.output_max_tokens,
                 temperature: config.temperature,
+                top_p: Number.isFinite(parsedTopP) ? Math.min(1.0, Math.max(0.1, parsedTopP)) : 0.9,
             };
             if (activeTools.length > 0) {
                 chatOptions.tool_choice = "auto";
