@@ -1,8 +1,8 @@
 import React from 'react';
 
-function SettingsLayout({ sidebar, children, sidebarOpen = false, onSidebarOpenChange }) {
+function SettingsLayout({ sidebar, children, sidebarOpen = false, onSidebarOpenChange, variant = 'modal' }) {
   return (
-    <div className="settings-page">
+    <div className="settings-page" data-variant={variant}>
       <div className="settings-shell" data-sidebar-open={sidebarOpen ? 'true' : 'false'}>
         <div
           className="settings-overlay"

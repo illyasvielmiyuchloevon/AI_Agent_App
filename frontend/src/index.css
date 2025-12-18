@@ -1785,6 +1785,33 @@ input:focus, select:focus, textarea:focus {
   padding: var(--settings-canvas-padding);
 }
 
+.settings-page[data-variant="inline"] {
+  background: transparent;
+  padding: 16px;
+  height: 100%;
+}
+
+.settings-page[data-variant="inline"] .settings-shell {
+  width: 100%;
+  margin: 0;
+}
+
+.settings-page[data-variant="inline"] .settings-sidebar,
+.settings-page[data-variant="inline"] .settings-main {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-page[data-variant="inline"] .settings-footer {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 12px 0;
+}
+
 .settings-shell {
   position: relative;
   width: min(var(--settings-canvas-max), 100%);

@@ -485,8 +485,10 @@ function ConfigPanel({
     fullscreen: fullscreen ? (language === 'zh' ? '退出全屏' : 'Exit fullscreen') : language === 'zh' ? '全屏显示' : 'Fullscreen',
     close: language === 'zh' ? '关闭' : 'Close',
     test: language === 'zh' ? '测试连接' : 'Test connection',
-    save: language === 'zh' ? '保存并关闭' : 'Save & close'
+    save: variant === 'inline' ? (language === 'zh' ? '保存' : 'Save') : language === 'zh' ? '保存并关闭' : 'Save & close'
   };
+
+  const showTopActions = variant === 'modal';
 
   const content = (
     <>
@@ -501,21 +503,19 @@ function ConfigPanel({
             <MenuIcon />
           </button>
         </div>
-        <div className="settings-footer-actions">
-          {variant === 'modal' && (
-            <>
-              <button type="button" className="ghost-btn" onClick={onOpenInEditor} style={{ height: 34 }}>
-                {actionLabels.openInEditor}
-              </button>
-              <button type="button" className="ghost-btn" onClick={onToggleFullscreen} style={{ height: 34 }}>
-                {actionLabels.fullscreen}
-              </button>
-            </>
-          )}
-          <button type="button" className="ghost-btn" onClick={onClose} style={{ height: 34 }}>
-            {actionLabels.close}
-          </button>
-        </div>
+        {showTopActions ? (
+          <div className="settings-footer-actions">
+            <button type="button" className="ghost-btn" onClick={onOpenInEditor} style={{ height: 34 }}>
+              {actionLabels.openInEditor}
+            </button>
+            <button type="button" className="ghost-btn" onClick={onToggleFullscreen} style={{ height: 34 }}>
+              {actionLabels.fullscreen}
+            </button>
+            <button type="button" className="ghost-btn" onClick={onClose} style={{ height: 34 }}>
+              {actionLabels.close}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="settings-main-scroll">{page}</div>
@@ -544,7 +544,7 @@ function ConfigPanel({
             className="primary-btn"
             onClick={() => {
               onSave && onSave();
-              onClose && onClose();
+              if (variant !== 'inline') onClose && onClose();
             }}
             style={{ height: 34 }}
           >
@@ -557,12 +557,10 @@ function ConfigPanel({
 
   if (variant === 'inline') {
     return (
-      <div className="config-inline-shell" style={{ flex: 1, minHeight: 0 }}>
-        <div className="config-modal" style={{ width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', borderRadius: 0 }}>
-          <SettingsLayout sidebar={sidebar} sidebarOpen={sidebarOpen} onSidebarOpenChange={setSidebarOpen}>
-            {content}
-          </SettingsLayout>
-        </div>
+      <div className="config-inline-shell" style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <SettingsLayout variant="inline" sidebar={sidebar} sidebarOpen={sidebarOpen} onSidebarOpenChange={setSidebarOpen}>
+          {content}
+        </SettingsLayout>
       </div>
     );
   }
@@ -570,7 +568,7 @@ function ConfigPanel({
   return (
     <div className="config-modal-backdrop">
       <div className="config-modal" style={fullscreen ? { width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh', borderRadius: 0 } : undefined}>
-        <SettingsLayout sidebar={sidebar} sidebarOpen={sidebarOpen} onSidebarOpenChange={setSidebarOpen}>
+        <SettingsLayout variant="modal" sidebar={sidebar} sidebarOpen={sidebarOpen} onSidebarOpenChange={setSidebarOpen}>
           {content}
         </SettingsLayout>
       </div>
