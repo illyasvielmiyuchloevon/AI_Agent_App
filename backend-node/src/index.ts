@@ -53,22 +53,19 @@ app.post("/health", async (req, res) => {
     // Check config
   let isHealthy = false;
   let message = "Agent not configured";
-  const root = req.headers["x-workspace-root"];
-  if (root) {
-    try {
-      await db.initDb();
-      if (req.body && req.body.provider) {
-        console.log("[Health] Using config from body");
-      }
-      const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
-      if (config) {
-        const client = buildLlmClient(config);
-        isHealthy = await client.checkHealth();
-        message = isHealthy ? "Connected" : "Health check failed";
-      }
-    } catch (e: any) {
-      message = e.message;
+  try {
+    await db.initDb();
+    if (req.body && req.body.provider) {
+      console.log("[Health] Using config from body");
     }
+    const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
+    if (config) {
+      const client = buildLlmClient(config);
+      isHealthy = await client.checkHealth();
+      message = isHealthy ? "Connected" : "Health check failed";
+    }
+  } catch (e: any) {
+    message = e.message;
   }
   res.json({ status: isHealthy ? "ok" : "error", connected: isHealthy, message });
 });
@@ -195,7 +192,7 @@ app.post("/sessions/:id/chat", async (req, res) => {
   const enabledTools = Array.isArray(tool_overrides)
     ? (tool_overrides as any[]).filter(t => typeof t === "string" && t.trim().length > 0)
     : [];
-  const root = req.headers["x-workspace-root"] as string;
+  const root = typeof req.headers["x-workspace-root"] === "string" ? (req.headers["x-workspace-root"] as string) : "";
   workspaceContext.run({ id: root || sessionId, root }, async () => {
     try {
       const bodyConfig = (req.body && typeof req.body === "object" && (req.body as any).llm_config && typeof (req.body as any).llm_config === "object")
