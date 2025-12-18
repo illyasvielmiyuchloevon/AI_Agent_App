@@ -23,6 +23,7 @@ import CloneRepositoryModal from './components/CloneRepositoryModal';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
 import { getTranslation } from './utils/i18n';
+import { createAiEngineClient, readTextResponseBody } from './utils/aiEngineClient';
 
 const DEBUG_SEPARATORS = false;
 
@@ -491,6 +492,8 @@ function App() {
       return fetch(url, { ...options, headers });
   }, [projectHeaders]);
 
+  const aiEngineClient = useMemo(() => createAiEngineClient({ fetch: projectFetch }), [projectFetch]);
+
   const normalizeProjectConfig = useCallback((raw = {}) => {
       const merged = {
           ...DEFAULT_PROJECT_CONFIG,
@@ -557,14 +560,9 @@ function App() {
       setApiMessage('Checking connection...');
       try {
           const body = getBackendConfig();
-          const res = await projectFetch('/api/health', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: body ? JSON.stringify(body) : null,
-          });
-          const data = await res.json();
-          setApiStatus(data.connected ? 'ok' : 'error');
-          setApiMessage(data.message || (data.connected ? 'Connected successfully' : 'Connection failed'));
+          const data = await aiEngineClient.health(body);
+          setApiStatus(data.ok ? 'ok' : 'error');
+          setApiMessage(data.ok ? 'Connected' : (data.detail || 'Health check failed'));
       } catch (err) {
           setApiStatus('error');
           setApiMessage(`Network Error: ${err.message}`);
@@ -2113,12 +2111,16 @@ function App() {
 
       try {
       const llmConfig = getBackendConfig();
-       const response = await projectFetch(`/api/sessions/${sessionIdToUse}/chat`, {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ message: cleanedText, attachments: safeAttachments, mode: currentMode, tool_overrides: enabledTools, llm_config: llmConfig }),
-         signal: controller.signal
-       });
+       const response = await aiEngineClient.chatStream({
+         requestId: `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+         sessionId: sessionIdToUse,
+         workspaceRoot: backendWorkspaceRoot,
+         message: cleanedText,
+         attachments: safeAttachments,
+         mode: currentMode,
+         toolOverrides: enabledTools,
+         llmConfig,
+       }, { signal: controller.signal });
 
       if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
@@ -2903,21 +2905,16 @@ function App() {
       
       try {
            const llmConfig = getBackendConfig();
-            const res = await projectFetch(`/api/sessions/${currentSessionId}/chat`, {
-             method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-             body: JSON.stringify({ message: prompt, mode: 'chat', llm_config: llmConfig })
+           const res = await aiEngineClient.chatStream({
+              requestId: `git-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              sessionId: currentSessionId,
+              workspaceRoot: backendWorkspaceRoot,
+              message: prompt,
+              mode: 'chat',
+              llmConfig,
            });
-           if (!res.body) return '';
-           const reader = res.body.getReader();
-           const decoder = new TextDecoder();
-          let result = '';
-          while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              result += decoder.decode(value, { stream: true });
-          }
-          return result.trim();
+          const result = await readTextResponseBody(res);
+          return String(result || '').trim();
       } catch (e) {
           console.error(e);
           return 'Error generating message';
