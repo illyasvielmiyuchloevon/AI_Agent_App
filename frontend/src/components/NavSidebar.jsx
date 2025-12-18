@@ -17,6 +17,14 @@ const FolderIcon = ({ open = false }) => (
   </svg>
 );
 
+const SessionsIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 7h12" />
+    <path d="M6 12h12" />
+    <path d="M6 17h12" />
+  </svg>
+);
+
 const ChatIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-4l-3 3-3-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
@@ -52,8 +60,6 @@ function NavSidebar({
     sidebarCollapsed,
     explorerOpen,
     onSelectSidebar,
-    onToggleChatPanel,
-    chatPanelCollapsed,
     onCreateSession,
     onToggleConfig,
     apiStatus,
@@ -61,6 +67,7 @@ function NavSidebar({
     language = 'en'
 }) {
     const isSessionsActive = activeSidebar === 'sessions' && !sidebarCollapsed;
+    const isChatActive = activeSidebar === 'chat' && !sidebarCollapsed;
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
     const isSearchActive = activeSidebar === 'search' && !sidebarCollapsed;
     const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
@@ -72,6 +79,13 @@ function NavSidebar({
                 className={`activity-item ${isSessionsActive ? 'active' : ''}`} 
                 onClick={() => onSelectSidebar('sessions')}
                 title={t('sessionList')}
+            >
+                <SessionsIcon />
+            </button>
+            <button 
+                className={`activity-item ${isChatActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('chat')}
+                title={t('chat')}
             >
                 <ChatIcon />
             </button>
@@ -109,27 +123,6 @@ function NavSidebar({
             </button>
 
             <div className="activity-spacer" />
-
-            <button 
-                className="activity-item ghost" 
-                onClick={onToggleChatPanel} 
-                title={chatPanelCollapsed ? t('expandChat') : t('collapseChat')}
-            >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 5h14a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-5l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
-                    {chatPanelCollapsed ? (
-                        <>
-                            <polyline points="10 9 12 11 10 13" />
-                            <polyline points="6 9 8 11 6 13" />
-                        </>
-                    ) : (
-                        <>
-                            <polyline points="14 9 12 11 14 13" />
-                            <polyline points="18 9 16 11 18 13" />
-                        </>
-                    )}
-                </svg>
-            </button>
 
             <button 
                 className="activity-item ghost" 

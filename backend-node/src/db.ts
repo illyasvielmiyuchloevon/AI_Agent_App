@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { getWorkspaceRoot } from './context';
 
 const DATA_FILE_NAME = "sessions.json";
 const LLM_CONFIG_FILE = "llm_config.json";
@@ -60,17 +60,16 @@ function getDefaultState(): DBState {
     };
 }
 
-function getDataDir(create = false): string {
-    const root = getWorkspaceRoot();
-    const dataDir = path.join(root, ".aichat");
-    // We rely on the caller or init to ensure existence usually, but for safe access:
-    // fs.mkdir is async, so this helper is a bit tricky if used synchronously in path generation.
-    // But we just return string here.
-    return dataDir;
+function getGlobalDataDir(): string {
+    const isWin = process.platform === 'win32';
+    const baseDir = isWin
+        ? (process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir())
+        : os.homedir();
+    return path.join(baseDir, ".aichat", "global");
 }
 
 async function ensureDataDir(): Promise<string> {
-    const dir = getDataDir();
+    const dir = getGlobalDataDir();
     try {
         await fs.mkdir(dir, { recursive: true });
     } catch (e) {
@@ -80,7 +79,7 @@ async function ensureDataDir(): Promise<string> {
 }
 
 function getDataFilePath(): string {
-    return path.join(getDataDir(), DATA_FILE_NAME);
+    return path.join(getGlobalDataDir(), DATA_FILE_NAME);
 }
 
 async function loadState(): Promise<DBState> {
@@ -140,12 +139,8 @@ async function saveState(state: DBState): Promise<void> {
 // --- Public API ---
 
 export async function initDb(): Promise<void> {
-    try {
-        await ensureDataDir();
-        await loadState();
-    } catch (e) {
-        // ignore workspace error
-    }
+    await ensureDataDir();
+    await loadState();
 }
 
 export async function createSession(title = "New Chat", mode = "chat"): Promise<Session> {
@@ -348,7 +343,7 @@ export async function getDiffs(options: { session_id?: string, path?: string, li
 // LLM Config
 
 function getLlmConfigPath(): string {
-    return path.join(getDataDir(), LLM_CONFIG_FILE);
+    return path.join(getGlobalDataDir(), LLM_CONFIG_FILE);
 }
 
 export async function loadLlmConfig(): Promise<any | null> {

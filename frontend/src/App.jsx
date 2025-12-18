@@ -463,8 +463,6 @@ function App() {
   const [gitLog, setGitLog] = useState([]);
   const [gitBranches, setGitBranches] = useState({ all: [], current: '', branches: {} });
 
-  const [chatPanelWidth, setChatPanelWidth] = useState(() => pickLayoutNumber('chatWidth', DEFAULT_PROJECT_CONFIG.chatPanelWidth));
-  const [chatPanelCollapsed, setChatPanelCollapsed] = useState(false);
   const [activeResizeTarget, setActiveResizeTarget] = useState(null);
   const resizeStateRef = useRef({ target: null, startX: 0, startWidth: 0 });
   const resizePendingRef = useRef({ target: null, width: 0, delta: 0 });
@@ -474,11 +472,8 @@ function App() {
   // 拖拽分隔条时悬浮提示内容（null 表示隐藏）
   const [resizeTooltip, setResizeTooltip] = useState(null);
   
-  const lastChatWidthRef = useRef(pickLayoutNumber('chatWidth', DEFAULT_PROJECT_CONFIG.chatPanelWidth));
   const lastSidebarWidthRef = useRef(pickLayoutNumber('sidebarWidth', DEFAULT_PROJECT_CONFIG.sidebarWidth));
   const sidebarResizerGhostRef = useRef(null);
-  const chatResizerGhostRef = useRef(null);
-    const chatPanelRef = useRef(null);
   const [showResizeOverlay, setShowResizeOverlay] = useState(false);
 
   const projectReady = !!workspaceDriver;
@@ -555,11 +550,6 @@ function App() {
   }, []);
 
   const checkApiStatus = async () => {
-      if (!projectReady) {
-          setApiStatus('unknown');
-          setApiMessage('');
-          return;
-      }
       setApiStatus('checking');
       setApiMessage('Checking connection...');
       try {
@@ -819,11 +809,8 @@ function App() {
       }
       const stored = readLayoutPrefs();
       const nextSidebarWidth = Number(stored.sidebarWidth) || cfg.sidebarWidth || cfg.sessionPanelWidth || DEFAULT_PROJECT_CONFIG.sidebarWidth;
-      const nextChatWidth = Number(stored.chatWidth) || cfg.chatPanelWidth || DEFAULT_PROJECT_CONFIG.chatPanelWidth;
       setSidebarWidth(nextSidebarWidth);
-      setChatPanelWidth(nextChatWidth);
       lastSidebarWidthRef.current = nextSidebarWidth;
-      lastChatWidthRef.current = nextChatWidth;
       setSidebarCollapsed(false);
       setActiveSidebarPanel((prev) => prev || 'sessions');
       setCurrentMode(cfg.lastMode || DEFAULT_PROJECT_CONFIG.lastMode);
@@ -1057,7 +1044,7 @@ function App() {
   }, [projectConfig, workspaceDriver, normalizeProjectConfig]);
 
   const getEnabledTools = (mode) => {
-      if (!workspaceDriver || !projectReady) return [];
+      if (!workspaceDriver) return [];
       if (mode === 'agent') {
           return Object.entries(toolSettings.agent)
               .filter(([, enabled]) => enabled)
@@ -1072,14 +1059,14 @@ function App() {
   };
 
   const emitSessionsUpdated = useCallback((detail = {}) => {
-      const payload = { timestamp: Date.now(), project: projectMeta.pathLabel || projectMeta.id || 'default', ...detail };
+      const payload = { timestamp: Date.now(), ...detail };
       try {
           // 仅用于跨标签页同步，不在本标签页监听
           localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
       } catch (err) {
           console.warn('Emit sessions-updated failed', err);
       }
-  }, [projectMeta]);
+  }, []);
 
   const openDiffModal = useCallback((payload) => {
       if (!payload) return;
@@ -1332,7 +1319,7 @@ function App() {
   }), []);
 
   const refreshMessages = useCallback(async (sessionId) => {
-      if (!sessionId || !backendBound) return;
+      if (!sessionId) return;
       try {
           const res = await projectFetch(`/api/sessions/${sessionId}/messages`);
           if (!res.ok) return;
@@ -1370,10 +1357,10 @@ function App() {
       } catch (err) {
           console.error(err);
       }
-  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, backendBound, messages, toolRuns, loadingSessions]);
+  }, [normalizeMessages, buildToolRunsFromMessages, mergeRunLists, projectFetch, messages, toolRuns, loadingSessions]);
 
   const refreshToolRuns = useCallback(async (sessionId) => {
-      if (!sessionId || !backendBound) return;
+      if (!sessionId) return;
       try {
           const res = await projectFetch(`/api/sessions/${sessionId}/messages`);
           if (!res.ok) return;
@@ -1440,7 +1427,7 @@ function App() {
       } catch (err) {
           console.error('Failed to refresh tool runs', err);
       }
-  }, [backendBound, projectFetch, normalizeMessages, buildToolRunsFromMessages, mergeRunLists, messages]);
+  }, [projectFetch, normalizeMessages, buildToolRunsFromMessages, mergeRunLists, messages]);
 
   const upsertToolRun = useCallback((messageId, run) => {
       if (!messageId) return;
@@ -1658,13 +1645,11 @@ function App() {
       }
       if (sidebarCollapsed) setSidebarCollapsed(false);
       setActiveSidebarPanel('sessions');
-      if (chatPanelCollapsed) setChatPanelCollapsed(false); // Auto open chat panel
       await refreshMessages(id);
-  }, [sidebarCollapsed, chatPanelCollapsed, refreshMessages]);
+  }, [sidebarCollapsed, refreshMessages]);
 
   // 不包含任何依赖，防止循环更新
   const fetchSessions = useCallback(async () => {
-      if (!backendBound) return;
       try {
           const res = await projectFetch('/api/sessions');
           if (res.ok) {
@@ -1674,13 +1659,9 @@ function App() {
       } catch (err) {
           console.error("Failed to fetch sessions", err);
       }
-  }, [backendBound, projectFetch]);
+  }, [projectFetch]);
 
   const createSession = useCallback(async (initialTitle) => {
-      if (!backendBound) {
-          alert('请先绑定后端工作区路径');
-          return null;
-      }
       console.time('🚀 createSession');
       try {
           console.log('[CREATE] 发送请求...');
@@ -1710,11 +1691,10 @@ function App() {
           console.error("Failed to create session", err);
       }
       return null;
-  }, [currentMode, emitSessionsUpdated, projectFetch, backendBound]);
+  }, [currentMode, emitSessionsUpdated, projectFetch]);
 
   const deleteSession = useCallback(async (id) => {
       if (!confirm("Are you sure you want to delete this chat?")) return;
-      if (!backendBound) return;
       // 原子操作：单次 setSessions 调用，确保 UI 立即更新
       setSessions((prev) => {
           const remaining = prev.filter(s => s.id !== id);
@@ -1742,18 +1722,12 @@ function App() {
       
       // 通知其他标签页
       emitSessionsUpdated({ action: 'delete', sessionId: id });
-  }, [currentSessionId, emitSessionsUpdated, projectFetch, backendBound]);
+  }, [currentSessionId, emitSessionsUpdated, projectFetch]);
 
   // --- Initialization ---
   useEffect(() => {
-      if (backendBound) {
-          fetchSessions();
-      } else {
-          setSessions([]);
-          setMessages([]);
-          setCurrentSessionId(null);
-      }
-  }, [fetchSessions, backendBound]);
+      fetchSessions();
+  }, [fetchSessions]);
 
   useEffect(() => {
       document.documentElement.setAttribute('data-theme', theme);
@@ -1832,14 +1806,6 @@ function App() {
   }, [sidebarWidth, sidebarCollapsed]);
 
   useEffect(() => {
-      setProjectConfig((prev) => (prev.chatPanelWidth === chatPanelWidth ? prev : { ...prev, chatPanelWidth }));
-      persistLayoutPrefs({ chatWidth: chatPanelWidth });
-      if (!chatPanelCollapsed) {
-          lastChatWidthRef.current = chatPanelWidth;
-      }
-  }, [chatPanelWidth, chatPanelCollapsed]);
-
-  useEffect(() => {
       if (!backendWorkspaceRoot) return;
       setProjectConfig((prev) => (prev.backendRoot === backendWorkspaceRoot ? prev : { ...prev, backendRoot: backendWorkspaceRoot, projectPath: prev.projectPath || backendWorkspaceRoot }));
   }, [backendWorkspaceRoot]);
@@ -1865,7 +1831,7 @@ function App() {
   }, [config]);
 
   useEffect(() => {
-      if (configHydratedRef.current || !backendBound) return;
+      if (configHydratedRef.current) return;
       const key = getBackendConfig().api_key;
       if (key) {
           configHydratedRef.current = true;
@@ -1881,7 +1847,7 @@ function App() {
           }
       })();
       return () => { cancelled = true; };
-  }, [applyStoredConfig, fetchPersistedBackendConfig, getBackendConfig, backendBound]);
+  }, [applyStoredConfig, fetchPersistedBackendConfig, getBackendConfig]);
 
   useEffect(() => {
       if (!workspaceDriver) return;
@@ -1983,24 +1949,17 @@ function App() {
       // 所以这个监听实际上只用于多标签页场景
       const handleStorage = (e) => {
           if (e.key !== SESSION_STORAGE_KEY || !e.newValue) return;
-          try {
-              const payload = JSON.parse(e.newValue);
-              const currentProject = projectMeta.pathLabel || projectMeta.id || 'default';
-              if (payload.project && payload.project !== currentProject) return;
-          } catch {
-              /* ignore parse errors */
-          }
           fetchSessions();
       };
       window.addEventListener('storage', handleStorage);
       return () => {
           window.removeEventListener('storage', handleStorage);
       };
-  }, [fetchSessions, projectMeta]);
+  }, [fetchSessions]);
 
   const renameSession = useCallback(async (id, title) => {
       const trimmed = (title || '').trim();
-      if (!trimmed || !projectReady) return;
+      if (!trimmed) return;
       try {
           const res = await projectFetch(`/api/sessions/${id}`, {
               method: 'PATCH',
@@ -2019,7 +1978,7 @@ function App() {
       } catch (err) {
           console.error('Failed to rename session', err);
       }
-  }, [currentSessionId, emitSessionsUpdated, projectFetch, projectReady]);
+  }, [currentSessionId, emitSessionsUpdated, projectFetch]);
 
   const handleModeChange = async (mode) => {
       setCurrentMode(mode);
@@ -2045,7 +2004,7 @@ function App() {
   };
 
   const fetchLogs = async () => {
-      if (!currentSessionId || !projectReady) return;
+      if (!currentSessionId) return;
       try {
           const res = await projectFetch(`/api/sessions/${currentSessionId}/logs`);
           if (res.ok) {
@@ -2058,12 +2017,12 @@ function App() {
   };
 
   useEffect(() => {
-      if (showLogs && currentSessionId && projectReady) {
+      if (showLogs && currentSessionId) {
           fetchLogs();
           const interval = setInterval(fetchLogs, 2000);
           return () => clearInterval(interval);
       }
-  }, [showLogs, currentSessionId, projectReady]);
+  }, [showLogs, currentSessionId]);
 
   useEffect(() => {
       if (!workspaceState.activeFile && workspaceState.openTabs.length > 0) {
@@ -2076,8 +2035,9 @@ function App() {
     const messageText = text !== undefined ? text : input;
     const cleanedText = messageText || '';
     const safeAttachments = attachments || [];
-    if (!projectReady) {
-        alert('请先选择项目文件夹。');
+    const requiresWorkspace = ['canva', 'agent'].includes(currentMode);
+    if (requiresWorkspace && !workspaceDriver) {
+        alert('请先选择项目文件夹（Canva/Agent 模式需要访问工作区文件）。');
         return;
     }
     const enabledTools = getEnabledTools(currentMode);
@@ -2739,23 +2699,6 @@ function App() {
       }
   };
 
-  useEffect(() => {
-      if (!chatPanelCollapsed) {
-          lastChatWidthRef.current = chatPanelWidth;
-      }
-  }, [chatPanelWidth, chatPanelCollapsed]);
-
-  const toggleChatPanel = useCallback(() => {
-      setChatPanelCollapsed((prev) => {
-          if (!prev) {
-              lastChatWidthRef.current = chatPanelWidth;
-          } else {
-              setChatPanelWidth(lastChatWidthRef.current || 420);
-          }
-          return !prev;
-      });
-  }, [chatPanelWidth]);
-
   const handleSidebarTabChange = useCallback((panelKey) => {
       setActiveSidebarPanel((prev) => {
           if (prev === panelKey && !sidebarCollapsed) {
@@ -3089,46 +3032,27 @@ function App() {
       if (DEBUG_SEPARATORS) console.log('[resizer] startResize', { target, clientX: mouseDownEvent.clientX });
       
       // For sidebar drag-to-expand, we allow starting from 0 width
-      const startWidth = target === 'sidebar'
-          ? (sidebarCollapsed ? 0 : sidebarWidth)
-          : (chatPanelCollapsed ? lastChatWidthRef.current || chatPanelWidth : chatPanelWidth);
-
-      // Note: We do NOT auto-uncollapse sidebar here to support "drag > 30px" logic.
-      
-      if (target === 'chat' && chatPanelCollapsed) {
-          setChatPanelCollapsed(false);
-          setChatPanelWidth(startWidth || 420);
-      }
+      const startWidth = sidebarCollapsed ? 0 : sidebarWidth;
 
       // Calculate max width to avoid pushing other panels off-screen
-      let maxWidth = 10000;
       const navWidth = 54;
-      const resizersWidth = 4; // 2 * 2px
+      const resizersWidth = 2;
       const fixedDeduction = navWidth + resizersWidth;
-      
-      if (target === 'sidebar') {
-          const currentChatWidth = chatPanelCollapsed ? 0 : chatPanelWidth;
-          // Leave at least a tiny bit of space or just prevent overflow
-          maxWidth = window.innerWidth - fixedDeduction - currentChatWidth;
-      } else if (target === 'chat') {
-          const currentSidebarWidth = sidebarCollapsed ? 0 : sidebarWidth;
-          maxWidth = window.innerWidth - fixedDeduction - currentSidebarWidth;
-      }
+      const maxWidth = window.innerWidth - fixedDeduction;
 
       resizeStateRef.current = { target, startX: mouseDownEvent.clientX, startWidth, maxWidth };
       setActiveResizeTarget(target);
       setShowResizeOverlay(true);
       resizePendingRef.current = { target, width: startWidth, delta: 0 };
-      const ghost = target === 'sidebar' ? sidebarResizerGhostRef.current : chatResizerGhostRef.current;
+      const ghost = sidebarResizerGhostRef.current;
       if (ghost) {
           ghost.style.transform = 'translateX(0px)';
       }
       // show immediate visual cue
-      if (target === 'sidebar' && sidebarResizerGhostRef.current) sidebarResizerGhostRef.current.style.background = 'var(--sidebar-active)';
-      if (target === 'chat' && chatResizerGhostRef.current) chatResizerGhostRef.current.style.background = 'var(--sidebar-active)';
+      if (sidebarResizerGhostRef.current) sidebarResizerGhostRef.current.style.background = 'var(--sidebar-active)';
       document.body.style.userSelect = 'none';
       document.body.style.cursor = 'col-resize';
-  }, [chatPanelCollapsed, chatPanelWidth, sidebarCollapsed, sidebarWidth]);
+  }, [sidebarCollapsed, sidebarWidth]);
 
   const handleMouseMove = useCallback((mouseMoveEvent) => {
       const { target, startX, startWidth, maxWidth } = resizeStateRef.current;
@@ -3194,8 +3118,6 @@ function App() {
                   sidebarResizerGhostRef.current.style.background = 'var(--sidebar-active, #2196F3)';
               }
           }
-      } else {
-          nextWidth = Math.max(240, nextWidth);
       }
 
       if (maxWidth) {
@@ -3211,20 +3133,6 @@ function App() {
                             if (pending.target === 'sidebar') {
                                     setSidebarWidth(pending.width);
                                     lastSidebarWidthRef.current = pending.width;
-                            } else if (pending.target === 'chat') {
-                                    const clamped = Math.max(240, pending.width);
-                                    setChatPanelWidth(clamped);
-                                    lastChatWidthRef.current = clamped;
-                                    setChatPanelCollapsed(false);
-                                    // Also apply inline style to force the DOM width while dragging
-                                    try {
-                                        if (chatPanelRef.current) {
-                                            chatPanelRef.current.style.transition = 'none';
-                                            chatPanelRef.current.style.width = `${clamped}px`;
-                                            const w = chatPanelRef.current.getBoundingClientRect().width;
-                                            if (DEBUG_SEPARATORS) console.log('[resizer DOM width]', { reportedStateWidth: clamped, domWidth: w });
-                                        }
-                                    } catch (e) { /* ignore */ }
                             }
               resizeRafRef.current = null;
           });
@@ -3241,26 +3149,14 @@ function App() {
       // Clear tooltip
       setResizeTooltip(null);
 
-      // 在拖拽结束时，将 DOM 实际宽度同步到 chatPanelWidth 状态，确保宽度持久
-      if (activeResizeTarget === 'chat' && chatPanelRef.current) {
-          const finalWidth = chatPanelRef.current.getBoundingClientRect().width;
-          setChatPanelWidth(finalWidth);
-          lastChatWidthRef.current = finalWidth;
-      }
       resizePendingRef.current = { target: null, width: 0, delta: 0 };
       resizeStateRef.current = { target: null, startX: 0, startWidth: 0 };
-      const prevTarget = activeResizeTarget;
       setActiveResizeTarget(null);
       setShowResizeOverlay(false);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
       // clear visual cues
     try { if (sidebarResizerGhostRef.current) sidebarResizerGhostRef.current.style.background = 'var(--border)'; } catch {};
-    try { if (chatResizerGhostRef.current) chatResizerGhostRef.current.style.background = 'var(--border)'; } catch {};
-      // clear inline width applied during dragging (only for chat target)
-      if (prevTarget === 'chat') {
-          try { if (chatPanelRef.current) { chatPanelRef.current.style.width = ''; chatPanelRef.current.style.transition = ''; } } catch {};
-      }
   }, [activeResizeTarget]);
 
   useEffect(() => {
@@ -3275,8 +3171,8 @@ function App() {
 
     // Debug: log changes to resize-related state to help diagnose editor-vs-preview differences
     useEffect(() => {
-        if (DEBUG_SEPARATORS) console.log('[resizer state]', { activeResizeTarget, showResizeOverlay, sidebarWidth, chatPanelWidth, chatPanelCollapsed, sidebarCollapsed });
-    }, [activeResizeTarget, showResizeOverlay, sidebarWidth, chatPanelWidth, chatPanelCollapsed, sidebarCollapsed]);
+        if (DEBUG_SEPARATORS) console.log('[resizer state]', { activeResizeTarget, showResizeOverlay, sidebarWidth, sidebarCollapsed });
+    }, [activeResizeTarget, showResizeOverlay, sidebarWidth, sidebarCollapsed]);
 
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const lastLog = logs && logs.length > 0 ? logs[0] : null;
@@ -3404,8 +3300,6 @@ function App() {
             sidebarCollapsed={sidebarCollapsed}
             explorerOpen={!sidebarCollapsed && activeSidebarPanel === 'explorer'}
             onSelectSidebar={handleSidebarTabChange}
-            onToggleChatPanel={toggleChatPanel}
-            chatPanelCollapsed={chatPanelCollapsed}
             onCreateSession={createSession}
             onToggleConfig={() => {
               if (uiDisplayPreferences.settings === 'editor') {
@@ -3443,11 +3337,33 @@ function App() {
                   onDeleteSession={deleteSession}
                   onRenameSession={renameSession}
                   onCreateSession={createSession}
-                  onSwitchProject={() => handleSelectWorkspace()}
-                  projectPath={projectMeta.pathLabel || backendWorkspaceRoot}
                   width={sidebarWidth}
                   collapsed={sidebarCollapsed}
                   isResizing={activeResizeTarget === 'sidebar'}
+              />
+            )}
+            {!sidebarCollapsed && activeSidebarPanel === 'chat' && (
+              <ChatArea 
+                 messages={messages}
+                 input={input}
+                 setInput={setInput}
+                 loading={loadingSessions.has(currentSessionId)}
+                 onSend={handleSend}
+                 onStop={handleStop}
+                 onToggleLogs={() => setShowLogs(!showLogs)}
+                 currentSession={currentSession}
+                 logStatus={logStatus}
+                 mode={currentMode}
+                 modeOptions={MODE_OPTIONS}
+                 onModeChange={handleModeChange}
+                 toolRuns={toolRuns}
+                 onOpenDiff={handleOpenDiff}
+                 taskReview={taskReview}
+                 onTaskToggle={toggleTaskReview}
+                 onTaskKeepAll={keepAllTaskFiles}
+                 onTaskRevertAll={revertAllTaskFiles}
+                 onTaskKeepFile={keepTaskFile}
+                 onTaskRevertFile={revertTaskFile}
               />
             )}
             {!sidebarCollapsed && activeSidebarPanel === 'explorer' && (
@@ -3539,62 +3455,6 @@ function App() {
               aria-valuenow={sidebarWidth}
               aria-valuemin={220}
           />
-
-          <div ref={chatPanelRef} style={{ 
-              width: chatPanelCollapsed ? '0px' : `${chatPanelWidth}px`, 
-              minWidth: chatPanelCollapsed ? '0' : '240px',
-              display: chatPanelCollapsed ? 'none' : 'flex',
-              flexDirection: 'column',
-              borderRight: '1px solid var(--border)',
-              background: 'var(--panel)',
-              transition: activeResizeTarget === 'chat' ? 'none' : 'width 0.2s ease-out',
-              flex: 'none'
-          }}>
-              <ChatArea 
-                 messages={messages}
-                 input={input}
-                 setInput={setInput}
-                 loading={loadingSessions.has(currentSessionId)}
-                 onSend={handleSend}
-                 onStop={handleStop}
-                 onToggleLogs={() => setShowLogs(!showLogs)}
-                 currentSession={currentSession}
-              logStatus={logStatus}
-              mode={currentMode}
-              modeOptions={MODE_OPTIONS}
-              onModeChange={handleModeChange}
-              toolRuns={toolRuns}
-              onOpenDiff={handleOpenDiff}
-              taskReview={taskReview}
-              onTaskToggle={toggleTaskReview}
-              onTaskKeepAll={keepAllTaskFiles}
-              onTaskRevertAll={revertAllTaskFiles}
-              onTaskKeepFile={keepTaskFile}
-              onTaskRevertFile={revertTaskFile}
-            />
-          </div>
-
-          {!chatPanelCollapsed && (
-            <div
-                ref={chatResizerGhostRef}
-                onMouseDown={startResize('chat')}
-                onPointerDown={startResize('chat')}
-                style={{
-                    width: '2px', 
-                    cursor: 'col-resize',
-                    background: 'var(--border)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 10001,
-                    userSelect: 'none',
-                    flexShrink: 0,
-                    position: 'relative',
-                    touchAction: 'none'
-                }}
-                title="拖动调整聊天区宽度"
-            />
-          )}
 
           <div style={{ 
               flex: workspaceShellVisible ? 1 : 0, 

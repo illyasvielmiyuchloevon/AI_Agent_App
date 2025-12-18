@@ -7,8 +7,6 @@ function SessionDrawer({
     onDeleteSession,
     onRenameSession,
     onCreateSession,
-    onSwitchProject,
-    projectPath,
     width,
     collapsed,
     isResizing = false
@@ -49,9 +47,6 @@ function SessionDrawer({
                     <header className="explorer-header">
                         <div className="explorer-title">
                             <div className="explorer-label">SESSIONS</div>
-                            <div className="explorer-sub" title={projectPath || ''}>
-                                {projectPath || '当前工作区'}
-                            </div>
                         </div>
                         <div className="explorer-actions">
                             <button
@@ -61,15 +56,6 @@ function SessionDrawer({
                             >
                                 +
                             </button>
-                            {onSwitchProject && (
-                                <button
-                                    onClick={onSwitchProject}
-                                    className="ghost-btn tiny"
-                                    title="切换工作区"
-                                >
-                                    <span className="codicon codicon-folder-opened" aria-hidden />
-                                </button>
-                            )}
                         </div>
                     </header>
 

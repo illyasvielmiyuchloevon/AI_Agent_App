@@ -54,6 +54,7 @@ export const translations = {
     
     // NavSidebar
     sessionList: 'Session List',
+    chat: 'Chat',
     explorer: 'Explorer',
     sourceControl: 'Source Control',
     newSession: 'New Session',
@@ -137,6 +138,7 @@ export const translations = {
     
     // NavSidebar
     sessionList: '会话列表',
+    chat: '聊天',
     explorer: '资源管理器',
     sourceControl: '源代码管理',
     newSession: '新建会话',
@@ -220,6 +222,7 @@ export const translations = {
     
     // NavSidebar
     sessionList: 'セッションリスト',
+    chat: 'チャット',
     explorer: 'エクスプローラー',
     sourceControl: 'ソース管理',
     newSession: '新しいセッション',

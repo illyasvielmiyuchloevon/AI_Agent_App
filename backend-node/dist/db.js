@@ -19,9 +19,9 @@ exports.getDiffs = getDiffs;
 exports.loadLlmConfig = loadLlmConfig;
 exports.saveLlmConfig = saveLlmConfig;
 const promises_1 = __importDefault(require("fs/promises"));
+const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const uuid_1 = require("uuid");
-const context_1 = require("./context");
 const DATA_FILE_NAME = "sessions.json";
 const LLM_CONFIG_FILE = "llm_config.json";
 function getDefaultState() {
@@ -33,16 +33,15 @@ function getDefaultState() {
         meta: { message_seq: 0, log_seq: 0, diff_seq: 0 }
     };
 }
-function getDataDir(create = false) {
-    const root = (0, context_1.getWorkspaceRoot)();
-    const dataDir = path_1.default.join(root, ".aichat");
-    // We rely on the caller or init to ensure existence usually, but for safe access:
-    // fs.mkdir is async, so this helper is a bit tricky if used synchronously in path generation.
-    // But we just return string here.
-    return dataDir;
+function getGlobalDataDir() {
+    const isWin = process.platform === 'win32';
+    const baseDir = isWin
+        ? (process.env.APPDATA || process.env.LOCALAPPDATA || os_1.default.homedir())
+        : os_1.default.homedir();
+    return path_1.default.join(baseDir, ".aichat", "global");
 }
 async function ensureDataDir() {
-    const dir = getDataDir();
+    const dir = getGlobalDataDir();
     try {
         await promises_1.default.mkdir(dir, { recursive: true });
     }
@@ -52,7 +51,7 @@ async function ensureDataDir() {
     return dir;
 }
 function getDataFilePath() {
-    return path_1.default.join(getDataDir(), DATA_FILE_NAME);
+    return path_1.default.join(getGlobalDataDir(), DATA_FILE_NAME);
 }
 async function loadState() {
     const filePath = getDataFilePath();
@@ -114,13 +113,8 @@ async function saveState(state) {
 }
 // --- Public API ---
 async function initDb() {
-    try {
-        await ensureDataDir();
-        await loadState();
-    }
-    catch (e) {
-        // ignore workspace error
-    }
+    await ensureDataDir();
+    await loadState();
 }
 async function createSession(title = "New Chat", mode = "chat") {
     const state = await loadState();
@@ -285,7 +279,7 @@ async function getDiffs(options) {
 }
 // LLM Config
 function getLlmConfigPath() {
-    return path_1.default.join(getDataDir(), LLM_CONFIG_FILE);
+    return path_1.default.join(getGlobalDataDir(), LLM_CONFIG_FILE);
 }
 async function loadLlmConfig() {
     const filePath = getLlmConfigPath();
