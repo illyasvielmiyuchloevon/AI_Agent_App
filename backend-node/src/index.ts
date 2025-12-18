@@ -61,7 +61,8 @@ app.post("/health", async (req, res) => {
     const config = (req.body && req.body.provider) ? req.body : await db.loadLlmConfig();
     if (config) {
       const client = buildLlmClient(config);
-      isHealthy = await client.checkHealth();
+      const checkModel = typeof config.check_model === "string" ? config.check_model.trim() : "";
+      isHealthy = await client.checkHealth(checkModel || undefined);
       message = isHealthy ? "Connected" : "Health check failed";
     }
   } catch (e: any) {

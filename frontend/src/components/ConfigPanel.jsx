@@ -344,6 +344,26 @@ function ConfigPanel({
               placeholder={currentProvider === 'openai' ? 'gpt-4-turbo' : 'claude-3-opus-20240229'}
             />
           </SettingRow>
+
+          <SettingRow
+            title={t('statusCheckModel')}
+            description={
+              language === 'zh'
+                ? '用于“测试连接”的模型名称（可选）'
+                : 'Model used for "Test connection" (optional).'
+            }
+            htmlFor="settings-check-model"
+          >
+            <input
+              id="settings-check-model"
+              type="text"
+              className="settings-control"
+              value={currentConfig.check_model || ''}
+              onChange={(e) => updateCurrent('check_model', e.target.value)}
+              placeholder={currentProvider === 'openai' ? 'gpt-4o-mini' : 'claude-3-haiku-20240307'}
+              autoComplete="off"
+            />
+          </SettingRow>
         </SectionCard>
 
         <div className="settings-group-title">{language === 'zh' ? '会话上下文' : 'Session context'}</div>
