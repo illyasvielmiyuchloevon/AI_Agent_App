@@ -564,7 +564,7 @@ function ChatArea({
                 onDragOver={(e) => { e.preventDefault(); setDragActive(true); }} 
                 onDragLeave={() => setDragActive(false)} 
                 onDrop={handleDrop}
-                style={{ padding: '1rem', borderTop: '1px solid var(--border)', background: 'var(--panel)' }}
+                style={{ padding: '1rem', borderTop: 'none', background: 'var(--panel-sub)' }}
             >
                 {showTaskReview && (
                     <div className="task-review-shell">
@@ -642,110 +642,91 @@ function ChatArea({
                     </div>
                 )}
 
-                <div 
-                    className={`input-shell ${dragActive ? 'dragging' : ''}`} 
-                    style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--panel-sub)', padding: 0, borderRadius: 'var(--radius)', border: '1px solid var(--border)', position: 'relative', cursor: 'text', overflow: 'visible' }}
+                {attachments.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+                        {attachments.map((att, idx) => (
+                            <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.4rem', background: 'var(--panel)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                {att.type === 'image' ? (
+                                    <img src={att.data} alt={att.name} style={{ width: '56px', height: '42px', objectFit: 'cover', borderRadius: 'var(--radius)' }} />
+                                ) : (
+                                    <Icon name="paperclip" size={18} />
+                                )}
+                                <span style={{ fontSize: '0.85rem' }}>{att.name}</span>
+                                <button type="button" onClick={() => removeAttachment(idx)} className="chat-icon-btn" style={{ fontSize: '0.85rem', width: '26px', height: '26px', borderRadius: '6px', padding: 0 }}>×</button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div
+                    className={`input-shell ${dragActive ? 'dragging' : ''}`}
                     onClick={(e) => {
                         const tag = e.target?.tagName?.toLowerCase();
-                        if (tag !== 'button' && tag !== 'svg' && tag !== 'path' && tag !== 'line' && tag !== 'polygon' && tag !== 'rect') {
+                        if (tag !== 'button' && tag !== 'textarea' && tag !== 'svg' && tag !== 'path' && tag !== 'line' && tag !== 'polygon' && tag !== 'rect') {
                             focusInput();
                         }
                     }}
                 >
-                    <div style={{ padding: 0 }}>
-                        <textarea
-                            className="chat-textarea"
-                            ref={inputRef}
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            onPaste={handlePaste}
-                            placeholder=""
-                            style={{ 
-                                width: '100%',
-                                padding: '0.85rem 3.25rem 0.85rem 1rem',
-                                borderRadius: 0,
-                                border: 'none',
-                                background: 'transparent',
-                                resize: 'none',
-                                outline: 'none',
-                                fontFamily: 'inherit',
-                                fontSize: '0.9rem',
-                                minHeight: '5rem',
-                                lineHeight: 1.5,
-                                color: 'var(--text)'
-                            }}
-                            disabled={loading}
-                        />
-                    </div>
+                    <textarea
+                        className="chat-textarea"
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        onPaste={handlePaste}
+                        placeholder=""
+                        disabled={loading}
+                    />
 
-                    {attachments.length > 0 && (
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', padding: '0 1rem' }}>
-                            {attachments.map((att, idx) => (
-                                <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.4rem', background: 'var(--panel)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    {att.type === 'image' ? (
-                                        <img src={att.data} alt={att.name} style={{ width: '56px', height: '42px', objectFit: 'cover', borderRadius: 'var(--radius)' }} />
-                                    ) : (
-                                        <Icon name="paperclip" size={18} />
-                                    )}
-                                    <span style={{ fontSize: '0.85rem' }}>{att.name}</span>
-                                    <button type="button" onClick={() => removeAttachment(idx)} className="chat-icon-btn" style={{ fontSize: '0.85rem', width: '26px', height: '26px', borderRadius: '6px', padding: 0 }}>×</button>
+                    <div className="chat-composer-toolbar">
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+                                className="chat-icon-btn"
+                                title="添加图片/文件"
+                            >
+                                <Icon name="plus" size={20} />
+                            </button>
+                            {showAttachmentMenu && (
+                                <div className="attachment-menu">
+                                    <div className="attachment-item" onClick={() => imageInputRef.current?.click()}>上传图片</div>
+                                    <div className="attachment-item" onClick={() => fileInputRef.current?.click()}>上传文件</div>
+                                    <div className="attachment-item" onClick={() => inputRef.current?.focus()}>粘贴图片</div>
                                 </div>
-                            ))}
+                            )}
                         </div>
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0 5px 5px 5px', minHeight: '40px', boxSizing: 'border-box' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0, height: '40px' }}>
-                            <div style={{ position: 'relative' }}>
-                                <button 
-                                    type="button"
-                                    onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-                                    className="chat-icon-btn"
-                                    title="添加图片/文件"
-                                >
-                                    <Icon name="plus" size={20} />
-                                </button>
-                                {showAttachmentMenu && (
-                                    <div className="attachment-menu">
-                                        <div className="attachment-item" onClick={() => imageInputRef.current?.click()}>上传图片</div>
-                                        <div className="attachment-item" onClick={() => fileInputRef.current?.click()}>上传文件</div>
-                                        <div className="attachment-item" onClick={() => inputRef.current?.focus()}>粘贴图片</div>
-                                    </div>
-                                )}
-                            </div>
-                            <button 
+                        <div style={{ flex: 1 }} />
+                        <div className="chat-composer-right">
+                            <ModeSelector value={mode} options={modeOptions} onChange={onModeChange} />
+                            <button
                                 type="button"
                                 onClick={recording ? handleMicStop : handleMicStart}
-                                className="chat-icon-btn"
+                                className={`chat-icon-btn chat-mic-btn ${recording ? 'recording' : ''}`}
                                 title="语音输入"
-                                style={{ background: recording ? 'var(--danger-pill)' : 'var(--panel)', color: recording ? 'var(--danger)' : 'var(--muted)' }}
                             >
                                 <Icon name="mic" size={20} />
                             </button>
+                            {loading ? (
+                                <button
+                                    type="button"
+                                    onClick={onStop}
+                                    className="chat-stop-btn"
+                                    title="Stop Generation"
+                                >
+                                    <Icon name="stop" size={20} />
+                                </button>
+                            ) : (
+                                <button
+                                    type="submit"
+                                    disabled={!input.trim() && attachments.length === 0}
+                                    className="chat-send-btn"
+                                    title="Send"
+                                >
+                                    <Icon name="send" size={20} />
+                                </button>
+                            )}
                         </div>
-                        <ModeSelector value={mode} options={modeOptions} onChange={onModeChange} />
-                    </div>
-                    <div style={{ position: 'absolute', right: '5px', bottom: '5px', display: 'flex', alignItems: 'center', gap: '0.4rem', pointerEvents: 'auto' }}>
-                        {loading ? (
-                            <button 
-                                type="button"
-                                onClick={onStop}
-                                className="chat-stop-btn"
-                                title="Stop Generation"
-                            >
-                                <Icon name="stop" size={20} />
-                            </button>
-                        ) : (
-                            <button 
-                                type="submit" 
-                                disabled={!input.trim() && attachments.length === 0} 
-                                className="chat-send-btn"
-                                title="Send"
-                            >
-                                <Icon name="send" size={20} />
-                            </button>
-                        )}
                     </div>
                 </div>
                 <input ref={imageInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
