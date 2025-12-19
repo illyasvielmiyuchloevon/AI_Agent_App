@@ -122,8 +122,6 @@ function NavSidebar({
                 <PlusIcon />
             </button>
 
-            <div className="activity-spacer" />
-
             <button 
                 className="activity-item ghost" 
                 onClick={onToggleConfig} 

@@ -6,33 +6,16 @@ const { registerIpcHandlers } = require('./main/ipcHandlers');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
-const getOverlayColors = (theme = 'light') => {
-  const isDark = theme === 'dark';
-  return {
-    color: isDark ? '#252526' : '#ffffff',
-    symbolColor: isDark ? '#e5e7eb' : '#111827',
-    height: 40,
-  };
-};
-
-const applyOverlayTheme = (win, theme) => {
-  if (!win?.setTitleBarOverlay) return;
-  const overlay = getOverlayColors(theme);
-  win.setTitleBarOverlay(overlay);
-};
-
 // Remove native application menu
 Menu.setApplicationMenu(null);
 
 function createWindow() {
   const initialTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
-  const overlay = getOverlayColors(initialTheme);
 
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: overlay,
+    frame: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -41,8 +24,6 @@ function createWindow() {
       sandbox: true,
     },
   });
-
-  applyOverlayTheme(win, initialTheme);
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -69,7 +50,6 @@ app.whenReady().then(() => {
     if (!win) return;
     const nextTheme = theme === 'dark' ? 'dark' : 'light';
     nativeTheme.themeSource = nextTheme;
-    applyOverlayTheme(win, nextTheme);
   });
 
   // --- Git IPC Handlers ---

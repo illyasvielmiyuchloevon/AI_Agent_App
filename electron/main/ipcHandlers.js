@@ -1,10 +1,18 @@
-const { ipcMain, dialog } = require('electron');
+const { ipcMain, dialog, BrowserWindow } = require('electron');
 const recentStore = require('./recentStore');
 const { createWorkspaceService } = require('./workspaceService');
 
 const workspaceService = createWorkspaceService();
 
 function registerIpcHandlers() {
+  const getWindowFromEvent = (event) => {
+    try {
+      return BrowserWindow.fromWebContents(event.sender);
+    } catch {
+      return null;
+    }
+  };
+
   ipcMain.handle('recent:list', async () => {
     return { ok: true, items: recentStore.list() };
   });
@@ -54,6 +62,34 @@ function registerIpcHandlers() {
     } catch {
       // ignore lifecycle errors
     }
+    return { ok: true };
+  });
+
+  ipcMain.handle('window:minimize', (event) => {
+    const win = getWindowFromEvent(event);
+    if (win) win.minimize();
+    return { ok: true };
+  });
+
+  ipcMain.handle('window:toggleMaximize', (event) => {
+    const win = getWindowFromEvent(event);
+    if (!win) return { ok: true, maximized: false };
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+    return { ok: true, maximized: win.isMaximized() };
+  });
+
+  ipcMain.handle('window:isMaximized', (event) => {
+    const win = getWindowFromEvent(event);
+    return { ok: true, maximized: !!win?.isMaximized?.() };
+  });
+
+  ipcMain.handle('window:close', (event) => {
+    const win = getWindowFromEvent(event);
+    if (win) win.close();
     return { ok: true };
   });
 }

@@ -3718,7 +3718,7 @@ function App() {
               onPointerDown={startResize('sidebar')}
               style={{
                   width: sidebarCollapsed ? '12px' : '4px', // Increased hit area
-                  marginLeft: sidebarCollapsed ? '-6px' : '-2px', // Center the hit area
+                  marginLeft: sidebarCollapsed ? '0px' : '-2px', // No margin shift when collapsed
                   cursor: 'col-resize',
                   background: sidebarCollapsed ? 'transparent' : 'var(--border)',
                   display: 'flex',
@@ -3729,7 +3729,8 @@ function App() {
                   zIndex: 10001,
                   touchAction: 'none',
                   height: '100%',
-                  position: 'relative',
+                  position: sidebarCollapsed ? 'absolute' : 'relative',
+                  left: sidebarCollapsed ? '42px' : 'auto', // Position over the gutter edge
               }}
               title={sidebarCollapsed ? "向右拖动展开侧边栏" : "拖动调整侧边栏宽度"}
               aria-label="Sidebar Resizer"

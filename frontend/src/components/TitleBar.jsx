@@ -123,6 +123,39 @@ const Icon = ({ name, ...props }) => {
                     <line x1="12" y1="17" x2="12" y2="21" />
                 </svg>
             );
+        case 'search':
+            return (
+                <svg {...svgProps}>
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.35-4.35" />
+                </svg>
+            );
+        case 'minimize':
+            return (
+                <svg {...svgProps}>
+                    <path d="M5 12h14" />
+                </svg>
+            );
+        case 'maximize':
+            return (
+                <svg {...svgProps}>
+                    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                </svg>
+            );
+        case 'restore':
+            return (
+                <svg {...svgProps}>
+                    <path d="M8 8h10v10" />
+                    <path d="M6 16V6h10" />
+                </svg>
+            );
+        case 'close':
+            return (
+                <svg {...svgProps}>
+                    <path d="M6 6l12 12" />
+                    <path d="M18 6 6 18" />
+                </svg>
+            );
         default:
             return null;
     }
@@ -156,9 +189,11 @@ const TitleBar = ({
     const [activeMenu, setActiveMenu] = useState(null);
     const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
     const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+    const [isMaximized, setIsMaximized] = useState(false);
     const menuRef = useRef(null);
     const workspaceMenuRef = useRef(null);
     const t = (key) => getTranslation(language, key);
+    const windowApi = typeof window !== 'undefined' ? window.electronAPI?.window : null;
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -180,6 +215,13 @@ const TitleBar = ({
             window.removeEventListener('resize', handleResize);
         };
     }, [showWorkspaceMenu]);
+
+    useEffect(() => {
+        if (!windowApi?.isMaximized) return;
+        windowApi.isMaximized().then((res) => {
+            setIsMaximized(!!res?.maximized);
+        }).catch(() => {});
+    }, [windowApi]);
 
     const toggleMenu = (menuName) => {
         setActiveMenu(activeMenu === menuName ? null : menuName);
@@ -242,9 +284,9 @@ const TitleBar = ({
             { label: t('toggleTheme'), action: onToggleTheme }
         ],
         [t('window')]: [
-            { label: t('minimize'), action: () => {} }, 
-            { label: t('maximize'), action: () => {} },
-            { label: t('close'), action: () => window.close() }
+            { label: t('minimize'), action: () => windowApi?.minimize?.() }, 
+            { label: t('maximize'), action: () => windowApi?.toggleMaximize?.() },
+            { label: t('close'), action: () => (windowApi?.close?.() ?? window.close()) }
         ],
         [t('help')]: [
             { label: t('welcome'), action: onOpenWelcome },
@@ -253,8 +295,31 @@ const TitleBar = ({
         ]
     };
 
+    const handleMinimize = () => {
+        windowApi?.minimize?.();
+    };
+
+    const handleToggleMaximize = async () => {
+        if (!windowApi?.toggleMaximize) return;
+        try {
+            const res = await windowApi.toggleMaximize();
+            setIsMaximized(!!res?.maximized);
+        } catch {}
+    };
+
+    const handleClose = () => {
+        if (windowApi?.close) windowApi.close();
+        else window.close();
+    };
+
     return (
-        <div className="title-bar">
+        <div
+            className="title-bar"
+            onDoubleClick={(e) => {
+                if (e.target.closest('.menu-item, .menu-dropdown, .dropdown-item, .project-info, .title-bar-search-button, .window-actions, .window-controls')) return;
+                handleToggleMaximize();
+            }}
+        >
             {/* Menu Section */}
             <div className="title-bar-menu" ref={menuRef}>
                 {Object.keys(menus).map((menuName) => (
@@ -290,14 +355,13 @@ const TitleBar = ({
             </div>
 
             {/* Project Info & Actions */}
-            <div className="title-bar-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1, padding: '0 16px' }}>
+            <div className="title-bar-content">
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                 <div 
                     className="project-info" 
                     onClick={handleLabelClick} 
                     title={projectLabel || 'Switch Project'}
                     ref={workspaceMenuRef}
-                    style={{ position: 'relative' }}
                 >
                     <span className="project-label">{t('workspace')}:</span>
                     <span className="project-value">
@@ -354,14 +418,12 @@ const TitleBar = ({
                     onClick={onOpenCommandPalette}
                     title="Search files (Ctrl+P)"
                 >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    </svg>
+                    <Icon name="search" width={14} height={14} />
                     <span>Search</span>
                 </div>
                 </div>
 
+                <div className="title-bar-actions">
                 <div className="window-actions">
                      <button className="icon-action" onClick={() => onSelectProject()} title={t('openFolder')}>
                         <Icon name="folder-open" />
@@ -389,10 +451,19 @@ const TitleBar = ({
                     </button>
                     {bindingError && <span className="error-badge">!</span>}
                 </div>
+                <div className="window-controls" style={{ display: windowApi ? 'flex' : 'none' }}>
+                    <button className="window-control-btn" onClick={handleMinimize} title={t('minimize')}>
+                        <Icon name="minimize" />
+                    </button>
+                    <button className="window-control-btn" onClick={handleToggleMaximize} title={t('maximize')}>
+                        <Icon name={isMaximized ? 'restore' : 'maximize'} />
+                    </button>
+                    <button className="window-control-btn close" onClick={handleClose} title={t('close')}>
+                        <Icon name="close" />
+                    </button>
+                </div>
+                </div>
             </div>
-            
-            {/* Spacer for Window Controls (Electron overlay) */}
-            <div style={{ width: '140px', flexShrink: 0 }}></div> 
         </div>
     );
 };

@@ -6,6 +6,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('recent:list'),
     remove: (id) => ipcRenderer.invoke('recent:remove', id),
   },
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    close: () => ipcRenderer.invoke('window:close'),
+  },
   workspace: {
     pickFolder: () => ipcRenderer.invoke('workspace:pickFolder'),
     pickFile: () => ipcRenderer.invoke('workspace:pickFile'),
