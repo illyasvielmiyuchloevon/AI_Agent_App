@@ -34,8 +34,8 @@ function SessionDrawer({
         <div style={{ 
             width: '100%',
             minWidth: collapsed ? '0' : `${Math.max(width || 220, 220)}px`,
-            borderRight: '1px solid var(--border)',
-            background: 'var(--panel)',
+            borderRight: 'none',
+            background: 'transparent',
             display: collapsed ? 'none' : 'flex', 
             flexDirection: 'column',
             overflow: 'hidden',

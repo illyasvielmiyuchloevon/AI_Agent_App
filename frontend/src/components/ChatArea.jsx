@@ -355,11 +355,11 @@ function ChatArea({
             {/* Chat Header */}
             <div style={{ 
                 padding: '0 0.5rem', 
-                borderBottom: '1px solid var(--border)', 
+                borderBottom: 'none', 
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center', 
-                background: 'var(--panel)',
+                background: 'transparent',
                 height: '50px',
                 boxSizing: 'border-box'
             }}>
@@ -387,7 +387,7 @@ function ChatArea({
             </div>
 
             {/* Messages */}
-            <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--panel-sub)' }}>
+            <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'transparent' }}>
                 {!currentSession ? (
                     <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: '2rem' }}>
                         Select a chat to start messaging
@@ -418,7 +418,7 @@ function ChatArea({
                                     borderRadius: 'var(--radius)',
                                     backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--panel)',
                                     color: isUserMessage ? '#fff' : 'var(--text)',
-                                    border: isUserMessage ? '1px solid var(--accent-2)' : '1px solid var(--border)',
+                                    border: 'none',
                                     boxShadow: 'var(--shadow-soft)',
                                     fontSize: isUserMessage ? '0.9rem' : '0.85rem',
                                     lineHeight: '1.5',
@@ -564,7 +564,7 @@ function ChatArea({
                 onDragOver={(e) => { e.preventDefault(); setDragActive(true); }} 
                 onDragLeave={() => setDragActive(false)} 
                 onDrop={handleDrop}
-                style={{ padding: '1rem', borderTop: 'none', background: 'var(--panel-sub)' }}
+                style={{ padding: '1rem', borderTop: 'none', background: 'transparent' }}
             >
                 {showTaskReview && (
                     <div className="task-review-shell">

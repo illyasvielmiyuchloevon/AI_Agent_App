@@ -3606,7 +3606,7 @@ function App() {
                 display: 'flex',
                 flexDirection: 'column',
                 flexShrink: 0,
-                background: 'var(--panel)',
+                background: 'transparent',
                 pointerEvents: sidebarCollapsed ? 'none' : 'auto'
             }}
           >
@@ -3720,7 +3720,7 @@ function App() {
                   width: sidebarCollapsed ? '12px' : '4px', // Increased hit area
                   marginLeft: sidebarCollapsed ? '0px' : '-2px', // No margin shift when collapsed
                   cursor: 'col-resize',
-                  background: sidebarCollapsed ? 'transparent' : 'var(--border)',
+                  background: 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',

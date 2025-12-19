@@ -78,7 +78,7 @@ function SearchPanel({
             </div>
 
             {isExpanded && (
-                <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                         <div style={{ position: 'absolute', left: '6px', zIndex: 1, pointerEvents: 'none' }}>
                             <i className="codicon codicon-chevron-right" style={{ fontSize: '12px', transform: 'rotate(90deg)' }} />

@@ -22,6 +22,7 @@
   --input-bg: #ffffff;
   --input-border: #d1d5db;
   --surface-hover: #e8edf5;
+  --surface-hover-2: #dbeafe;
   --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.08);
   --shadow-strong: 0 18px 60px rgba(0, 0, 0, 0.16);
   --radius: 8px;
@@ -94,6 +95,7 @@
   --input-bg: #1f1f1f;
   --input-border: #3a3f45;
   --surface-hover: rgba(255, 255, 255, 0.04);
+  --surface-hover-2: rgba(255, 255, 255, 0.08);
   --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.45);
   --shadow-strong: 0 18px 60px rgba(0, 0, 0, 0.6);
   --focus-ring: 0 0 0 2px rgba(96, 165, 250, 0.35);
@@ -265,8 +267,8 @@ input:focus, select:focus, textarea:focus {
 .status-dot.error { background: var(--danger); }
 
 .sidebar-panel-shell {
-  background: var(--panel);
-  border-right: 1px solid var(--border);
+  background: transparent;
+  border-right: none;
   min-height: 0;
 }
 
@@ -276,6 +278,7 @@ input:focus, select:focus, textarea:focus {
 
 .sidebar-panel-shell .workspace-tree {
   border-right: none;
+  background: transparent;
 }
 
 .explorer-panel {
@@ -283,13 +286,13 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--panel);
+  background: transparent;
 }
 
 .explorer-header {
   height: 50px;
-  padding: 0 0.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0 1rem;
+  border-bottom: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -347,16 +350,14 @@ input:focus, select:focus, textarea:focus {
 }
 
 .session-item:hover {
-  background: var(--panel-sub);
-  border-color: var(--border);
-  box-shadow: var(--shadow-soft);
-  transform: translateY(-1px);
+  background: var(--surface-hover);
+  border-color: transparent;
 }
 
 .session-item.active {
-  background: var(--sidebar-active);
-  border-color: var(--sidebar-indicator);
-  box-shadow: var(--shadow-soft);
+  background: var(--surface-hover);
+  border-color: transparent;
+  font-weight: 500;
 }
 
 .session-item-main {
@@ -1284,7 +1285,8 @@ input:focus, select:focus, textarea:focus {
 }
 
 .tree-item-virtual:hover {
-  background: var(--tree-hover);
+  background: var(--surface-hover);
+  border-radius: 6px;
 }
 
 .tool-run-row {
@@ -1300,23 +1302,21 @@ input:focus, select:focus, textarea:focus {
 }
 
 .tool-run-chip {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  border: none;
   border-radius: var(--radius);
   padding: 0.6rem 0.75rem;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
   cursor: pointer;
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease;
 }
 
 .tool-run-chip:hover {
-  transform: translateY(-1px);
-  border-color: var(--accent-2);
-  box-shadow: var(--shadow-strong);
+  background: var(--surface-hover-2);
 }
 
 .tool-run-chip.running { border-color: var(--accent); }
@@ -3142,7 +3142,7 @@ select.settings-control optgroup {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: transparent;
   color: var(--text);
   font-family: inherit;
   overflow: hidden;
