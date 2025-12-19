@@ -300,6 +300,8 @@ function ConfigPanel({
     const languageLabel = language === 'zh' ? '语言' : t('language');
     const languageDesc =
       language === 'zh' ? '选择按钮标签与应用内文本的语言' : 'Choose the language for UI text and labels.';
+    const undoLimitRaw = Number(config?.editorUndoRedoLimit);
+    const undoLimitValue = Number.isFinite(undoLimitRaw) ? Math.max(8, Math.min(64, Math.round(undoLimitRaw))) : 16;
 
     return (
       <>
@@ -351,6 +353,27 @@ function ConfigPanel({
               <option value="modal">{language === 'zh' ? '弹窗' : 'Modal'}</option>
               <option value="editor">{language === 'zh' ? '编辑器' : 'Editor'}</option>
             </select>
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? '撤销/重做历史上限' : 'Undo/Redo history limit'}
+            description={language === 'zh' ? '每个文件独立；仅对新打开/新建文件生效（8–64，默认 16）' : 'Per file; applies to newly opened/created files only (8–64, default 16).'}
+            htmlFor="settings-editor-undo-limit"
+          >
+            <input
+              id="settings-editor-undo-limit"
+              type="number"
+              className="settings-control compact"
+              min={8}
+              max={64}
+              step={1}
+              value={undoLimitValue}
+              onChange={(e) => {
+                const raw = Number(e.target.value);
+                const next = Number.isFinite(raw) ? Math.max(8, Math.min(64, Math.round(raw))) : 16;
+                setConfig((prev) => ({ ...prev, editorUndoRedoLimit: next }));
+              }}
+            />
           </SettingRow>
         </SectionCard>
       </>

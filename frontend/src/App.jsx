@@ -200,6 +200,7 @@ const DEFAULT_PROJECT_CONFIG = {
   lmstudio: { api_key: '', model: '', base_url: 'http://localhost:1234/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'lm-studio', base_url: 'http://localhost:1234/v1' }], active_instance_id: 'default' },
   toolSettings: DEFAULT_TOOL_SETTINGS,
   keybindings: DEFAULT_KEYBINDINGS,
+  editorUndoRedoLimit: 16,
   theme: detectSystemTheme(),
   sidebarWidth: 260,
   chatPanelWidth: 420,
@@ -602,6 +603,12 @@ function App() {
       merged.toolSettings = mergeToolSettings(raw.toolSettings || DEFAULT_PROJECT_CONFIG.toolSettings);
       merged.sidebarWidth = Number(merged.sidebarWidth || merged.sessionPanelWidth) || DEFAULT_PROJECT_CONFIG.sidebarWidth;
       merged.chatPanelWidth = Number(merged.chatPanelWidth) || DEFAULT_PROJECT_CONFIG.chatPanelWidth;
+      {
+          const undoLimitRaw = Number(merged.editorUndoRedoLimit);
+          merged.editorUndoRedoLimit = Number.isFinite(undoLimitRaw)
+              ? Math.max(8, Math.min(64, Math.round(undoLimitRaw)))
+              : DEFAULT_PROJECT_CONFIG.editorUndoRedoLimit;
+      }
       merged.theme = merged.theme || DEFAULT_PROJECT_CONFIG.theme;
       merged.lastMode = merged.lastMode || DEFAULT_PROJECT_CONFIG.lastMode;
       merged.projectName = merged.projectName || projectMeta.name || merged.projectPath || '';
@@ -3762,6 +3769,7 @@ function App() {
                     currentSessionId={currentSessionId}
                     backendWorkspaceId={backendWorkspaceId}
                     onRegisterEditorAiInvoker={setEditorAiInvoker}
+                    undoRedoLimit={config?.editorUndoRedoLimit}
                     welcomeTabPath={WELCOME_TAB_PATH}
                     onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
                     renderWelcomeTab={() => (

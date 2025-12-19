@@ -1,6 +1,52 @@
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
 
-const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
+const MonacoEditor = React.lazy(() =>
+  Promise.all([
+    import('monaco-editor/esm/vs/platform/undoRedo/common/undoRedoService.js').then(({ UndoRedoService }) => {
+      if (globalThis.__AI_CHAT_MONACO_UNDO_REDO_PATCHED) return;
+      globalThis.__AI_CHAT_MONACO_UNDO_REDO_PATCHED = true;
+
+      const normalizeUndoRedoLimit = (value) => {
+        const raw = Number(value);
+        if (!Number.isFinite(raw)) return 16;
+        const n = Math.round(raw);
+        return Math.max(8, Math.min(64, n));
+      };
+
+      const originalPushElement = UndoRedoService?.prototype?._pushElement;
+      if (typeof originalPushElement !== 'function') return;
+
+      UndoRedoService.prototype._pushElement = function patchedPushElement(element) {
+        originalPushElement.call(this, element);
+
+        const stacks = this?._editStacks;
+        const strResources = element?.strResources;
+        if (!stacks || typeof stacks.get !== 'function' || !Array.isArray(strResources)) return;
+
+        for (const strResource of strResources) {
+          const editStack = stacks.get(strResource);
+          if (!editStack) continue;
+          if (editStack._aiChatMaxPast == null) {
+            editStack._aiChatMaxPast = normalizeUndoRedoLimit(globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT);
+          }
+          const maxPast = editStack._aiChatMaxPast;
+          const past = editStack._past;
+          if (!Array.isArray(past) || past.length <= maxPast) continue;
+
+          const overflow = past.length - maxPast;
+          const removed = past.splice(0, overflow);
+          for (const removedElement of removed) {
+            if (removedElement?.type === 1 && typeof removedElement.removeResource === 'function') {
+              removedElement.removeResource(editStack.resourceLabel, editStack.strResource, 0);
+            }
+          }
+          editStack.versionId += 1;
+        }
+      };
+    }),
+    import('@monaco-editor/react')
+  ]).then(([, mod]) => mod)
+);
 const MonacoDiffEditor = React.lazy(() =>
   import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
 );
@@ -245,6 +291,7 @@ function Workspace({
   currentSessionId,
   backendWorkspaceId,
   onRegisterEditorAiInvoker,
+  undoRedoLimit = 16,
 }) {
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
@@ -323,7 +370,6 @@ function Workspace({
   const monacoRef = useRef(null);
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
-  const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
   const [aiPanel, setAiPanel] = useState({
     open: false,
@@ -339,6 +385,16 @@ function Workspace({
   });
   const [aiPrompt, setAiPrompt] = useState({ open: false, action: '', title: '', placeholder: '', value: '' });
   const applyActions = useMemo(() => new Set(['optimize', 'generateComments', 'rewrite', 'modify']), []);
+
+  const normalizedUndoRedoLimit = useMemo(() => {
+    const raw = Number(undoRedoLimit);
+    const normalized = Number.isFinite(raw) ? Math.max(8, Math.min(64, Math.round(raw))) : 16;
+    return normalized;
+  }, [undoRedoLimit]);
+
+  useEffect(() => {
+    globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
+  }, [normalizedUndoRedoLimit]);
 
   const clipText = useCallback((text, maxChars) => {
     const s = typeof text === 'string' ? text : '';
@@ -653,18 +709,7 @@ function Workspace({
     disposablesRef.current = [];
     editorRef.current = editor;
     monacoRef.current = monaco;
-
-    const updateUndo = () => {
-      const model = editor.getModel?.();
-      const canUndo = !!model?.canUndo?.();
-      const canRedo = !!model?.canRedo?.();
-      setUndoState({ canUndo, canRedo });
-    };
-    updateUndo();
-    const contentDisposable = editor.onDidChangeModelContent?.(() => updateUndo());
-    const modelDisposable = editor.onDidChangeModel?.(() => updateUndo());
-    if (contentDisposable) disposablesRef.current.push(contentDisposable);
-    if (modelDisposable) disposablesRef.current.push(modelDisposable);
+    globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
 
     if (canUseEditorAi) {
       registerEditorActions(editor, monaco);
@@ -699,7 +744,7 @@ function Workspace({
       });
       disposablesRef.current.push(selectionDisposable);
     }
-  }, [canUseEditorAi, registerEditorActions]);
+  }, [canUseEditorAi, normalizedUndoRedoLimit, registerEditorActions]);
 
   useEffect(() => {
     if (typeof onRegisterEditorAiInvoker !== 'function') return;
@@ -765,40 +810,6 @@ function Workspace({
                 </button>
               </div>
             );})}
-            <div
-              style={{
-                marginLeft: 'auto',
-                position: 'sticky',
-                right: 0,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '0 8px',
-                background: 'var(--panel-sub)',
-                borderLeft: '1px solid var(--border)',
-              }}
-            >
-              <button
-                type="button"
-                className="ghost-btn"
-                style={{ height: 32, width: 32, padding: 0 }}
-                onClick={() => editorRef.current?.getAction?.('editor.action.undo')?.run?.()}
-                disabled={!undoState.canUndo}
-                title="Undo"
-              >
-                <i className="codicon codicon-undo" aria-hidden />
-              </button>
-              <button
-                type="button"
-                className="ghost-btn"
-                style={{ height: 32, width: 32, padding: 0 }}
-                onClick={() => editorRef.current?.getAction?.('editor.action.redo')?.run?.()}
-                disabled={!undoState.canRedo}
-                title="Redo"
-              >
-                <i className="codicon codicon-redo" aria-hidden />
-              </button>
-            </div>
           </div>
           <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
             {activeFile && projectLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
@@ -888,12 +899,14 @@ function Workspace({
                             <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
                               <div style={{ height: '100%', width: '100%' }}>
                                 <MonacoEditor
-                                  key={`editor-${activeFile}`}
                                   height="100%"
+                                  path={activeFile}
                                   language={inferLanguage(activeFile)}
                                   theme={monacoTheme}
                                   value={activeContent}
                                   options={monacoOptions}
+                                  saveViewState
+                                  keepCurrentModel
                                   onMount={handleEditorMount}
                                   onChange={(value) => onFileChange(activeFile, value ?? '')}
                                 />
