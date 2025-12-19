@@ -217,6 +217,7 @@ function Workspace({
   hotReloadToken,
   theme,
   backendRoot,
+  keybindings,
   welcomeTabPath,
   renderWelcomeTab,
   onOpenWelcomeTab,
@@ -322,6 +323,7 @@ function Workspace({
   const monacoRef = useRef(null);
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
+  const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false });
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
   const [aiPanel, setAiPanel] = useState({
     open: false,
@@ -349,6 +351,58 @@ function Workspace({
     const m = s.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)\s*```/);
     if (m && m[1] != null) return m[1];
     return s.trim();
+  }, []);
+
+  const getKeybinding = useCallback((id, fallback = '') => {
+    const kb = keybindings && typeof keybindings === 'object' ? keybindings : {};
+    const v = kb[id];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+    return fallback;
+  }, [keybindings]);
+
+  const parseMonacoKeybinding = useCallback((shortcut, monaco) => {
+    if (!shortcut || typeof shortcut !== 'string' || !monaco) return null;
+    const raw = shortcut.trim();
+    if (!raw) return null;
+    const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
+    if (!parts.length) return null;
+
+    let mod = 0;
+    let keyToken = '';
+    parts.forEach((p) => {
+      const t = p.toLowerCase();
+      if (t === 'ctrl' || t === 'control') mod |= monaco.KeyMod.CtrlCmd;
+      else if (t === 'cmd' || t === 'command' || t === 'meta') mod |= monaco.KeyMod.CtrlCmd;
+      else if (t === 'alt' || t === 'option') mod |= monaco.KeyMod.Alt;
+      else if (t === 'shift') mod |= monaco.KeyMod.Shift;
+      else keyToken = p;
+    });
+    if (!keyToken) return null;
+
+    const k = keyToken.trim();
+    const upper = k.length === 1 ? k.toUpperCase() : k;
+    let code = null;
+    if (upper.length === 1 && upper >= 'A' && upper <= 'Z') {
+      code = monaco.KeyCode[`Key${upper}`];
+    } else if (upper.length === 1 && upper >= '0' && upper <= '9') {
+      code = monaco.KeyCode[`Digit${upper}`];
+    } else if (upper === 'ENTER') {
+      code = monaco.KeyCode.Enter;
+    } else if (upper === 'ESC' || upper === 'ESCAPE') {
+      code = monaco.KeyCode.Escape;
+    } else if (upper === 'TAB') {
+      code = monaco.KeyCode.Tab;
+    } else if (upper === ',') {
+      code = monaco.KeyCode.Comma;
+    } else if (upper === '.') {
+      code = monaco.KeyCode.Period;
+    } else if (/^F\d{1,2}$/i.test(upper)) {
+      const n = Number(upper.slice(1));
+      const name = `F${n}`;
+      code = monaco.KeyCode[name];
+    }
+    if (!code) return null;
+    return mod | code;
   }, []);
 
   const getEditorSnapshot = useCallback(() => {
@@ -567,21 +621,23 @@ function Workspace({
 
   const registerEditorActions = useCallback((editor, monaco) => {
     const defs = [
-      { id: 'ai.explain', label: 'AI：解释代码', action: 'explain', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyE },
-      { id: 'ai.tests', label: 'AI：生成单元测试', action: 'generateTests', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyT },
-      { id: 'ai.optimize', label: 'AI：优化代码', action: 'optimize', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyO },
-      { id: 'ai.comments', label: 'AI：生成注释', action: 'generateComments', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyC },
-      { id: 'ai.review', label: 'AI：审阅代码', action: 'review', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyR },
-      { id: 'ai.rewrite', label: 'AI：重写代码', action: 'rewrite', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyW },
-      { id: 'ai.modify', label: 'AI：按指令修改…', action: 'modify', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyM },
-      { id: 'ai.docs', label: 'AI：生成文档', action: 'generateDocs', key: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyD },
+      { id: 'ai.explain', label: 'AI：解释代码', action: 'explain', fallbackKey: 'Ctrl+Alt+E' },
+      { id: 'ai.tests', label: 'AI：生成单元测试', action: 'generateTests', fallbackKey: 'Ctrl+Alt+T' },
+      { id: 'ai.optimize', label: 'AI：优化代码', action: 'optimize', fallbackKey: 'Ctrl+Alt+O' },
+      { id: 'ai.comments', label: 'AI：生成注释', action: 'generateComments', fallbackKey: 'Ctrl+Alt+C' },
+      { id: 'ai.review', label: 'AI：审阅代码', action: 'review', fallbackKey: 'Ctrl+Alt+R' },
+      { id: 'ai.rewrite', label: 'AI：重写代码', action: 'rewrite', fallbackKey: 'Ctrl+Alt+W' },
+      { id: 'ai.modify', label: 'AI：按指令修改…', action: 'modify', fallbackKey: 'Ctrl+Alt+M' },
+      { id: 'ai.docs', label: 'AI：生成文档', action: 'generateDocs', fallbackKey: 'Ctrl+Alt+D' },
     ];
 
     defs.forEach((d, idx) => {
+      const shortcut = getKeybinding(`editor.${d.id}`, d.fallbackKey);
+      const parsed = parseMonacoKeybinding(shortcut, monaco);
       const disposable = editor.addAction({
         id: d.id,
         label: d.label,
-        keybindings: d.key ? [d.key] : undefined,
+        keybindings: parsed ? [parsed] : undefined,
         contextMenuGroupId: '9_ai',
         contextMenuOrder: 1.0 + idx / 100,
         run: () => {
@@ -590,13 +646,25 @@ function Workspace({
       });
       disposablesRef.current.push(disposable);
     });
-  }, [triggerAiAction]);
+  }, [getKeybinding, parseMonacoKeybinding, triggerAiAction]);
 
   const handleEditorMount = useCallback((editor, monaco) => {
     disposablesRef.current.forEach((d) => d?.dispose?.());
     disposablesRef.current = [];
     editorRef.current = editor;
     monacoRef.current = monaco;
+
+    const updateUndo = () => {
+      const model = editor.getModel?.();
+      const canUndo = !!model?.canUndo?.();
+      const canRedo = !!model?.canRedo?.();
+      setUndoState({ canUndo, canRedo });
+    };
+    updateUndo();
+    const contentDisposable = editor.onDidChangeModelContent?.(() => updateUndo());
+    const modelDisposable = editor.onDidChangeModel?.(() => updateUndo());
+    if (contentDisposable) disposablesRef.current.push(contentDisposable);
+    if (modelDisposable) disposablesRef.current.push(modelDisposable);
 
     if (canUseEditorAi) {
       registerEditorActions(editor, monaco);
@@ -697,6 +765,40 @@ function Workspace({
                 </button>
               </div>
             );})}
+            <div
+              style={{
+                marginLeft: 'auto',
+                position: 'sticky',
+                right: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '0 8px',
+                background: 'var(--panel-sub)',
+                borderLeft: '1px solid var(--border)',
+              }}
+            >
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 32, width: 32, padding: 0 }}
+                onClick={() => editorRef.current?.getAction?.('editor.action.undo')?.run?.()}
+                disabled={!undoState.canUndo}
+                title="Undo"
+              >
+                <i className="codicon codicon-undo" aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 32, width: 32, padding: 0 }}
+                onClick={() => editorRef.current?.getAction?.('editor.action.redo')?.run?.()}
+                disabled={!undoState.canRedo}
+                title="Redo"
+              >
+                <i className="codicon codicon-redo" aria-hidden />
+              </button>
+            </div>
           </div>
           <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
             {activeFile && projectLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (

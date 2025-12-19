@@ -184,6 +184,18 @@ function ConfigPanel({
     }));
   };
 
+  const updateKeybinding = (id, value) => {
+    const key = String(id || '').trim();
+    if (!key) return;
+    setConfig((prev) => ({
+      ...prev,
+      keybindings: {
+        ...((prev.keybindings && typeof prev.keybindings === 'object') ? prev.keybindings : {}),
+        [key]: value
+      }
+    }));
+  };
+
   const baseUrlPlaceholder =
     currentProvider === 'openai'
       ? 'https://api.openai.com/v1'
@@ -261,6 +273,7 @@ function ConfigPanel({
       { id: 'app', label: language === 'zh' ? '通用' : 'General', icon: GeneralIcon },
       { id: 'appearance', label: language === 'zh' ? '外观' : 'Appearance', icon: PaletteIcon },
       { id: 'general', label: language === 'zh' ? '模型与会话' : 'LLM & Session', icon: SlidersIcon },
+      { id: 'shortcuts', label: language === 'zh' ? '快捷键' : 'Shortcuts', icon: MenuIcon },
       { id: 'agent', label: language === 'zh' ? '智能体' : 'Agent', icon: ToolsIcon },
       { id: 'canva', label: language === 'zh' ? '对话流' : 'Canva', icon: ToolsIcon }
     ],
@@ -557,7 +570,10 @@ function ConfigPanel({
               placeholder={language === 'zh' ? '留空则使用上方 Model' : 'Empty uses the provider model above'}
             />
           </SettingRow>
-          <SettingRow title={language === 'zh' ? '快速' : 'Fast'} description={language === 'zh' ? '更快/更便宜的模型（可选）' : 'Faster/cheaper model (optional).'}>
+          <SettingRow
+            title={language === 'zh' ? 'Inline（行内补全）' : 'Inline'}
+            description={language === 'zh' ? '编辑器行内补全使用的模型（可选）' : 'Model used for editor inline completion (optional).'}
+          >
             <input
               type="text"
               className="settings-control"
@@ -714,6 +730,82 @@ function ConfigPanel({
     );
   };
 
+  const renderShortcutsPage = () => {
+    const pageTitle = language === 'zh' ? '快捷键' : 'Shortcuts';
+    const rows = [
+      {
+        id: 'app.quickOpen',
+        title: language === 'zh' ? '打开文件/命令面板' : 'Quick open',
+        description: language === 'zh' ? '打开命令面板（默认 Ctrl+P）' : 'Open command palette (default Ctrl+P).',
+        placeholder: 'Ctrl+P',
+      },
+      {
+        id: 'app.commandPalette',
+        title: language === 'zh' ? '打开命令面板（命令）' : 'Command palette',
+        description: language === 'zh' ? '打开命令面板（默认 Ctrl+Shift+P）' : 'Open command palette (default Ctrl+Shift+P).',
+        placeholder: 'Ctrl+Shift+P',
+      },
+      {
+        id: 'editor.ai.explain',
+        title: language === 'zh' ? 'AI：解释代码' : 'AI: Explain',
+        description: language === 'zh' ? '编辑器动作快捷键（可留空使用默认值）' : 'Editor action shortcut (leave empty to use default).',
+        placeholder: 'Ctrl+Alt+E',
+      },
+      { id: 'editor.ai.tests', title: language === 'zh' ? 'AI：生成单元测试' : 'AI: Generate tests', description: '', placeholder: 'Ctrl+Alt+T' },
+      { id: 'editor.ai.optimize', title: language === 'zh' ? 'AI：优化代码' : 'AI: Optimize', description: '', placeholder: 'Ctrl+Alt+O' },
+      { id: 'editor.ai.comments', title: language === 'zh' ? 'AI：生成注释' : 'AI: Generate comments', description: '', placeholder: 'Ctrl+Alt+C' },
+      { id: 'editor.ai.review', title: language === 'zh' ? 'AI：审阅代码' : 'AI: Review', description: '', placeholder: 'Ctrl+Alt+R' },
+      { id: 'editor.ai.rewrite', title: language === 'zh' ? 'AI：重写代码' : 'AI: Rewrite', description: '', placeholder: 'Ctrl+Alt+W' },
+      { id: 'editor.ai.modify', title: language === 'zh' ? 'AI：按指令修改' : 'AI: Modify', description: '', placeholder: 'Ctrl+Alt+M' },
+      { id: 'editor.ai.docs', title: language === 'zh' ? 'AI：生成文档' : 'AI: Generate docs', description: '', placeholder: 'Ctrl+Alt+D' },
+    ];
+
+    const kb = (config?.keybindings && typeof config.keybindings === 'object') ? config.keybindings : {};
+
+    return (
+      <>
+        <h1 className="settings-page-title">{pageTitle}</h1>
+        <p className="settings-page-intro">
+          {language === 'zh'
+            ? '输入形如 Ctrl+Shift+P 的组合键；留空表示使用默认值。'
+            : 'Enter shortcuts like Ctrl+Shift+P. Leave empty to use defaults.'}
+        </p>
+
+        <div className="settings-group-title">{language === 'zh' ? '全局' : 'Global'}</div>
+        <SectionCard>
+          {rows.slice(0, 2).map((r) => (
+            <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
+              <input
+                type="text"
+                className="settings-control"
+                value={typeof kb[r.id] === 'string' ? kb[r.id] : ''}
+                onChange={(e) => updateKeybinding(r.id, e.target.value)}
+                placeholder={r.placeholder}
+                autoComplete="off"
+              />
+            </SettingRow>
+          ))}
+        </SectionCard>
+
+        <div className="settings-group-title">{language === 'zh' ? '编辑器（AI）' : 'Editor (AI)'}</div>
+        <SectionCard>
+          {rows.slice(2).map((r) => (
+            <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
+              <input
+                type="text"
+                className="settings-control"
+                value={typeof kb[r.id] === 'string' ? kb[r.id] : ''}
+                onChange={(e) => updateKeybinding(r.id, e.target.value)}
+                placeholder={r.placeholder}
+                autoComplete="off"
+              />
+            </SettingRow>
+          ))}
+        </SectionCard>
+      </>
+    );
+  };
+
   const page =
     activeTab === 'app'
       ? renderAppPage()
@@ -721,6 +813,8 @@ function ConfigPanel({
         ? renderAppearancePage()
         : activeTab === 'general'
           ? renderModelPage()
+          : activeTab === 'shortcuts'
+            ? renderShortcutsPage()
           : activeTab === 'agent'
             ? renderToolPage('agent')
             : renderToolPage('canva');

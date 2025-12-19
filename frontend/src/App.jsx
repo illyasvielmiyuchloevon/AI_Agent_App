@@ -171,6 +171,19 @@ const DEFAULT_TOOL_SETTINGS = {
   },
 };
 
+const DEFAULT_KEYBINDINGS = {
+  'app.commandPalette': 'Ctrl+Shift+P',
+  'app.quickOpen': 'Ctrl+P',
+  'editor.ai.explain': 'Ctrl+Alt+E',
+  'editor.ai.tests': 'Ctrl+Alt+T',
+  'editor.ai.optimize': 'Ctrl+Alt+O',
+  'editor.ai.comments': 'Ctrl+Alt+C',
+  'editor.ai.review': 'Ctrl+Alt+R',
+  'editor.ai.rewrite': 'Ctrl+Alt+W',
+  'editor.ai.modify': 'Ctrl+Alt+M',
+  'editor.ai.docs': 'Ctrl+Alt+D',
+};
+
 const DEFAULT_PROJECT_CONFIG = {
   projectName: '',
   projectPath: '',
@@ -186,6 +199,7 @@ const DEFAULT_PROJECT_CONFIG = {
   ollama: { api_key: '', model: '', base_url: 'http://localhost:11434/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'ollama', base_url: 'http://localhost:11434/v1' }], active_instance_id: 'default' },
   lmstudio: { api_key: '', model: '', base_url: 'http://localhost:1234/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'lm-studio', base_url: 'http://localhost:1234/v1' }], active_instance_id: 'default' },
   toolSettings: DEFAULT_TOOL_SETTINGS,
+  keybindings: DEFAULT_KEYBINDINGS,
   theme: detectSystemTheme(),
   sidebarWidth: 260,
   chatPanelWidth: 420,
@@ -389,6 +403,8 @@ function App() {
     const base = { ...DEFAULT_PROJECT_CONFIG, ...(stored || {}) };
     if (!base.default_models || typeof base.default_models !== 'object') base.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
     if (!base.routing || typeof base.routing !== 'object') base.routing = {};
+    if (!base.keybindings || typeof base.keybindings !== 'object') base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
+    else base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...base.keybindings };
 
     const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
     providerIds.forEach((providerId) => {
@@ -421,6 +437,7 @@ function App() {
       provider: base.provider || DEFAULT_PROJECT_CONFIG.provider,
       default_models: base.default_models,
       routing: base.routing,
+      keybindings: base.keybindings,
       openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(base.openai || {}) },
       anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(base.anthropic || {}) },
       openrouter: { ...DEFAULT_PROJECT_CONFIG.openrouter, ...(base.openrouter || {}) },
@@ -553,6 +570,8 @@ function App() {
       };
       if (!merged.default_models || typeof merged.default_models !== 'object') merged.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
       if (!merged.routing || typeof merged.routing !== 'object') merged.routing = {};
+      if (!merged.keybindings || typeof merged.keybindings !== 'object') merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
+      else merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...merged.keybindings };
 
       const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
       providerIds.forEach((providerId) => {
@@ -699,22 +718,81 @@ function App() {
       }
   };
 
+  const keybindingsRef = useRef({});
   useEffect(() => {
+      keybindingsRef.current = (config?.keybindings && typeof config.keybindings === 'object') ? config.keybindings : {};
+  }, [config?.keybindings]);
+
+  useEffect(() => {
+      const normalizeShortcut = (value) => {
+          const raw = String(value || '').trim();
+          if (!raw) return '';
+          const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
+          if (!parts.length) return '';
+          let hasCtrl = false;
+          let hasAlt = false;
+          let hasShift = false;
+          let key = '';
+          parts.forEach((p) => {
+              const t = p.toLowerCase();
+              if (t === 'ctrl' || t === 'control' || t === 'cmd' || t === 'command' || t === 'meta') hasCtrl = true;
+              else if (t === 'alt' || t === 'option') hasAlt = true;
+              else if (t === 'shift') hasShift = true;
+              else key = p;
+          });
+          const normKey = String(key || '').trim();
+          if (!normKey) return '';
+          const upperKey = normKey.length === 1 ? normKey.toUpperCase() : normKey;
+          const out = [];
+          if (hasCtrl) out.push('Ctrl');
+          if (hasAlt) out.push('Alt');
+          if (hasShift) out.push('Shift');
+          out.push(upperKey);
+          return out.join('+');
+      };
+
+      const eventToShortcut = (e) => {
+          const k = String(e.key || '');
+          const lower = k.toLowerCase();
+          if (lower === 'control' || lower === 'meta' || lower === 'shift' || lower === 'alt') return '';
+
+          const mods = [];
+          if (e.metaKey || e.ctrlKey) mods.push('Ctrl');
+          if (e.altKey) mods.push('Alt');
+          if (e.shiftKey) mods.push('Shift');
+          if (!mods.length) return '';
+
+          let keyToken = '';
+          if (k.length === 1) keyToken = k.toUpperCase();
+          else if (lower === 'escape' || lower === 'esc') keyToken = 'Escape';
+          else if (lower === 'enter') keyToken = 'Enter';
+          else if (lower === 'tab') keyToken = 'Tab';
+          else if (k === ',') keyToken = ',';
+          else if (k === '.') keyToken = '.';
+          else if (/^f\d{1,2}$/i.test(k)) keyToken = k.toUpperCase();
+          else keyToken = k;
+
+          return normalizeShortcut([...mods, keyToken].join('+'));
+      };
+
+      const matchShortcut = (e, shortcut) => {
+          const expected = normalizeShortcut(shortcut);
+          if (!expected) return false;
+          const got = eventToShortcut(e);
+          return !!got && got === expected;
+      };
+
       const onKeyDown = (e) => {
           const tag = String(e.target?.tagName || '').toUpperCase();
           const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable;
-          if (isEditable) return;
+          const inMonaco = !!e.target?.closest?.('.monaco-editor');
+          if (isEditable && !inMonaco) return;
 
-          const mod = !!(e.metaKey || e.ctrlKey);
-          if (!mod) return;
+          const kb = keybindingsRef.current || {};
+          const quickOpen = kb['app.quickOpen'] || DEFAULT_PROJECT_CONFIG.keybindings['app.quickOpen'];
+          const commandPalette = kb['app.commandPalette'] || DEFAULT_PROJECT_CONFIG.keybindings['app.commandPalette'];
 
-          const key = String(e.key || '').toLowerCase();
-          if (key === 'p' && e.shiftKey) {
-              e.preventDefault();
-              setShowCommandPalette(true);
-              return;
-          }
-          if (key === 'p' && !e.shiftKey) {
+          if (matchShortcut(e, commandPalette) || matchShortcut(e, quickOpen)) {
               e.preventDefault();
               setShowCommandPalette(true);
           }
@@ -1987,6 +2065,7 @@ function App() {
           provider: config.provider,
           default_models: { ...(config.default_models || {}) },
           routing: { ...(config.routing || {}) },
+          keybindings: { ...(config.keybindings || {}) },
           openai: { ...config.openai },
           anthropic: { ...config.anthropic },
           openrouter: { ...config.openrouter },
@@ -3674,9 +3753,10 @@ function App() {
                   workspaceRoots={workspaceProps.workspaceRoots}
                   bindingStatus={workspaceBindingStatus}
                    bindingError={workspaceBindingError}
-                   hotReloadToken={hotReloadToken}
+                  hotReloadToken={hotReloadToken}
                     theme={theme}
                     backendRoot={backendWorkspaceRoot}
+                    keybindings={config?.keybindings}
                     aiEngineClient={aiEngineClient}
                     getBackendConfig={getBackendConfig}
                     currentSessionId={currentSessionId}
