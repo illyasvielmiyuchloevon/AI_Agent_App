@@ -509,7 +509,7 @@ input:focus, select:focus, textarea:focus {
   border: none;
   border-radius: 6px;
   padding: 10px 12px 8px;
-  box-shadow: 0 10px 26px rgba(0,0,0,0.12);
+  box-shadow: none;
   cursor: text;
 }
 
@@ -663,7 +663,7 @@ input:focus, select:focus, textarea:focus {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
   margin-bottom: 0.7rem;
   overflow: hidden;
 }

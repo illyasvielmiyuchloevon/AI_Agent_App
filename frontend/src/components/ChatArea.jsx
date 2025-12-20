@@ -419,7 +419,7 @@ function ChatArea({
                                     backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--panel)',
                                     color: isUserMessage ? '#fff' : 'var(--text)',
                                     border: 'none',
-                                    boxShadow: 'var(--shadow-soft)',
+                                    boxShadow: 'none',
                                     fontSize: isUserMessage ? '0.9rem' : '0.85rem',
                                     lineHeight: '1.5',
                                     wordBreak: 'break-word',
@@ -471,7 +471,7 @@ function ChatArea({
                                                     width: '100%',
                                                     boxSizing: 'border-box',
                                                     cursor: 'pointer',
-                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                                    boxShadow: 'none'
                                                 }}
                                             >
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'space-between' }}>
