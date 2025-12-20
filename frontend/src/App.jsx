@@ -3602,11 +3602,6 @@ function App() {
                 minWidth: sidebarCollapsed ? '0' : '220px',
                 maxWidth: sidebarCollapsed ? '0' : 'none',
                 transition: activeResizeTarget === 'sidebar' ? 'none' : 'width 0.2s ease, min-width 0.2s ease',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-                flexShrink: 0,
-                background: 'transparent',
                 pointerEvents: sidebarCollapsed ? 'none' : 'auto'
             }}
           >
@@ -3734,7 +3729,7 @@ function App() {
               flexDirection: 'column', 
               background: 'var(--bg)',
               minWidth: 0,
-              overflow: 'hidden'
+              // Removed overflow: 'hidden' to allow floating card shadows to be visible
           }}>
               {workspaceVisible && (
                 <EditorArea
