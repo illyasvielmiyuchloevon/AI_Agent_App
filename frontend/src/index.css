@@ -1289,7 +1289,53 @@ input:focus, select:focus, textarea:focus {
   border-radius: 6px;
 }
 
-.tool-run-row {
+/* Sidebar Resizer Styles */
+.sidebar-resizer {
+  width: 0px;
+  position: relative;
+  cursor: col-resize;
+  z-index: 10001;
+  flex-shrink: 0;
+  user-select: none;
+  touch-action: none;
+}
+
+.sidebar-resizer-hit {
+  position: absolute;
+  top: 0;
+  left: -8px; /* Wider hit area for better UX */
+  width: 16px;
+  height: 100%;
+  background: transparent;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10002;
+}
+
+.sidebar-resizer-visual {
+  width: 0px;
+  height: 100%;
+  background: transparent;
+  transition: width 0.25s ease, background 0.25s ease;
+}
+
+.sidebar-resizer-hit:hover .sidebar-resizer-visual {
+  width: 4px;
+  background: rgba(173, 216, 230, 0.5);
+}
+
+.sidebar-resizer.collapsed {
+  position: absolute;
+  left: 48px; /* Aligned with floating sidebar width */
+}
+
+.sidebar-resizer.collapsed .sidebar-resizer-hit {
+  left: -4px;
+  width: 12px;
+}
+
+.tool-run-chip {
   display: grid;
   grid-template-columns: 1fr;
   gap: 0.6rem;

@@ -3716,27 +3716,16 @@ function App() {
               ref={sidebarResizerGhostRef}
               onMouseDown={startResize('sidebar')}
               onPointerDown={startResize('sidebar')}
-              style={{
-                  width: sidebarCollapsed ? '12px' : '4px', // Increased hit area
-                  marginLeft: sidebarCollapsed ? '0px' : '-2px', // No margin shift when collapsed
-                  cursor: 'col-resize',
-                  background: 'transparent',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  userSelect: 'none',
-                  flexShrink: 0,
-                  zIndex: 10001,
-                  touchAction: 'none',
-                  height: '100%',
-                  position: sidebarCollapsed ? 'absolute' : 'relative',
-                  left: sidebarCollapsed ? '42px' : 'auto', // Position over the gutter edge
-              }}
+              className={`sidebar-resizer ${sidebarCollapsed ? 'collapsed' : ''}`}
               title={sidebarCollapsed ? "向右拖动展开侧边栏" : "拖动调整侧边栏宽度"}
               aria-label="Sidebar Resizer"
               aria-valuenow={sidebarWidth}
               aria-valuemin={220}
-          />
+          >
+              <div className="sidebar-resizer-hit">
+                  <div className="sidebar-resizer-visual" />
+              </div>
+          </div>
 
           <div style={{ 
               flex: workspaceShellVisible ? 1 : 0, 
