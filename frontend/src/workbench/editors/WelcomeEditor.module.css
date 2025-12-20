@@ -2,7 +2,7 @@
   height: 100%;
   min-height: 100%;
   overflow: auto;
-  background: var(--bg);
+  background: var(--panel);
   color: var(--text);
   box-sizing: border-box;
 }

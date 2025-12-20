@@ -1,7 +1,7 @@
 :root {
   --bg: #f3f4f6;
   --panel: #ffffff;
-  --panel-sub: #f7f8fa;
+  --panel-sub: #ffffff;
   --text: #111827;
   --muted: #4b5563;
   --border: #e5e7eb;
@@ -15,9 +15,9 @@
   --pill-border: #cbd5ff;
   --pill-muted: #dbeafe;
   --danger-pill: #fee2e2;
-  --code-bg: #f7f8fa;
+  --code-bg: var(--panel);
   --tree-hover: #eef2ff;
-  --preview-bg: #f3f4f6;
+  --preview-bg: var(--panel);
   --preview-border: #e5e7eb;
   --input-bg: #ffffff;
   --input-border: #d1d5db;
@@ -1211,7 +1211,7 @@ input:focus, select:focus, textarea:focus {
   align-items: stretch;
   min-height: 50px;
   height: 50px;
-  background: var(--panel-sub);
+  background: var(--panel);
 }
 
 .tab {
@@ -1309,8 +1309,38 @@ input:focus, select:focus, textarea:focus {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  background: var(--code-bg);
+  background: var(--panel);
   overflow: hidden;
+}
+
+.editor-breadcrumbs {
+   display: flex;
+   align-items: center;
+   padding: 0 1rem;
+   height: 26px;
+   background: var(--panel);
+   border-bottom: 1px solid var(--border);
+   font-size: 0.75rem;
+   color: var(--muted);
+   gap: 0.2rem;
+   overflow-x: auto;
+   white-space: nowrap;
+ }
+
+.breadcrumb-part {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.breadcrumb-part i {
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+.breadcrumb-root {
+  font-weight: 600;
+  color: var(--text);
 }
 
 .monaco-fallback {

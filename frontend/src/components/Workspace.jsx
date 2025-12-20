@@ -310,8 +310,8 @@ function Workspace({
       scrollBeyondLastLine: true,
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
       fontLigatures: true,
-      fontSize: 14,
-      lineHeight: 20,
+      fontSize: 13,
+      lineHeight: 21,
       letterSpacing: 0,
       tabSize: 4,
       contextmenu: true,
@@ -675,45 +675,47 @@ function Workspace({
     editor.focus?.();
   }, [aiPanel.content, extractFirstCodeBlock]);
 
-  const registerEditorActions = useCallback((editor, monaco) => {
-    const defs = [
-      { id: 'ai.explain', label: 'AI：解释代码', action: 'explain', fallbackKey: 'Ctrl+Alt+E' },
-      { id: 'ai.tests', label: 'AI：生成单元测试', action: 'generateTests', fallbackKey: 'Ctrl+Alt+T' },
-      { id: 'ai.optimize', label: 'AI：优化代码', action: 'optimize', fallbackKey: 'Ctrl+Alt+O' },
-      { id: 'ai.comments', label: 'AI：生成注释', action: 'generateComments', fallbackKey: 'Ctrl+Alt+C' },
-      { id: 'ai.review', label: 'AI：审阅代码', action: 'review', fallbackKey: 'Ctrl+Alt+R' },
-      { id: 'ai.rewrite', label: 'AI：重写代码', action: 'rewrite', fallbackKey: 'Ctrl+Alt+W' },
-      { id: 'ai.modify', label: 'AI：按指令修改…', action: 'modify', fallbackKey: 'Ctrl+Alt+M' },
-      { id: 'ai.docs', label: 'AI：生成文档', action: 'generateDocs', fallbackKey: 'Ctrl+Alt+D' },
-    ];
+  const [isEditorReady, setIsEditorReady] = useState(false);
 
-    defs.forEach((d, idx) => {
-      const shortcut = getKeybinding(`editor.${d.id}`, d.fallbackKey);
-      const parsed = parseMonacoKeybinding(shortcut, monaco);
-      const disposable = editor.addAction({
-        id: d.id,
-        label: d.label,
-        keybindings: parsed ? [parsed] : undefined,
-        contextMenuGroupId: '9_ai',
-        contextMenuOrder: 1.0 + idx / 100,
-        run: () => {
-          triggerAiAction(d.action);
-        },
-      });
-      disposablesRef.current.push(disposable);
-    });
-  }, [getKeybinding, parseMonacoKeybinding, triggerAiAction]);
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
 
-  const handleEditorMount = useCallback((editor, monaco) => {
-    disposablesRef.current.forEach((d) => d?.dispose?.());
-    disposablesRef.current = [];
-    editorRef.current = editor;
-    monacoRef.current = monaco;
-    globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
+    // Handle AI action registration and cursor selection tracking
+    // Clean up previous AI disposables
+    const aiDisposables = [];
 
     if (canUseEditorAi) {
-      registerEditorActions(editor, monaco);
+      // Register context menu actions
+      const defs = [
+        { id: 'ai.explain', label: 'AI：解释代码', action: 'explain', fallbackKey: 'Ctrl+Alt+E' },
+        { id: 'ai.tests', label: 'AI：生成单元测试', action: 'generateTests', fallbackKey: 'Ctrl+Alt+T' },
+        { id: 'ai.optimize', label: 'AI：优化代码', action: 'optimize', fallbackKey: 'Ctrl+Alt+O' },
+        { id: 'ai.comments', label: 'AI：生成注释', action: 'generateComments', fallbackKey: 'Ctrl+Alt+C' },
+        { id: 'ai.review', label: 'AI：审阅代码', action: 'review', fallbackKey: 'Ctrl+Alt+R' },
+        { id: 'ai.rewrite', label: 'AI：重写代码', action: 'rewrite', fallbackKey: 'Ctrl+Alt+W' },
+        { id: 'ai.modify', label: 'AI：按指令修改…', action: 'modify', fallbackKey: 'Ctrl+Alt+M' },
+        { id: 'ai.docs', label: 'AI：生成文档', action: 'generateDocs', fallbackKey: 'Ctrl+Alt+D' },
+      ];
 
+      defs.forEach((d, idx) => {
+        const shortcut = getKeybinding(`editor.${d.id}`, d.fallbackKey);
+        const parsed = parseMonacoKeybinding(shortcut, monaco);
+        const disposable = editor.addAction({
+          id: d.id,
+          label: d.label,
+          keybindings: parsed ? [parsed] : undefined,
+          contextMenuGroupId: '9_ai',
+          contextMenuOrder: 1.0 + idx / 100,
+          run: () => {
+            triggerAiAction(d.action);
+          },
+        });
+        aiDisposables.push(disposable);
+      });
+
+      // Track selection for inline AI button
       const selectionDisposable = editor.onDidChangeCursorSelection(() => {
         const sel = editor.getSelection?.();
         const model = editor.getModel?.();
@@ -742,9 +744,24 @@ function Workspace({
         const left = Math.max(padding, Math.round(coords.left));
         setInlineAi({ visible: true, top, left });
       });
-      disposablesRef.current.push(selectionDisposable);
+      aiDisposables.push(selectionDisposable);
+    } else {
+      setInlineAi({ visible: false, top: 0, left: 0 });
     }
-  }, [canUseEditorAi, normalizedUndoRedoLimit, registerEditorActions]);
+
+    return () => {
+      aiDisposables.forEach((d) => d?.dispose?.());
+    };
+  }, [canUseEditorAi, getKeybinding, parseMonacoKeybinding, triggerAiAction, isEditorReady]);
+
+  const handleEditorMount = useCallback((editor, monaco) => {
+    disposablesRef.current.forEach((d) => d?.dispose?.());
+    disposablesRef.current = [];
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+    globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
+    setIsEditorReady(true);
+  }, [normalizedUndoRedoLimit]);
 
   useEffect(() => {
     if (typeof onRegisterEditorAiInvoker !== 'function') return;
