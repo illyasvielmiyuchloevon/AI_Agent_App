@@ -3596,7 +3596,7 @@ function App() {
           />
 
           <div
-            className={`sidebar-panel-shell ${sidebarCollapsed ? 'collapsed' : ''}`}
+            className={`sidebar-panel-shell ${sidebarCollapsed ? 'collapsed' : ''} sidebar-${activeSidebarPanel}-panel`}
             style={{
                 width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
                 minWidth: sidebarCollapsed ? '0' : '220px',

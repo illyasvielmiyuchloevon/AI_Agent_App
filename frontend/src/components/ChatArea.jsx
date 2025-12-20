@@ -458,29 +458,31 @@ function ChatArea({
                                         return (
                                             <div
                                                 onClick={() => setExpandedRuns((prev) => ({ ...prev, [toolKey]: !toolExpanded }))}
+                                                className={`tool-run-chip ${status}`}
                                                 title="点击展开/收起工具调用详情"
                                                 style={{
-                                                    fontFamily: 'monospace',
+                                                    fontFamily: 'inherit',
                                                     whiteSpace: 'pre-wrap',
                                                     fontSize: '0.82rem',
-                                                    background: 'var(--panel-sub)',
-                                                    padding: '0.6rem',
-                                                    borderRadius: 'var(--radius)',
-                                                    color: statusColor,
-                                                    border: `1px solid ${statusColor}`,
                                                     width: '100%',
                                                     boxSizing: 'border-box',
                                                     cursor: 'pointer',
-                                                    boxShadow: 'none'
+                                                    margin: '0.25rem 0'
                                                 }}
                                             >
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'space-between' }}>
-                                                    <span>{statusLabel}</span>
+                                                    <span style={{ 
+                                                        color: status === 'error' ? 'var(--danger)' : 'var(--text)',
+                                                        fontWeight: 500,
+                                                        fontSize: '0.85rem'
+                                                    }}>
+                                                        {statusLabel}
+                                                    </span>
                                                     {shouldShowDiffButton && (
                                                         <button
                                                             type="button"
-                                                            className="ghost-btn"
-                                                            style={{ padding: '0.25rem 0.5rem', height: 'auto', fontSize: '0.78rem' }}
+                                                            className="tool-run-chip-action"
+                                                            style={{ marginLeft: 'auto' }}
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 if (diffTarget) {
@@ -490,24 +492,22 @@ function ChatArea({
                                                                 }
                                                             }}
                                                         >
-                                                            查看 Diff
+                                                            <Icon name="diff" size={14} />
                                                         </button>
                                                     )}
                                                 </div>
                                                 {toolExpanded && (
-                                                    <div className="tool-run-chip-detail" style={{ marginTop: '0.5rem' }}>
+                                                    <div className="tool-run-chip-detail">
                                                         {argsSource && (
                                                             <div className="tool-run-chip-block">
                                                                 <div className="tool-run-chip-label">入参</div>
                                                                 <pre>{typeof argsSource === 'string' ? argsSource : JSON.stringify(argsSource, null, 2)}</pre>
                                                             </div>
                                                         )}
-                                                        {detailSource && (
-                                                            <div className="tool-run-chip-block">
-                                                                <div className="tool-run-chip-label">{detailLabel}</div>
-                                                                <pre>{typeof detailSource === 'string' ? detailSource : JSON.stringify(detailSource, null, 2)}</pre>
-                                                            </div>
-                                                        )}
+                                                        <div className="tool-run-chip-block">
+                                                            <div className="tool-run-chip-label">{detailLabel}</div>
+                                                            <pre>{typeof detailSource === 'string' ? detailSource : JSON.stringify(detailSource, null, 2)}</pre>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -567,7 +567,7 @@ function ChatArea({
                 style={{ padding: '1rem', borderTop: 'none', background: 'transparent' }}
             >
                 {showTaskReview && (
-                    <div className="task-review-shell">
+                    <div className={`task-review-shell ${!taskReview?.expanded ? 'collapsed' : ''}`}>
                         <div className="task-review-head">
                             <button
                                 type="button"
@@ -579,7 +579,7 @@ function ChatArea({
                                 <span className="codicon codicon-versions" aria-hidden />
                                 <span className="task-review-pill">{reviewSummary}</span>
                                 {reviewPending > 0 && <span className="task-review-muted">{reviewPending} 未处理</span>}
-                                <span className={`codicon ${taskReview?.expanded ? 'codicon-chevron-down' : 'codicon-chevron-right'}`} aria-hidden />
+                                <span className={`codicon ${taskReview?.expanded ? 'codicon-chevron-up' : 'codicon-chevron-right'}`} aria-hidden />
                             </button>
                             <div className="task-review-actions">
                                 <button
