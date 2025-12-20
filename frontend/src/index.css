@@ -283,7 +283,8 @@ input:focus, select:focus, textarea:focus {
 }
 
 .sidebar-panel-shell.sidebar-chat-panel {
-  background: var(--bg);
+  background: var(--panel);
+  overflow: visible;
 }
 
 .sidebar-panel-shell.collapsed {
@@ -521,7 +522,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  background: var(--panel);
+  background: var(--bg);
   border: none;
   border-radius: 6px;
   padding: 10px 12px 8px;
@@ -917,60 +918,94 @@ input:focus, select:focus, textarea:focus {
 
 .mode-selector {
   position: relative;
+  z-index: 1000;
 }
 
 .mode-btn {
   border: 1px solid var(--border);
   background: var(--panel);
-  border-radius: 10px;
-  padding: 0 0.75rem;
+  border-radius: 8px;
+  padding: 0 0.6rem;
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   cursor: pointer;
   font-weight: 600;
-  height: 40px;
+  height: 32px;
   box-sizing: border-box;
+  font-size: 0.85rem;
+  color: var(--text);
+  transition: all 0.2s ease;
+}
+
+.mode-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 .mode-btn .chevron {
-  font-size: 16px;
+  font-size: 12px;
+  opacity: 0.6;
 }
 
 .mode-menu {
   position: absolute;
-  bottom: 110%;
-  left: 0;
+  bottom: calc(100% + 8px);
+  right: 0;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-soft);
-  width: 240px;
-  z-index: 30;
+  border-radius: 12px;
+  box-shadow: var(--shadow-strong);
+  width: 260px;
+  z-index: 10001;
+  overflow: hidden;
+  padding: 6px;
+  animation: modeMenuFadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+@keyframes modeMenuFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .mode-item {
-  padding: 0.65rem 0.8rem;
+  padding: 0.6rem 0.8rem;
   cursor: pointer;
-  border-bottom: 1px solid var(--border);
+  border-radius: 8px;
+  transition: all 0.15s ease;
+  margin-bottom: 2px;
 }
 
 .mode-item:last-child {
-  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.mode-item:hover {
+  background: var(--surface-hover);
 }
 
 .mode-item.active {
-  background: var(--panel-sub);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.mode-item.active .mode-item-desc {
+  color: var(--accent);
+  opacity: 0.8;
 }
 
 .mode-item-title {
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
 }
 
 .mode-item-desc {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--muted);
+  line-height: 1.4;
 }
 
 .workspace-shell {
@@ -1570,7 +1605,7 @@ input:focus, select:focus, textarea:focus {
   height: calc(100% - 4px);
   margin: 2px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   overflow: hidden;
   position: absolute;
   right: 0;
@@ -1690,7 +1725,7 @@ input:focus, select:focus, textarea:focus {
 
 .log-detail-card {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 0.75rem;
   background: var(--panel);
   box-shadow: var(--shadow-soft);
@@ -1738,6 +1773,33 @@ input:focus, select:focus, textarea:focus {
   font-size: 0.82rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Chat Log Button */
+.chat-log-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
+  height: 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.chat-log-btn:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.chat-log-btn:active {
+  transform: translateY(0);
 }
 
 /* Config modal */

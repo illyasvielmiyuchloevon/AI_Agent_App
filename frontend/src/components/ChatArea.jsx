@@ -371,13 +371,13 @@ function ChatArea({
                 {currentSession && (
                     <button 
                         onClick={onToggleLogs} 
-                        className="ghost-btn"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', padding: '0 0.3rem', height: '28px' }}
+                        className="chat-log-btn"
                         title="查看本会话 API 日志"
                     >
-                        <span style={{ fontSize: '1.2rem' }}>📋</span>
+                        <span style={{ fontSize: '1rem', lineHeight: 1 }}>📋</span>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>Logs</span>
                         {logStatus && (
-                            <span style={{ display: 'inline-flex', gap: '0.15rem', alignItems: 'center' }}>
+                            <span style={{ display: 'inline-flex', gap: '0.15rem', alignItems: 'center', marginLeft: '2px' }}>
                                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: logStatus.requestOk ? 'var(--success)' : 'var(--danger)', display: 'inline-block' }} />
                                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: logStatus.parseOk ? 'var(--success)' : 'var(--warning)', display: 'inline-block' }} />
                             </span>
@@ -416,7 +416,7 @@ function ChatArea({
                                     maxWidth: bubbleMaxWidth,
                                     padding: '0.8rem 1rem',
                                     borderRadius: 'var(--radius)',
-                                    backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--panel)',
+                                    backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--bg)',
                                     color: isUserMessage ? '#fff' : 'var(--text)',
                                     border: 'none',
                                     boxShadow: 'none',
