@@ -85,7 +85,7 @@ export function normalizeRuntimeConfig(raw: Partial<AiEngineRuntimeConfig> | nul
       general: 'gpt-4o-mini',
       fast: 'gpt-4o-mini',
       reasoning: 'gpt-4o',
-      embeddings: 'text-embedding-3-small',
+      embeddings: 'Qwen/Qwen3-Embedding-0.6B',
       tools: 'gpt-4o-mini'
     },
     providers,

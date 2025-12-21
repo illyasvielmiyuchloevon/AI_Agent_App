@@ -41,6 +41,37 @@ const filesystem_1 = require("./tools/filesystem");
 const shell_1 = require("./tools/shell");
 const screen_capture_1 = require("./tools/screen_capture");
 const desktop_1 = require("./tools/desktop");
+let cachedEncoder = null;
+let cachedEncoderTried = false;
+function getOptionalEncoder() {
+    if (cachedEncoderTried)
+        return cachedEncoder;
+    cachedEncoderTried = true;
+    try {
+        const mod = require('js-tiktoken');
+        if (mod && typeof mod.getEncoding === 'function') {
+            cachedEncoder = mod.getEncoding('cl100k_base');
+            return cachedEncoder;
+        }
+        if (mod && typeof mod.encoding_for_model === 'function') {
+            cachedEncoder = mod.encoding_for_model('gpt-4');
+            return cachedEncoder;
+        }
+    }
+    catch {
+    }
+    try {
+        const mod = require('tiktoken');
+        if (mod && typeof mod.getEncoding === 'function') {
+            cachedEncoder = mod.getEncoding('cl100k_base');
+            return cachedEncoder;
+        }
+    }
+    catch {
+    }
+    cachedEncoder = null;
+    return cachedEncoder;
+}
 class Agent {
     llm;
     sessionId;
@@ -93,8 +124,7 @@ class Agent {
         if (!this.sessionId)
             return;
         const messages = await db.getMessages(this.sessionId);
-        const recent = messages.slice(Math.max(0, messages.length - 10));
-        this.history = recent.map(m => ({
+        this.history = messages.map(m => ({
             role: m.role,
             content: m.content,
             tool_calls: m.tool_calls,
@@ -104,6 +134,7 @@ class Agent {
         // In a real implementation, we'd need more robust hydration of tool calls from DB JSON
         // For PoC, we assume mostly text or simple content
         this.ensureSystemPrompt();
+        this.trimHistory();
     }
     setMode(mode, enabledTools) {
         // Simple check if mode is valid (could use getPrompt result but let's assume valid if prompt exists)
@@ -159,12 +190,56 @@ class Agent {
         });
     }
     estimateTokens(content) {
+        const estimateFromText = (text) => {
+            if (!text)
+                return 0;
+            const enc = getOptionalEncoder();
+            if (enc && typeof enc.encode === 'function') {
+                try {
+                    const out = enc.encode(text);
+                    if (Array.isArray(out))
+                        return out.length;
+                }
+                catch {
+                }
+            }
+            let ascii = 0;
+            let nonAscii = 0;
+            for (let i = 0; i < text.length; i += 1) {
+                const code = text.charCodeAt(i);
+                if (code <= 0x7f)
+                    ascii += 1;
+                else
+                    nonAscii += 1;
+            }
+            return Math.ceil(ascii / 4 + nonAscii / 2);
+        };
+        if (content === null || content === undefined)
+            return 0;
         if (typeof content === 'string')
-            return Math.ceil(content.length / 4);
+            return estimateFromText(content);
+        if (typeof content === 'number' || typeof content === 'boolean')
+            return estimateFromText(String(content));
         if (Array.isArray(content)) {
-            return content.reduce((acc, part) => acc + (part.text ? Math.ceil(part.text.length / 4) : 0), 0);
+            return content.reduce((acc, part) => {
+                if (typeof part === 'string')
+                    return acc + estimateFromText(part);
+                if (part && typeof part === 'object' && typeof part.text === 'string')
+                    return acc + estimateFromText(part.text);
+                try {
+                    return acc + estimateFromText(JSON.stringify(part));
+                }
+                catch {
+                    return acc;
+                }
+            }, 0);
         }
-        return 0;
+        try {
+            return estimateFromText(JSON.stringify(content));
+        }
+        catch {
+            return estimateFromText(String(content));
+        }
     }
     getActiveTools() {
         return this.tools;

@@ -69,9 +69,6 @@ app.use(async (req, res, next) => {
     }
 });
 const aiEngine = new ai_engine_1.AiEngine();
-aiEngine.init().catch((e) => {
-    console.error(`[AIEngine] init failed: ${e?.message || e}`);
-});
 (0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
@@ -457,7 +454,101 @@ app.post("/workspace/rename", async (req, res) => {
         res.status(400).json({ detail: e.message });
     }
 });
-const PORT = 8000;
-app.listen(PORT, () => {
-    console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);
+function parsePort(value, fallback) {
+    const n = typeof value === 'string' ? Number.parseInt(value, 10) : (typeof value === 'number' ? value : NaN);
+    if (!Number.isFinite(n))
+        return fallback;
+    const p = Math.floor(n);
+    if (p < 1 || p > 65535)
+        return fallback;
+    return p;
+}
+async function fileExists(p) {
+    try {
+        const st = await promises_1.default.stat(p);
+        return st.isFile();
+    }
+    catch {
+        return false;
+    }
+}
+async function pickFirstExistingFile(candidates) {
+    for (const p of candidates) {
+        if (!p)
+            continue;
+        if (await fileExists(p))
+            return p;
+    }
+    return "";
+}
+async function ensureEmbeddingDependencies() {
+    const envBaseUrl = (process.env.LLAMACPP_EMBEDDINGS_BASE_URL || "").trim();
+    if (envBaseUrl)
+        return;
+    const envBin = (process.env.LLAMACPP_SERVER_BIN || "").trim();
+    const envModelPath = (process.env.LLAMACPP_MODEL_PATH || "").trim();
+    const defaultHipBin = path_1.default.resolve(process.cwd(), "llama.cpp", "build-hip", "bin", "llama-server.exe");
+    const defaultCpuBin = path_1.default.resolve(process.cwd(), "llama.cpp", "build", "bin", "llama-server.exe");
+    const defaultModelPath = path_1.default.resolve(process.cwd(), "models", "qwen3-embedding-0.6b", "Qwen3-Embedding-0.6B-Q8_0.gguf");
+    const modelPath = await pickFirstExistingFile([envModelPath, defaultModelPath]);
+    if (!modelPath) {
+        console.error(`[Embeddings] Model file not found. Set LLAMACPP_MODEL_PATH or place the default model at: ${defaultModelPath}`);
+        process.exit(1);
+    }
+    const bin = await pickFirstExistingFile([envBin, defaultHipBin, defaultCpuBin]);
+    if (!bin) {
+        console.error(`[Embeddings] llama.cpp server binary not found. Set LLAMACPP_SERVER_BIN or build one of: ${defaultHipBin} / ${defaultCpuBin}`);
+        process.exit(1);
+    }
+}
+async function isExistingBackend(port) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 600);
+    try {
+        const resp = await fetch(`http://127.0.0.1:${port}/ai-engine/metrics`, { method: 'GET', signal: controller.signal });
+        if (!resp.ok)
+            return false;
+        const data = await resp.json().catch(() => null);
+        if (!data || typeof data !== 'object')
+            return false;
+        return typeof data.counters === 'object' && typeof data.p95LatencyMsByCapability === 'object';
+    }
+    catch {
+        return false;
+    }
+    finally {
+        clearTimeout(t);
+    }
+}
+async function main() {
+    await ensureEmbeddingDependencies();
+    const PORT = parsePort(process.env.AI_AGENT_BACKEND_PORT || process.env.PORT, 8000);
+    const server = app.listen(PORT);
+    server.once("listening", () => {
+        console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);
+        aiEngine.init().catch((e) => {
+            console.error(`[AIEngine] init failed: ${e?.message || e}`);
+        });
+    });
+    server.on("error", (err) => {
+        if (err && err.code === "EADDRINUSE") {
+            void (async () => {
+                const ok = await isExistingBackend(PORT);
+                if (ok) {
+                    console.log(`Node.js Agent Backend already running on http://localhost:${PORT}`);
+                    setInterval(() => { }, 60_000);
+                    return;
+                }
+                console.error(`Error: listen EADDRINUSE: address already in use :::${PORT}`);
+                process.exit(1);
+            })();
+            return;
+        }
+        console.error(err);
+        process.exit(1);
+    });
+}
+void main().catch((e) => {
+    console.error(e?.message || e);
+    process.exit(1);
 });

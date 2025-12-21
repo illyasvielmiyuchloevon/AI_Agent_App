@@ -187,7 +187,7 @@ export class AiContextManager {
     const cached = this.projectCache.get(key);
     if (cached && cached.hash === h) return cached.summary;
 
-    const summary = struct ? `Project structure snapshot:\n${clip(raw, 2500)}` : '';
+    const summary = struct ? `Project structure snapshot:\n${clip(raw, 5000)}` : '';
     this.projectCache.set(key, { hash: h, summary, updatedAt: Date.now() });
     this.evict();
     return summary;

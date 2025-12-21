@@ -12,7 +12,7 @@ function buildKey(provider: AiProviderId, apiKey: string, baseUrl: string | unde
 }
 
 function isOpenAiCompatible(provider: AiProviderId) {
-  return provider === 'openai' || provider === 'openrouter' || provider === 'xai' || provider === 'ollama' || provider === 'lmstudio';
+  return provider === 'openai' || provider === 'openrouter' || provider === 'xai' || provider === 'ollama' || provider === 'lmstudio' || provider === 'llamacpp';
 }
 
 export class LlmClientFactory {

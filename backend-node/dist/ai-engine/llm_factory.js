@@ -6,7 +6,7 @@ function buildKey(provider, apiKey, baseUrl, model) {
     return `${provider}:${model || ''}:${baseUrl || ''}:${apiKey.slice(0, 6)}`;
 }
 function isOpenAiCompatible(provider) {
-    return provider === 'openai' || provider === 'openrouter' || provider === 'xai' || provider === 'ollama' || provider === 'lmstudio';
+    return provider === 'openai' || provider === 'openrouter' || provider === 'xai' || provider === 'ollama' || provider === 'lmstudio' || provider === 'llamacpp';
 }
 class LlmClientFactory {
     cache = new Map();

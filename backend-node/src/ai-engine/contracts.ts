@@ -1,6 +1,6 @@
 export type AiCapability = 'chat' | 'inline' | 'editorAction' | 'tools' | 'embeddings';
 
-export type AiProviderId = 'openai' | 'anthropic' | 'openrouter' | 'xai' | 'ollama' | 'lmstudio' | 'local';
+export type AiProviderId = 'openai' | 'anthropic' | 'openrouter' | 'xai' | 'ollama' | 'lmstudio' | 'llamacpp' | 'local';
 
 export type AiEnvironment = 'dev' | 'test' | 'prod';
 

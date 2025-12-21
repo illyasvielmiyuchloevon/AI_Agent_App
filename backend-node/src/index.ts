@@ -33,9 +33,6 @@ app.use(async (req, res, next) => {
 });
 
 const aiEngine = new AiEngine();
-aiEngine.init().catch((e) => {
-  console.error(`[AIEngine] init failed: ${(e as any)?.message || e}`);
-});
 registerAiEngineRoutes(app, aiEngine);
 
 app.post("/health", async (req, res) => {
@@ -419,7 +416,54 @@ app.post("/workspace/rename", async (req, res) => {
   }
 });
 
-const PORT = 8000;
-app.listen(PORT, () => {
+function parsePort(value: unknown, fallback: number) {
+  const n = typeof value === 'string' ? Number.parseInt(value, 10) : (typeof value === 'number' ? value : NaN);
+  if (!Number.isFinite(n)) return fallback;
+  const p = Math.floor(n);
+  if (p < 1 || p > 65535) return fallback;
+  return p;
+}
+
+async function isExistingBackend(port: number): Promise<boolean> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 600);
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/ai-engine/metrics`, { method: 'GET', signal: controller.signal });
+    if (!resp.ok) return false;
+    const data: any = await resp.json().catch(() => null);
+    if (!data || typeof data !== 'object') return false;
+    return typeof data.counters === 'object' && typeof data.p95LatencyMsByCapability === 'object';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const PORT = parsePort(process.env.AI_AGENT_BACKEND_PORT || process.env.PORT, 8000);
+const server = app.listen(PORT);
+
+server.once('listening', () => {
   console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);
+  aiEngine.init().catch((e) => {
+    console.error(`[AIEngine] init failed: ${(e as any)?.message || e}`);
+  });
+});
+
+server.on('error', (err: any) => {
+  if (err && err.code === 'EADDRINUSE') {
+    void (async () => {
+      const ok = await isExistingBackend(PORT);
+      if (ok) {
+        console.log(`Node.js Agent Backend already running on http://localhost:${PORT}`);
+        setInterval(() => {}, 60_000);
+        return;
+      }
+      console.error(`Error: listen EADDRINUSE: address already in use :::${PORT}`);
+      process.exit(1);
+    })();
+    return;
+  }
+  console.error(err);
+  process.exit(1);
 });
