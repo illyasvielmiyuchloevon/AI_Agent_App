@@ -41,6 +41,7 @@ const filesystem_1 = require("./tools/filesystem");
 const shell_1 = require("./tools/shell");
 const screen_capture_1 = require("./tools/screen_capture");
 const desktop_1 = require("./tools/desktop");
+const rag_tools_1 = require("./tools/rag_tools");
 let cachedEncoder = null;
 let cachedEncoderTried = false;
 function getOptionalEncoder() {
@@ -87,10 +88,11 @@ class Agent {
     fileTools;
     shellTool;
     agentTools;
-    constructor(llm, sessionId, contextMaxLength = 128000) {
+    ragTool;
+    constructor(llm, opts = {}) {
         this.llm = llm;
-        this.sessionId = sessionId;
-        this.contextMaxLength = contextMaxLength;
+        this.sessionId = opts.sessionId;
+        this.contextMaxLength = opts.contextMaxLength || 128000;
         this.registry = new tool_registry_1.ToolRegistry();
         this.fileTools = [
             new filesystem_1.ReadFileTool(),
@@ -104,6 +106,12 @@ class Agent {
             new filesystem_1.ProjectStructureTool()
         ];
         this.shellTool = new shell_1.ExecuteShellTool();
+        if (opts.getRagIndex && opts.getConfig) {
+            const cfg = opts.getConfig();
+            if (cfg.features?.workspaceSemanticSearch !== false) {
+                this.ragTool = new rag_tools_1.WorkspaceSemanticSearchTool(opts.getRagIndex, opts.getConfig);
+            }
+        }
         // Agent tools include file tools, shell, and desktop control/capture
         this.agentTools = [
             ...this.fileTools,
@@ -112,11 +120,14 @@ class Agent {
             new desktop_1.KeyboardControlTool(),
             new desktop_1.MouseControlTool()
         ];
+        if (this.ragTool) {
+            this.agentTools.push(this.ragTool);
+        }
         // Register all tools
         this.agentTools.forEach(tool => this.registry.register(tool));
         // Enable verbose logging for debugging tool execution paths
         this.registry.debugMode = true;
-        if (sessionId) {
+        if (this.sessionId) {
             this.loadHistory();
         }
     }
@@ -148,6 +159,9 @@ class Agent {
         else if (mode === 'canva') {
             // Canva mode still needs shell for quick builds/verification
             activeTools = [...this.fileTools, this.shellTool];
+            if (this.ragTool) {
+                activeTools.push(this.ragTool);
+            }
         }
         if (enabledTools && enabledTools.length > 0) {
             activeTools = activeTools.filter(t => enabledTools.includes(t.name));

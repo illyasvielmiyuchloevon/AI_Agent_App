@@ -92,6 +92,16 @@ export class OpenAIProvider extends LLMClient {
                 messages: openAIMessages,
                 ...options
             };
+
+            // Fix for ModelScope/Qwen3: enable_thinking must be false for non-streaming calls
+            if (requestBody.enable_thinking === true) {
+                console.warn(`[LLM] enable_thinking: true is not supported for non-streaming calls. Setting to false.`);
+                requestBody.enable_thinking = false;
+            } else if (model.toLowerCase().includes('qwen') && requestBody.enable_thinking === undefined) {
+                // Explicitly set to false for Qwen models if not provided, to avoid server-side defaults/errors
+                requestBody.enable_thinking = false;
+            }
+
             if (openAITools) {
                 requestBody.tools = openAITools;
                 requestBody.tool_choice = options.tool_choice || 'auto';
@@ -289,11 +299,19 @@ export class OpenAIProvider extends LLMClient {
         try {
             const m = model || this.model;
             console.log(`[LLM] Checking health for model ${m}`);
-            await this.client.chat.completions.create({
+            
+            const payload: any = {
                 model: m,
                 messages: [{ role: "user", content: "ping" }],
                 max_tokens: 5
-            });
+            };
+
+            // Fix for ModelScope/Qwen3: enable_thinking must be false for non-streaming calls
+            if (m.toLowerCase().includes('qwen')) {
+                payload.enable_thinking = false;
+            }
+
+            await this.client.chat.completions.create(payload);
             console.log(`[LLM] Health check passed`);
             return true;
         } catch (e: any) {

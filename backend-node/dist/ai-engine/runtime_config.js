@@ -52,9 +52,11 @@ function normalizeRuntimeConfig(raw) {
         },
         providers,
         routing: raw?.routing || {},
+        embeddingOptions: raw?.embeddingOptions || {},
         thresholds: raw?.thresholds || { longTextChars: 12000 },
         retries: raw?.retries || { maxAttempts: 2, baseDelayMs: 250 },
-        metrics: raw?.metrics || { enabled: true }
+        metrics: raw?.metrics || { enabled: true },
+        features: raw?.features || { workspaceSemanticSearch: true }
     };
     return cfg;
 }

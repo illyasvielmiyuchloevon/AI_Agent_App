@@ -155,21 +155,23 @@ const DEFAULT_TOOL_SETTINGS = {
     execute_shell: true,
     screen_capture: true,
     mouse_control: true,
-    keyboard_control: true,
-  },
-  canva: {
-    read_file: true,
-    write_file: true,
-    edit_file: true,
-    list_files: true,
-    create_folder: true,
-    delete_file: true,
-    rename_file: true,
-    search_in_files: true,
-    get_current_project_structure: true,
-    execute_shell: true,
-  },
-};
+      keyboard_control: true,
+      workspace_semantic_search: true,
+    },
+    canva: {
+      read_file: true,
+      write_file: true,
+      edit_file: true,
+      list_files: true,
+      create_folder: true,
+      delete_file: true,
+      rename_file: true,
+      search_in_files: true,
+      get_current_project_structure: true,
+      execute_shell: true,
+      workspace_semantic_search: true,
+    },
+  };
 
 const DEFAULT_KEYBINDINGS = {
   'app.commandPalette': 'Ctrl+Shift+P',
@@ -192,12 +194,14 @@ const DEFAULT_PROJECT_CONFIG = {
   provider: 'openai',
   default_models: { general: '', fast: '', reasoning: '', tools: '', embeddings: '' },
   routing: {},
+  embedding_options: { context_max_length: 32768 },
   openai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
   anthropic: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
   openrouter: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
   xai: { api_key: '', model: '', base_url: '', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: '', base_url: '' }], active_instance_id: 'default' },
   ollama: { api_key: '', model: '', base_url: 'http://localhost:11434/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'ollama', base_url: 'http://localhost:11434/v1' }], active_instance_id: 'default' },
   lmstudio: { api_key: '', model: '', base_url: 'http://localhost:1234/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'lm-studio', base_url: 'http://localhost:1234/v1' }], active_instance_id: 'default' },
+  llamacpp: { api_key: '', model: '', base_url: 'http://localhost:8080/v1', check_model: '', top_p: 0.9, instances: [{ id: 'default', label: 'Default', api_key: 'local', base_url: 'http://localhost:8080/v1' }], active_instance_id: 'default' },
   toolSettings: DEFAULT_TOOL_SETTINGS,
   keybindings: DEFAULT_KEYBINDINGS,
   editorUndoRedoLimit: 16,
@@ -299,11 +303,15 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
       top_p: snapshot.top_p ?? 0.9,
       context_independent: snapshot.context_independent
   };
-  const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+  const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
   const out = {
       provider,
       default_models: { ...(DEFAULT_PROJECT_CONFIG.default_models || {}), ...((fallback.default_models && typeof fallback.default_models === 'object') ? fallback.default_models : {}) },
       routing: ((fallback.routing && typeof fallback.routing === 'object') ? fallback.routing : {}),
+      embedding_options: {
+          ...(((fallback.embedding_options && typeof fallback.embedding_options === 'object') ? fallback.embedding_options : {})),
+          ...(((snapshot.embedding_options && typeof snapshot.embedding_options === 'object') ? snapshot.embedding_options : {})),
+      },
   };
   providerIds.forEach((providerId) => {
       const base = DEFAULT_PROJECT_CONFIG[providerId] || {};
@@ -404,10 +412,12 @@ function App() {
     const base = { ...DEFAULT_PROJECT_CONFIG, ...(stored || {}) };
     if (!base.default_models || typeof base.default_models !== 'object') base.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
     if (!base.routing || typeof base.routing !== 'object') base.routing = {};
+    if (!base.embedding_options || typeof base.embedding_options !== 'object') base.embedding_options = {};
+    base.embedding_options = { ...(DEFAULT_PROJECT_CONFIG.embedding_options || {}), ...(base.embedding_options || {}) };
     if (!base.keybindings || typeof base.keybindings !== 'object') base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
     else base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...base.keybindings };
 
-    const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+    const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
     providerIds.forEach((providerId) => {
       const def = DEFAULT_PROJECT_CONFIG[providerId] || {};
       const incoming = base[providerId] || {};
@@ -438,6 +448,7 @@ function App() {
       provider: base.provider || DEFAULT_PROJECT_CONFIG.provider,
       default_models: base.default_models,
       routing: base.routing,
+      embedding_options: (base.embedding_options && typeof base.embedding_options === 'object') ? base.embedding_options : {},
       keybindings: base.keybindings,
       openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(base.openai || {}) },
       anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(base.anthropic || {}) },
@@ -445,6 +456,7 @@ function App() {
       xai: { ...DEFAULT_PROJECT_CONFIG.xai, ...(base.xai || {}) },
       ollama: { ...DEFAULT_PROJECT_CONFIG.ollama, ...(base.ollama || {}) },
       lmstudio: { ...DEFAULT_PROJECT_CONFIG.lmstudio, ...(base.lmstudio || {}) },
+      llamacpp: { ...DEFAULT_PROJECT_CONFIG.llamacpp, ...(base.llamacpp || {}) },
     };
   });
   const [uiDisplayPreferences, setUiDisplayPreferences] = useState(() => {
@@ -571,10 +583,12 @@ function App() {
       };
       if (!merged.default_models || typeof merged.default_models !== 'object') merged.default_models = { ...DEFAULT_PROJECT_CONFIG.default_models };
       if (!merged.routing || typeof merged.routing !== 'object') merged.routing = {};
+      if (!merged.embedding_options || typeof merged.embedding_options !== 'object') merged.embedding_options = {};
+      merged.embedding_options = { ...(DEFAULT_PROJECT_CONFIG.embedding_options || {}), ...(merged.embedding_options || {}) };
       if (!merged.keybindings || typeof merged.keybindings !== 'object') merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
       else merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...merged.keybindings };
 
-      const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio'];
+      const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
       providerIds.forEach((providerId) => {
           const base = DEFAULT_PROJECT_CONFIG[providerId] || {};
           const incoming = merged[providerId] || {};
@@ -647,6 +661,26 @@ function App() {
           if (rPool) target.poolId = rPool;
           routingPayload[cap] = [target];
       });
+
+      const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
+      const providers = {};
+      providerIds.forEach((pid) => {
+          const pCfg = config?.[pid] || {};
+          const inst = Array.isArray(pCfg.instances) ? pCfg.instances : [];
+          const pools = {};
+          inst.forEach((i) => {
+              const id = String(i?.id || 'default');
+              const apiKey = typeof i?.api_key === 'string' ? i.api_key : (typeof pCfg.api_key === 'string' ? pCfg.api_key : '');
+              const baseUrl = typeof i?.base_url === 'string' ? i.base_url : (typeof pCfg.base_url === 'string' ? pCfg.base_url : '');
+              if (!apiKey || apiKey.trim().length === 0) return;
+              pools[id] = { api_key: apiKey, base_url: baseUrl };
+          });
+          const poolIds = Object.keys(pools);
+          if (poolIds.length === 0) return;
+          const defaultPoolId = String(pCfg.active_instance_id || poolIds[0] || 'default');
+          providers[pid] = { default_pool_id: defaultPoolId, pools };
+      });
+
       return {
           provider: providerId,
           pool_id: poolId,
@@ -656,6 +690,8 @@ function App() {
           check_model: current.check_model,
           default_models: defaultModels,
           routing: routingPayload,
+          providers,
+          embedding_options: (config.embedding_options && typeof config.embedding_options === 'object') ? config.embedding_options : undefined,
           context_max_length: current.context_max_length,
           output_max_tokens: current.output_max_tokens,
           temperature: current.temperature,
@@ -669,36 +705,42 @@ function App() {
           provider: config.provider,
           default_models: config.default_models,
           routing: config.routing,
+          embedding_options: config.embedding_options,
           openai: config.openai,
           anthropic: config.anthropic,
           openrouter: config.openrouter,
           xai: config.xai,
           ollama: config.ollama,
           lmstudio: config.lmstudio,
+          llamacpp: config.llamacpp,
       });
       setConfig((prev) => ({
           ...prev,
           provider: mapped.provider,
           default_models: { ...(prev.default_models || {}), ...(mapped.default_models || {}) },
           routing: mapped.routing || prev.routing,
+          embedding_options: (mapped.embedding_options && typeof mapped.embedding_options === 'object') ? mapped.embedding_options : prev.embedding_options,
           openai: { ...prev.openai, ...mapped.openai },
           anthropic: { ...prev.anthropic, ...mapped.anthropic },
           openrouter: { ...prev.openrouter, ...mapped.openrouter },
           xai: { ...prev.xai, ...mapped.xai },
           ollama: { ...prev.ollama, ...mapped.ollama },
-          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio }
+          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio },
+          llamacpp: { ...prev.llamacpp, ...mapped.llamacpp }
       }));
       setProjectConfig((prev) => ({
           ...prev,
           provider: mapped.provider,
           default_models: { ...(prev.default_models || {}), ...(mapped.default_models || {}) },
           routing: mapped.routing || prev.routing,
+          embedding_options: (mapped.embedding_options && typeof mapped.embedding_options === 'object') ? mapped.embedding_options : prev.embedding_options,
           openai: { ...prev.openai, ...mapped.openai },
           anthropic: { ...prev.anthropic, ...mapped.anthropic },
           openrouter: { ...prev.openrouter, ...mapped.openrouter },
           xai: { ...prev.xai, ...mapped.xai },
           ollama: { ...prev.ollama, ...mapped.ollama },
-          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio }
+          lmstudio: { ...prev.lmstudio, ...mapped.lmstudio },
+          llamacpp: { ...prev.llamacpp, ...mapped.llamacpp }
       }));
       if (mapped[mapped.provider]?.api_key) {
           setConfigured(true);
@@ -819,12 +861,14 @@ function App() {
             provider: config.provider,
             default_models: { ...(config.default_models || {}) },
             routing: { ...(config.routing || {}) },
+            embedding_options: (config.embedding_options && typeof config.embedding_options === 'object') ? config.embedding_options : {},
             openai: { ...config.openai },
             anthropic: { ...config.anthropic },
             openrouter: { ...config.openrouter },
             xai: { ...config.xai },
             ollama: { ...config.ollama },
             lmstudio: { ...config.lmstudio },
+            llamacpp: { ...config.llamacpp },
         }));
         if (!silent) checkApiStatus();
     } catch (err) {
@@ -898,6 +942,7 @@ function App() {
                       settings: {
                           provider: config.provider,
                           model: (config[config.provider] && config[config.provider].model) || '',
+                          llmConfig: getBackendConfig(),
                           toolSettings,
                       },
                   }),
@@ -1045,12 +1090,14 @@ function App() {
               provider,
               default_models: { ...DEFAULT_PROJECT_CONFIG.default_models, ...((cfg.default_models && typeof cfg.default_models === 'object') ? cfg.default_models : {}) },
               routing: (cfg.routing && typeof cfg.routing === 'object') ? cfg.routing : {},
+              embedding_options: (cfg.embedding_options && typeof cfg.embedding_options === 'object') ? cfg.embedding_options : {},
               openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(cfg.openai || {}) },
               anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(cfg.anthropic || {}) },
               openrouter: { ...DEFAULT_PROJECT_CONFIG.openrouter, ...(cfg.openrouter || {}) },
               xai: { ...DEFAULT_PROJECT_CONFIG.xai, ...(cfg.xai || {}) },
               ollama: { ...DEFAULT_PROJECT_CONFIG.ollama, ...(cfg.ollama || {}) },
-              lmstudio: { ...DEFAULT_PROJECT_CONFIG.lmstudio, ...(cfg.lmstudio || {}) }
+              lmstudio: { ...DEFAULT_PROJECT_CONFIG.lmstudio, ...(cfg.lmstudio || {}) },
+              llamacpp: { ...DEFAULT_PROJECT_CONFIG.llamacpp, ...(cfg.llamacpp || {}) }
           });
           setToolSettings((prev) => mergeToolSettings(cfg.toolSettings || prev));
           globalConfigHydratedRef.current = true;
@@ -2072,6 +2119,7 @@ function App() {
           provider: config.provider,
           default_models: { ...(config.default_models || {}) },
           routing: { ...(config.routing || {}) },
+          embedding_options: (config.embedding_options && typeof config.embedding_options === 'object') ? { ...(config.embedding_options || {}) } : {},
           keybindings: { ...(config.keybindings || {}) },
           openai: { ...config.openai },
           anthropic: { ...config.anthropic },
@@ -2079,6 +2127,7 @@ function App() {
           xai: { ...config.xai },
           ollama: { ...config.ollama },
           lmstudio: { ...config.lmstudio },
+          llamacpp: { ...config.llamacpp },
           toolSettings,
           uiDisplayPreferences
       });
@@ -2089,24 +2138,28 @@ function App() {
           const sameProvider = prev.provider === config.provider;
           const sameDefaults = JSON.stringify(prev.default_models) === JSON.stringify(config.default_models);
           const sameRouting = JSON.stringify(prev.routing) === JSON.stringify(config.routing);
+          const sameEmbeddingOptions = JSON.stringify(prev.embedding_options) === JSON.stringify(config.embedding_options);
           const sameOpenai = JSON.stringify(prev.openai) === JSON.stringify(config.openai);
           const sameAnthropic = JSON.stringify(prev.anthropic) === JSON.stringify(config.anthropic);
           const sameOpenrouter = JSON.stringify(prev.openrouter) === JSON.stringify(config.openrouter);
           const sameXai = JSON.stringify(prev.xai) === JSON.stringify(config.xai);
           const sameOllama = JSON.stringify(prev.ollama) === JSON.stringify(config.ollama);
           const sameLmstudio = JSON.stringify(prev.lmstudio) === JSON.stringify(config.lmstudio);
-          if (sameProvider && sameDefaults && sameRouting && sameOpenai && sameAnthropic && sameOpenrouter && sameXai && sameOllama && sameLmstudio) return prev;
+          const sameLlamaCpp = JSON.stringify(prev.llamacpp) === JSON.stringify(config.llamacpp);
+          if (sameProvider && sameDefaults && sameRouting && sameEmbeddingOptions && sameOpenai && sameAnthropic && sameOpenrouter && sameXai && sameOllama && sameLmstudio && sameLlamaCpp) return prev;
           return {
               ...prev,
               provider: config.provider,
               default_models: { ...(config.default_models || {}) },
               routing: { ...(config.routing || {}) },
+              embedding_options: (config.embedding_options && typeof config.embedding_options === 'object') ? { ...(config.embedding_options || {}) } : {},
               openai: { ...config.openai },
               anthropic: { ...config.anthropic },
               openrouter: { ...config.openrouter },
               xai: { ...config.xai },
               ollama: { ...config.ollama },
-              lmstudio: { ...config.lmstudio }
+              lmstudio: { ...config.lmstudio },
+              llamacpp: { ...config.llamacpp }
           };
       });
   }, [config]);

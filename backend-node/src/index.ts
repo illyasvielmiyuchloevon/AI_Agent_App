@@ -29,7 +29,11 @@ app.use(async (req, res, next) => {
     const handle = await workspaceManager.openWorkspace(hint);
     const firstFolder = handle.descriptor.folders[0];
     const rootPath = firstFolder ? firstFolder.path : hint;
-    aiEngine.ensureWorkspaceIndex(rootPath);
+    const body = req.body && typeof req.body === "object" ? req.body : null;
+    const llmConfig = body && typeof (body as any).llmConfig === "object"
+      ? (body as any).llmConfig
+      : (body && typeof (body as any).settings?.llmConfig === "object" ? (body as any).settings.llmConfig : undefined);
+    aiEngine.ensureWorkspaceIndex(rootPath, llmConfig);
     workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
   } catch (e) {
     res.status(400).json({ detail: (e as any)?.message || "Failed to open workspace" });
@@ -253,7 +257,6 @@ app.post("/workspace/bind-root", async (req, res) => {
     const handle = await workspaceManager.openWorkspace(root, { settings: settings && typeof settings === "object" ? settings : {} });
     const firstFolder = handle.descriptor.folders[0];
     const appliedRoot = firstFolder ? firstFolder.path : root;
-    aiEngine.ensureWorkspaceIndex(appliedRoot);
     const dataDir = path.join(appliedRoot, ".aichat");
     const rpc = createWorkspaceRpcEnvelope(handle.descriptor.id, {
       root: appliedRoot,

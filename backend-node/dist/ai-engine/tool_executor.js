@@ -6,10 +6,11 @@ const filesystem_1 = require("../tools/filesystem");
 const shell_1 = require("../tools/shell");
 const screen_capture_1 = require("../tools/screen_capture");
 const desktop_1 = require("../tools/desktop");
+const rag_tools_1 = require("../tools/rag_tools");
 class AiToolExecutor {
     registry;
     tools;
-    constructor() {
+    constructor(opts = {}) {
         this.registry = new tool_registry_1.ToolRegistry();
         this.tools = [
             new filesystem_1.ReadFileTool(),
@@ -26,6 +27,9 @@ class AiToolExecutor {
             new desktop_1.KeyboardControlTool(),
             new desktop_1.MouseControlTool()
         ];
+        if (opts.getRagIndex && opts.getConfig) {
+            this.tools.push(new rag_tools_1.WorkspaceSemanticSearchTool(opts.getRagIndex, opts.getConfig));
+        }
         this.tools.forEach(t => this.registry.register(t));
     }
     async execute(toolName, args, sessionId) {

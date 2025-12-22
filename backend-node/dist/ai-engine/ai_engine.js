@@ -59,8 +59,8 @@ function ensureRequestId(req) {
 }
 function getSystemContextMaxChars(contextMaxLength) {
     const tokens = typeof contextMaxLength === 'number' && Number.isFinite(contextMaxLength) ? contextMaxLength : 128000;
-    const approxChars = Math.floor(tokens * 4 * 0.06);
-    return Math.max(6000, Math.min(18000, approxChars));
+    const approxChars = Math.floor(tokens * 4 * 0.03);
+    return Math.max(6000, Math.min(60000, approxChars));
 }
 function extractQueryTokens(text) {
     const raw = (text || '').toLowerCase();
@@ -250,6 +250,8 @@ function mergeRuntimeConfig(base, llmConfig) {
     const poolIdRaw = typeof llmConfig.pool_id === 'string' ? String(llmConfig.pool_id) : undefined;
     const defaultModelsRaw = llmConfig.default_models;
     const routingRaw = llmConfig.routing;
+    const providersRaw = llmConfig.providers;
+    const embeddingOptionsRaw = llmConfig.embedding_options;
     const next = (0, runtime_config_1.normalizeRuntimeConfig)(base);
     const supportedProviders = new Set(['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp']);
     if (provider && supportedProviders.has(provider))
@@ -268,6 +270,45 @@ function mergeRuntimeConfig(base, llmConfig) {
                 }
             }
         };
+    }
+    if (providersRaw && typeof providersRaw === 'object') {
+        const merged = { ...(next.providers || {}) };
+        for (const [pid, pr] of Object.entries(providersRaw)) {
+            if (!supportedProviders.has(pid))
+                continue;
+            const normalized = (() => {
+                if (!pr || typeof pr !== 'object')
+                    return null;
+                const anyPr = pr;
+                const poolsRaw = anyPr.pools;
+                if (!poolsRaw || typeof poolsRaw !== 'object')
+                    return null;
+                const pools = {};
+                for (const [poolId, poolRaw] of Object.entries(poolsRaw)) {
+                    if (!poolRaw || typeof poolRaw !== 'object')
+                        continue;
+                    const anyPool = poolRaw;
+                    const apiKey = typeof anyPool.apiKey === 'string' ? anyPool.apiKey : (typeof anyPool.api_key === 'string' ? anyPool.api_key : '');
+                    if (!apiKey || apiKey.trim().length === 0)
+                        continue;
+                    const baseUrl = typeof anyPool.baseUrl === 'string' ? anyPool.baseUrl : (typeof anyPool.base_url === 'string' ? anyPool.base_url : undefined);
+                    pools[poolId] = { apiKey, baseUrl };
+                }
+                const poolIds = Object.keys(pools);
+                if (poolIds.length === 0)
+                    return null;
+                const defaultPoolId = typeof anyPr.defaultPoolId === 'string' && poolIds.includes(anyPr.defaultPoolId)
+                    ? anyPr.defaultPoolId
+                    : (typeof anyPr.default_pool_id === 'string' && poolIds.includes(anyPr.default_pool_id) ? anyPr.default_pool_id : poolIds[0]);
+                return { defaultPoolId, pools };
+            })();
+            if (!normalized)
+                continue;
+            const prev = merged[pid];
+            const prevPools = (prev && typeof prev === 'object' && prev.pools && typeof prev.pools === 'object') ? prev.pools : {};
+            merged[pid] = { defaultPoolId: normalized.defaultPoolId, pools: { ...prevPools, ...normalized.pools } };
+        }
+        next.providers = merged;
     }
     if (defaultModelsRaw && typeof defaultModelsRaw === 'object') {
         const incoming = {};
@@ -309,6 +350,20 @@ function mergeRuntimeConfig(base, llmConfig) {
         }
         next.routing = nextRouting;
     }
+    if (embeddingOptionsRaw && typeof embeddingOptionsRaw === 'object') {
+        const anyOpt = embeddingOptionsRaw;
+        const outputDimensions = Number(anyOpt.outputDimensions ?? anyOpt.output_dimensions);
+        const embdNormalize = Number(anyOpt.embdNormalize ?? anyOpt.embd_normalize);
+        const contextMaxLength = Number(anyOpt.contextMaxLength ?? anyOpt.context_max_length);
+        const nextOpt = { ...(next.embeddingOptions || {}) };
+        if (Number.isFinite(outputDimensions) && outputDimensions > 0)
+            nextOpt.outputDimensions = Math.max(32, Math.min(1024, Math.round(outputDimensions)));
+        if (Number.isFinite(embdNormalize))
+            nextOpt.embdNormalize = Math.round(embdNormalize);
+        if (Number.isFinite(contextMaxLength) && contextMaxLength > 0)
+            nextOpt.contextMaxLength = Math.max(1024, Math.min(32768, Math.round(contextMaxLength)));
+        next.embeddingOptions = nextOpt;
+    }
     if (model)
         next.defaultModels = { ...next.defaultModels, general: model };
     return next;
@@ -345,7 +400,10 @@ class AiEngine {
         this.configStore = opts?.configStore || new config_store_1.AiEngineConfigStore();
         this.llmFactory = opts?.llmFactory || new llm_factory_1.LlmClientFactory();
         this.contextManager = opts?.contextManager || new context_manager_1.AiContextManager();
-        this.toolExecutor = opts?.toolExecutor || new tool_executor_1.AiToolExecutor();
+        this.toolExecutor = opts?.toolExecutor || new tool_executor_1.AiToolExecutor({
+            getRagIndex: (root) => this.getOrCreateRagIndex(root),
+            getConfig: () => this.configStore.get()
+        });
         this.metrics = opts?.metrics || new metrics_1.AiEngineMetrics();
     }
     async init() {
@@ -360,6 +418,7 @@ class AiEngine {
         const cfg = mergeRuntimeConfig(baseCfg, llmConfig);
         const embeddingModel = cfg.defaultModels?.embeddings || 'text-embedding-3-small';
         const idx = this.getOrCreateRagIndex(root);
+        idx.setRuntimeConfig(cfg);
         idx.startWatching();
         idx.kickoffInitialRefresh(cfg, embeddingModel);
     }
@@ -618,7 +677,12 @@ class AiEngine {
             return (async function* () {
                 const { client, route } = self.llmFactory.get(target, cfg);
                 const sessionId = req.sessionId;
-                const agent = new agent_1.Agent(client, sessionId, contextMaxLength);
+                const agent = new agent_1.Agent(client, {
+                    sessionId,
+                    contextMaxLength,
+                    getRagIndex: (root) => self.getOrCreateRagIndex(root),
+                    getConfig: () => self.configStore.get()
+                });
                 agent.setMode(req.mode || 'chat', req.toolOverrides);
                 if (!sessionSummaryReady) {
                     sessionSummaryReady = true;

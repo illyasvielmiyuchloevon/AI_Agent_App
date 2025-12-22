@@ -184,6 +184,38 @@ function ConfigPanel({
     }));
   };
 
+  const setRoutingRule = (capability, rule) => {
+    setConfig((prev) => {
+      const routing = (prev.routing && typeof prev.routing === 'object') ? prev.routing : {};
+      const nextRouting = { ...routing };
+      if (!rule) delete nextRouting[capability];
+      else nextRouting[capability] = rule;
+      return { ...prev, routing: nextRouting };
+    });
+  };
+
+  const setEmbeddingOption = (key, value) => {
+    const k = String(key || '').trim();
+    if (!k) return;
+    setConfig((prev) => {
+      const opts = (prev.embedding_options && typeof prev.embedding_options === 'object') ? prev.embedding_options : {};
+      const next = { ...opts };
+      if (value === '' || value == null) delete next[k];
+      else next[k] = value;
+      return { ...prev, embedding_options: next };
+    });
+  };
+
+  const updateFeature = (key, value) => {
+    setConfig((prev) => ({
+      ...prev,
+      features: {
+        ...((prev.features && typeof prev.features === 'object') ? prev.features : {}),
+        [key]: value
+      }
+    }));
+  };
+
   const updateKeybinding = (id, value) => {
     const key = String(id || '').trim();
     if (!key) return;
@@ -209,6 +241,8 @@ function ConfigPanel({
               ? 'http://localhost:11434/v1'
               : currentProvider === 'lmstudio'
                 ? 'http://localhost:1234/v1'
+                : currentProvider === 'llamacpp'
+                  ? 'http://localhost:8080/v1'
                 : '';
 
   const listModelsLabel = language === 'zh' ? '获取模型列表' : 'Fetch models';
@@ -273,6 +307,7 @@ function ConfigPanel({
       { id: 'app', label: language === 'zh' ? '通用' : 'General', icon: GeneralIcon },
       { id: 'appearance', label: language === 'zh' ? '外观' : 'Appearance', icon: PaletteIcon },
       { id: 'general', label: language === 'zh' ? '模型与会话' : 'LLM & Session', icon: SlidersIcon },
+      { id: 'embeddings', label: language === 'zh' ? '向量' : 'Embeddings', icon: SlidersIcon },
       { id: 'shortcuts', label: language === 'zh' ? '快捷键' : 'Shortcuts', icon: MenuIcon },
       { id: 'agent', label: language === 'zh' ? '智能体' : 'Agent', icon: ToolsIcon },
       { id: 'canva', label: language === 'zh' ? '对话流' : 'Canva', icon: ToolsIcon }
@@ -443,6 +478,7 @@ function ConfigPanel({
               <option value="xai">xAI</option>
               <option value="ollama">Ollama</option>
               <option value="lmstudio">LM Studio</option>
+              <option value="llamacpp">Llama.cpp</option>
             </select>
           </SettingRow>
 
@@ -620,14 +656,6 @@ function ConfigPanel({
               onChange={(e) => updateDefaultModel('tools', e.target.value)}
             />
           </SettingRow>
-          <SettingRow title={language === 'zh' ? '向量' : 'Embeddings'} description={language === 'zh' ? '向量模型（可选）' : 'Embeddings model (optional).'}>
-            <input
-              type="text"
-              className="settings-control"
-              value={config?.default_models?.embeddings || ''}
-              onChange={(e) => updateDefaultModel('embeddings', e.target.value)}
-            />
-          </SettingRow>
         </SectionCard>
 
         <div className="settings-group-title">{language === 'zh' ? '会话上下文' : 'Session context'}</div>
@@ -656,6 +684,20 @@ function ConfigPanel({
               defaultValue={128000}
               unit="tk"
               onChange={(val) => updateCurrent('context_max_length', val)}
+            />
+          </SettingRow>
+        </SectionCard>
+
+        <div className="settings-group-title">{language === 'zh' ? '实验性功能' : 'Experimental'}</div>
+        <SectionCard>
+          <SettingRow
+            title={language === 'zh' ? '语义检索 (RAG)' : 'Semantic Search (RAG)'}
+            description={language === 'zh' ? '启用 workspace_semantic_search 工具以支持整个工作区的语义检索' : 'Enable workspace_semantic_search tool for workspace-wide semantic retrieval.'}
+          >
+            <Switch
+              checked={config?.features?.workspaceSemanticSearch !== false}
+              label={language === 'zh' ? '语义检索 (RAG)' : 'Semantic Search (RAG)'}
+              onChange={(next) => updateFeature('workspaceSemanticSearch', next)}
             />
           </SettingRow>
         </SectionCard>
@@ -753,6 +795,192 @@ function ConfigPanel({
     );
   };
 
+  const renderEmbeddingsPage = () => {
+    const pageTitle = language === 'zh' ? '向量' : 'Embeddings';
+    const routing = (config?.routing && typeof config.routing === 'object') ? config.routing : {};
+    const ruleRaw = routing?.embeddings;
+    const rule = (ruleRaw && typeof ruleRaw === 'object') ? ruleRaw : {};
+    const provider = typeof rule.provider === 'string' ? rule.provider : '';
+    const model = typeof rule.model === 'string' ? rule.model : '';
+    const poolId = typeof rule.pool_id === 'string' ? rule.pool_id : (typeof rule.poolId === 'string' ? rule.poolId : '');
+    const opts = (config?.embedding_options && typeof config.embedding_options === 'object') ? config.embedding_options : {};
+    const outputDimensions = opts.output_dimensions ?? opts.outputDimensions ?? '';
+    const embdNormalize = opts.embd_normalize ?? opts.embdNormalize ?? '';
+    const contextMaxLength = opts.context_max_length ?? opts.contextMaxLength ?? 32768;
+    const providerCfg = provider && config?.[provider] ? config[provider] : null;
+    const instances = providerCfg && Array.isArray(providerCfg.instances) ? providerCfg.instances : [];
+
+    return (
+      <>
+        <h1 className="settings-page-title">{pageTitle}</h1>
+        <p className="settings-page-intro">
+          {language === 'zh'
+            ? '配置语义检索/向量化的模型路由与参数。更改会自动保存。'
+            : 'Configure embeddings routing and parameters. Changes auto-save.'}
+        </p>
+
+        <div className="settings-group-title">{language === 'zh' ? '路由' : 'Routing'}</div>
+        <SectionCard>
+          <SettingRow
+            title={language === 'zh' ? 'Provider' : 'Provider'}
+            description={language === 'zh' ? '为空则跟随默认 Provider；也可单独指定用于 Embeddings 的 Provider。' : 'Empty uses default provider. You can override provider for embeddings.'}
+            htmlFor="settings-embeddings-provider"
+          >
+            <select
+              id="settings-embeddings-provider"
+              className="settings-control"
+              value={provider}
+              onChange={(e) => {
+                const nextProvider = e.target.value;
+                if (!nextProvider) {
+                  setRoutingRule('embeddings', null);
+                  return;
+                }
+                const nextPoolId = (() => {
+                  const pc = config?.[nextProvider] || {};
+                  const inst = Array.isArray(pc.instances) ? pc.instances : [];
+                  const active = String(pc.active_instance_id || inst[0]?.id || 'default');
+                  return active;
+                })();
+                setRoutingRule('embeddings', { provider: nextProvider, pool_id: nextPoolId, model: '' });
+              }}
+            >
+              <option value="">{language === 'zh' ? '自动（跟随默认 Provider）' : 'Auto (use default provider)'}</option>
+              <option value="llamacpp">Llama.cpp</option>
+              <option value="ollama">Ollama</option>
+              <option value="lmstudio">LM Studio</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="xai">xAI</option>
+            </select>
+          </SettingRow>
+
+          {provider ? (
+            <SettingRow
+              title={language === 'zh' ? '实例' : 'Instance'}
+              description={language === 'zh' ? '选择 Embeddings 使用的连接实例（pool）。' : 'Select connection instance (pool) for embeddings.'}
+              htmlFor="settings-embeddings-pool"
+            >
+              <select
+                id="settings-embeddings-pool"
+                className="settings-control"
+                value={poolId}
+                onChange={(e) => {
+                  const nextPool = e.target.value;
+                  setRoutingRule('embeddings', { ...rule, provider, pool_id: nextPool });
+                }}
+              >
+                {(instances.length > 0 ? instances : [{ id: 'default', label: 'Default' }]).map((inst) => (
+                  <option key={String(inst?.id)} value={String(inst?.id)}>
+                    {String(inst?.label || inst?.id || 'default')}
+                  </option>
+                ))}
+              </select>
+            </SettingRow>
+          ) : null}
+
+          {provider ? (
+            <SettingRow
+              title={language === 'zh' ? '路由模型（可选）' : 'Routed model (optional)'}
+              description={language === 'zh' ? '仅对 Embeddings 生效；留空则使用下方“默认向量模型”。' : 'Only for embeddings. Empty uses the default embeddings model below.'}
+              htmlFor="settings-embeddings-route-model"
+            >
+              <input
+                id="settings-embeddings-route-model"
+                type="text"
+                className="settings-control"
+                value={model}
+                onChange={(e) => setRoutingRule('embeddings', { ...rule, provider, pool_id: poolId, model: e.target.value })}
+              />
+            </SettingRow>
+          ) : null}
+        </SectionCard>
+
+        <div className="settings-group-title">{language === 'zh' ? '默认模型' : 'Default model'}</div>
+        <SectionCard>
+          <SettingRow
+            title={language === 'zh' ? '默认向量模型（可选）' : 'Default embeddings model (optional)'}
+            description={language === 'zh' ? '不指定路由模型时使用。' : 'Used when no routed model is set.'}
+          >
+            <input
+              type="text"
+              className="settings-control"
+              value={config?.default_models?.embeddings || ''}
+              onChange={(e) => updateDefaultModel('embeddings', e.target.value)}
+            />
+          </SettingRow>
+        </SectionCard>
+
+        <div className="settings-group-title">{language === 'zh' ? '参数' : 'Parameters'}</div>
+        <SectionCard>
+          <SettingRow
+            title={language === 'zh' ? 'Context Length（最大 32k）' : 'Context length (max 32k)'}
+            description={language === 'zh' ? 'Qwen/Qwen3-Embedding-0.6B-GGUF 最大 Context Length 为 32k。' : 'Qwen/Qwen3-Embedding-0.6B-GGUF max context length is 32k.'}
+          >
+            <input
+              type="number"
+              className="settings-control"
+              value={contextMaxLength}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') return;
+                const n = Number(raw);
+                if (!Number.isFinite(n)) return;
+                setEmbeddingOption('context_max_length', Math.max(1024, Math.min(32768, Math.round(n))));
+              }}
+              min={1024}
+              max={32768}
+              step={256}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? 'Embedding Dimension（32–1024，可选）' : 'Embedding dimension (32–1024, optional)'}
+            description={language === 'zh' ? '等同于 output_dimensions；部分 OpenAI 兼容服务支持通过 dimensions 指定输出维度。' : 'Same as output_dimensions; some OpenAI-compatible providers support setting dimensions.'}
+          >
+            <input
+              type="number"
+              className="settings-control"
+              value={outputDimensions}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') setEmbeddingOption('output_dimensions', '');
+                else {
+                  const n = Number(raw);
+                  if (Number.isFinite(n)) setEmbeddingOption('output_dimensions', Math.max(32, Math.min(1024, Math.round(n))));
+                }
+              }}
+              min={32}
+              max={1024}
+              step={1}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? '归一化（Llama.cpp，可选）' : 'Normalize (Llama.cpp, optional)'}
+            description={language === 'zh' ? '传递给 llama.cpp 的 embd_normalize（通常 0/1）。' : 'Passed to llama.cpp as embd_normalize (usually 0/1).'}
+          >
+            <input
+              type="number"
+              className="settings-control"
+              value={embdNormalize}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') setEmbeddingOption('embd_normalize', '');
+                else {
+                  const n = Number(raw);
+                  if (Number.isFinite(n)) setEmbeddingOption('embd_normalize', Math.round(n));
+                }
+              }}
+              step={1}
+            />
+          </SettingRow>
+        </SectionCard>
+      </>
+    );
+  };
+
   const renderShortcutsPage = () => {
     const pageTitle = language === 'zh' ? '快捷键' : 'Shortcuts';
     const rows = [
@@ -836,6 +1064,8 @@ function ConfigPanel({
         ? renderAppearancePage()
         : activeTab === 'general'
           ? renderModelPage()
+          : activeTab === 'embeddings'
+            ? renderEmbeddingsPage()
           : activeTab === 'shortcuts'
             ? renderShortcutsPage()
           : activeTab === 'agent'

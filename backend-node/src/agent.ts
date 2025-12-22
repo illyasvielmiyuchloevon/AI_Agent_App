@@ -7,6 +7,9 @@ import { ReadFileTool, WriteFileTool, ListFilesTool, EditFileTool, CreateFolderT
 import { ExecuteShellTool } from './tools/shell';
 import { ScreenCaptureTool } from './tools/screen_capture';
 import { KeyboardControlTool, MouseControlTool } from './tools/desktop';
+import { WorkspaceSemanticSearchTool } from './tools/rag_tools';
+import { RagIndex } from './ai-engine/rag_index';
+import { AiEngineRuntimeConfig } from './ai-engine/runtime_config';
 
 let cachedEncoder: any = null;
 let cachedEncoderTried = false;
@@ -37,6 +40,13 @@ function getOptionalEncoder() {
     return cachedEncoder;
 }
 
+export interface AgentOptions {
+    sessionId?: string;
+    contextMaxLength?: number;
+    getRagIndex?: (root: string) => RagIndex;
+    getConfig?: () => AiEngineRuntimeConfig;
+}
+
 export class Agent {
     private llm: LLMClient;
     private sessionId?: string;
@@ -53,11 +63,12 @@ export class Agent {
     private fileTools: BaseTool[];
     private shellTool: BaseTool;
     private agentTools: BaseTool[];
+    private ragTool?: WorkspaceSemanticSearchTool;
 
-    constructor(llm: LLMClient, sessionId?: string, contextMaxLength: number = 128000) {
+    constructor(llm: LLMClient, opts: AgentOptions = {}) {
         this.llm = llm;
-        this.sessionId = sessionId;
-        this.contextMaxLength = contextMaxLength;
+        this.sessionId = opts.sessionId;
+        this.contextMaxLength = opts.contextMaxLength || 128000;
         this.registry = new ToolRegistry();
         
         this.fileTools = [
@@ -73,6 +84,13 @@ export class Agent {
         ];
         this.shellTool = new ExecuteShellTool();
         
+        if (opts.getRagIndex && opts.getConfig) {
+            const cfg = opts.getConfig();
+            if (cfg.features?.workspaceSemanticSearch !== false) {
+                this.ragTool = new WorkspaceSemanticSearchTool(opts.getRagIndex, opts.getConfig);
+            }
+        }
+
         // Agent tools include file tools, shell, and desktop control/capture
         this.agentTools = [
             ...this.fileTools, 
@@ -82,12 +100,16 @@ export class Agent {
             new MouseControlTool()
         ];
 
+        if (this.ragTool) {
+            this.agentTools.push(this.ragTool);
+        }
+
         // Register all tools
         this.agentTools.forEach(tool => this.registry.register(tool));
         // Enable verbose logging for debugging tool execution paths
         this.registry.debugMode = true;
 
-        if (sessionId) {
+        if (this.sessionId) {
             this.loadHistory();
         }
     }
@@ -121,6 +143,9 @@ export class Agent {
         } else if (mode === 'canva') {
             // Canva mode still needs shell for quick builds/verification
             activeTools = [...this.fileTools, this.shellTool];
+            if (this.ragTool) {
+                activeTools.push(this.ragTool);
+            }
         }
         
         if (enabledTools && enabledTools.length > 0) {

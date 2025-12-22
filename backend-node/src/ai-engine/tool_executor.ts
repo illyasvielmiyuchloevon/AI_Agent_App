@@ -14,12 +14,20 @@ import {
 import { ExecuteShellTool } from '../tools/shell';
 import { ScreenCaptureTool } from '../tools/screen_capture';
 import { KeyboardControlTool, MouseControlTool } from '../tools/desktop';
+import { WorkspaceSemanticSearchTool } from '../tools/rag_tools';
+import { RagIndex } from './rag_index';
+import { AiEngineRuntimeConfig } from './runtime_config';
+
+export interface AiToolExecutorOptions {
+  getRagIndex?: (root: string) => RagIndex;
+  getConfig?: () => AiEngineRuntimeConfig;
+}
 
 export class AiToolExecutor {
   private registry: ToolRegistry;
   private tools: BaseTool[];
 
-  constructor() {
+  constructor(opts: AiToolExecutorOptions = {}) {
     this.registry = new ToolRegistry();
     this.tools = [
       new ReadFileTool(),
@@ -36,6 +44,11 @@ export class AiToolExecutor {
       new KeyboardControlTool(),
       new MouseControlTool()
     ];
+
+    if (opts.getRagIndex && opts.getConfig) {
+      this.tools.push(new WorkspaceSemanticSearchTool(opts.getRagIndex, opts.getConfig));
+    }
+
     this.tools.forEach(t => this.registry.register(t));
   }
 

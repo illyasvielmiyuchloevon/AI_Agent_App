@@ -64,7 +64,11 @@ app.use(async (req, res, next) => {
         const handle = await manager_1.workspaceManager.openWorkspace(hint);
         const firstFolder = handle.descriptor.folders[0];
         const rootPath = firstFolder ? firstFolder.path : hint;
-        aiEngine.ensureWorkspaceIndex(rootPath);
+        const body = req.body && typeof req.body === "object" ? req.body : null;
+        const llmConfig = body && typeof body.llmConfig === "object"
+            ? body.llmConfig
+            : (body && typeof body.settings?.llmConfig === "object" ? body.settings.llmConfig : undefined);
+        aiEngine.ensureWorkspaceIndex(rootPath, llmConfig);
         context_1.workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
     }
     catch (e) {
@@ -290,7 +294,6 @@ app.post("/workspace/bind-root", async (req, res) => {
         const handle = await manager_1.workspaceManager.openWorkspace(root, { settings: settings && typeof settings === "object" ? settings : {} });
         const firstFolder = handle.descriptor.folders[0];
         const appliedRoot = firstFolder ? firstFolder.path : root;
-        aiEngine.ensureWorkspaceIndex(appliedRoot);
         const dataDir = path_1.default.join(appliedRoot, ".aichat");
         const rpc = (0, rpc_1.createWorkspaceRpcEnvelope)(handle.descriptor.id, {
             root: appliedRoot,

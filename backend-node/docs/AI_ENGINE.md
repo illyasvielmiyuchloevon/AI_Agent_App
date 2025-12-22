@@ -63,6 +63,85 @@ AI Engine 的边界：
 - `getWorkspaceRoot()`（`backend-node/src/context.ts`）读取
 - 工具系统和 AI Engine 的上下文构建使用
 
+### 3.3 上下文系统（Context System）
+
+本项目里的“上下文系统”包含两层含义：
+- LLM 的上下文窗口（token window）：由 `context_max_length` 控制，决定“整轮对话 + system prompt + tool 结果 + RAG 片段”等消息历史可保留的上限。
+- 业务侧的上下文构建（context building）：将 IDE/Workspace 信息（当前文件、项目结构、RAG 命中片段等）组织到对话消息里，以提升模型对工程环境的感知。
+
+#### 3.3.1 上下文在消息中的位置
+
+不同能力（capability）把“上下文”放到不同的消息位置：
+
+- Chat（`POST /ai/chat/stream` → `AiEngine.chatStream`）
+  - system message：`systemPrompt + systemContext`
+    - `systemPrompt`：由 mode 决定（`backend-node/src/core/prompts.ts` → `getPrompt()`）
+    - `systemContext`：由后端拼接的 addendum（见下文“组成部分”），通过 `Agent.setSystemContext()` 注入（`backend-node/src/agent.ts:178-181`）
+  - user message：用户输入 `req.message`
+  - tool message：工具执行结果（role=`tool`）以消息形式追加到历史中（`backend-node/src/agent.ts:373-382`）
+
+- Editor Action（`POST /ai/editorAction` → `AiEngine.editorAction`）
+  - system message：固定指令（`You are an IDE editor assistant...`）
+  - user message：由 `buildSystemContext()` 生成的摘要 + `Visible text:\n${req.editor.visibleText}` 拼接而成（`backend-node/src/ai-engine/ai_engine.ts:819-825`）
+  - 说明：这里的“文件可见文本”不是 system context，而是放在 user message 里，避免 system message 过长且更贴近“输入材料”语义。
+
+- Inline（`POST /ai/inline` → `AiEngine.inline`）
+  - 与 editorAction 类似，只是 prompt 更偏向补全，并且 `maxChars` 更小（`backend-node/src/ai-engine/ai_engine.ts:785-791`）。
+
+#### 3.3.2 Chat 的 systemContext 组成
+
+Chat 流式链路里，systemContext 由三块拼接（`backend-node/src/ai-engine/ai_engine.ts:693-699`）：
+- Session summary：当历史消息超过 20 条时，取“更早的消息”生成摘要并缓存（`backend-node/src/ai-engine/context_manager.ts:100-134`），最终以 `Session summary:\n...` 形式注入到 systemContext。
+- RAG addendum：当开启 RAG 时，把向量检索到的代码片段作为“Retrieved snippets”注入到 systemContext（`backend-node/src/ai-engine/ai_engine.ts:669-690`）。
+- Context addendum：IDE/Workspace 上下文摘要（`AiContextManager.buildSystemContext`），包含活动文件信息、选择区、selectedText 片段、file outline、project structure snapshot 等（`backend-node/src/ai-engine/context_manager.ts:68-98`）。
+
+最终合成顺序为：Session summary → RAG addendum → Context addendum。
+
+#### 3.3.3 读取的文件内容放在哪里？
+
+取决于“哪一种读取方式”：
+- 用户在编辑器里的“可见文本”（`editor.visibleText`）
+  - Chat：不会自动把整段 `visibleText` 塞进 system context（`AiContextManager` 只用它生成 outline；`selectedText` 才会以片段形式进入 system context）。
+  - EditorAction/Inline：会把 `visibleText` 明确拼到 user message（`backend-node/src/ai-engine/ai_engine.ts:787-791`、`819-825`）。
+- 工具读取的文件内容（例如 `read_file`、`search_in_files`、`get_current_project_structure` 的内容片段）
+  - 工具输出会作为 role=`tool` 的消息追加到 history（`backend-node/src/agent.ts:373-382`），属于“对话历史上下文”的一部分。
+  - Anthropic 兼容：tool message 会被映射成 `tool_result` block（`backend-node/src/core/llm.ts:347-409` 附近）。
+- RAG 检索命中的代码片段
+  - RAG addendum 是把“片段文本 + file:line range”拼成字符串，再注入 systemContext（`backend-node/src/ai-engine/rag_index.ts:309-321`）。
+
+#### 3.3.4 工具执行结果放在哪里？
+
+工具执行结果不放在 systemContext，而是放在消息历史里：
+- LLM 返回 `tool_calls`（OpenAI 风格 function call）后，`Agent` 逐个执行工具（`backend-node/src/agent.ts:318-382`）。
+- 每次执行结果都会写入一条 role=`tool` 的消息，字段包含：
+  - `tool_call_id`：关联到对应 tool call
+  - `name`：工具名
+  - `content`：序列化后的 JSON 字符串（`backend-node/src/agent.ts:370-378`）
+
+因此“工具结果”属于可被 `trimHistory()` 管理的历史消息内容（`backend-node/src/agent.ts:242-269`），会随上下文窗口大小被保留/裁剪。
+
+#### 3.3.5 RAG 构建的提示词放在哪里？
+
+这里有两种形态：
+- Chat 自动 RAG addendum（非工具调用）
+  - `RagIndex.buildAddendum()` 会返回 `Relevant code snippets (retrieved): ...` 的纯文本（`backend-node/src/ai-engine/rag_index.ts:309-321`）
+  - 该文本被注入到 systemContext（`backend-node/src/ai-engine/ai_engine.ts:693-699`），因此它是 system message 的一部分。
+- Agent 工具式 RAG（Workspace Semantic Search Tool）
+  - `WorkspaceSemanticSearchTool` 是一个工具（`backend-node/src/tools/rag_tools.ts`），执行结果以 role=`tool` 形式进入历史消息（同“工具执行结果”）。
+
+#### 3.3.6 上下文预算与裁剪策略
+
+系统主要有两类“预算/裁剪”：
+- systemContext 的字符预算（避免 system message 过大）
+  - Chat 里 `context_max_length`（tokens）会换算出 `systemContext` 的字符上限：
+    - `approxChars = floor(context_max_length * 4 * 0.03)`（约占上下文窗口 3%）
+    - 再做夹取：`max(6000, min(60000, approxChars))`
+    - 实现：`backend-node/src/ai-engine/ai_engine.ts:getSystemContextMaxChars`
+  - `AiContextManager.buildSystemContext()` 内部也会对最终拼接内容 `clip(..., maxChars)`（`backend-node/src/ai-engine/context_manager.ts:19-23`、`68-98`）。
+- 历史消息裁剪（保证总 token 不超过窗口）
+  - `Agent` 会根据 `contextMaxLength`（来自 `llmConfig.context_max_length`）估算 token 并裁剪历史（`backend-node/src/agent.ts:242-269`）。
+  - 裁剪策略是：保留 system message，然后从最新消息向前保留，直到触达上限。
+
 ## 4. 配置体系
 
 AI Engine 配置分两层：
