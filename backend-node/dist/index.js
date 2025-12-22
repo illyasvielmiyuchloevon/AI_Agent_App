@@ -50,6 +50,8 @@ const ai_engine_1 = require("./ai-engine");
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+const aiEngine = new ai_engine_1.AiEngine();
+(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.use(async (req, res, next) => {
     const headerId = req.headers["x-workspace-id"];
     const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
@@ -62,14 +64,13 @@ app.use(async (req, res, next) => {
         const handle = await manager_1.workspaceManager.openWorkspace(hint);
         const firstFolder = handle.descriptor.folders[0];
         const rootPath = firstFolder ? firstFolder.path : hint;
+        aiEngine.ensureWorkspaceIndex(rootPath);
         context_1.workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
     }
     catch (e) {
         res.status(400).json({ detail: e?.message || "Failed to open workspace" });
     }
 });
-const aiEngine = new ai_engine_1.AiEngine();
-(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
     // Check config
@@ -267,7 +268,12 @@ app.post("/workspaces/close", async (req, res) => {
             res.status(400).json({ detail: "Workspace id is required" });
             return;
         }
+        const handle = manager_1.workspaceManager.getWorkspace(String(id));
         await manager_1.workspaceManager.closeWorkspace(String(id));
+        const root = handle?.descriptor?.folders?.[0]?.path;
+        if (root) {
+            await aiEngine.disposeWorkspaceIndex(root);
+        }
         res.json({ id: String(id), status: "closed" });
     }
     catch (e) {
@@ -284,6 +290,7 @@ app.post("/workspace/bind-root", async (req, res) => {
         const handle = await manager_1.workspaceManager.openWorkspace(root, { settings: settings && typeof settings === "object" ? settings : {} });
         const firstFolder = handle.descriptor.folders[0];
         const appliedRoot = firstFolder ? firstFolder.path : root;
+        aiEngine.ensureWorkspaceIndex(appliedRoot);
         const dataDir = path_1.default.join(appliedRoot, ".aichat");
         const rpc = (0, rpc_1.createWorkspaceRpcEnvelope)(handle.descriptor.id, {
             root: appliedRoot,
@@ -337,6 +344,26 @@ app.post("/workspace/search", async (req, res) => {
         res.status(400).json({ detail: e.message });
     }
 });
+app.post("/workspace/notify-changed", async (req, res) => {
+    try {
+        const root = (0, context_1.getWorkspaceRoot)();
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const paths = Array.isArray(body.paths) ? body.paths : null;
+        const single = typeof body.path === "string" ? body.path : "";
+        const list = paths ? paths.filter((p) => typeof p === "string" && p.trim().length > 0) : (single ? [single] : []);
+        if (list.length === 0) {
+            res.status(400).json({ detail: "path or paths is required" });
+            return;
+        }
+        for (const p of list) {
+            aiEngine.notifyWorkspaceFileChanged(root, String(p));
+        }
+        res.json({ status: "ok", count: list.length });
+    }
+    catch (e) {
+        res.status(400).json({ detail: e.message });
+    }
+});
 app.get("/workspace/read", async (req, res) => {
     try {
         const root = (0, context_1.getWorkspaceRoot)();
@@ -367,6 +394,7 @@ app.post("/workspace/write", async (req, res) => {
             await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
         }
         await promises_1.default.writeFile(fullPath, content || "", "utf-8");
+        aiEngine.notifyWorkspaceFileChanged(root, String(relativePath || ""));
         const afterSnapshot = await (0, diffs_1.takeSnapshot)(relativePath);
         try {
             await (0, diffs_1.persistDiffSafely)({
@@ -423,6 +451,7 @@ app.post("/workspace/delete", async (req, res) => {
         else {
             await promises_1.default.unlink(fullPath);
         }
+        aiEngine.notifyWorkspaceFileChanged(root, String(rel || ""));
         res.json({ status: "ok", path: rel, existed: true });
     }
     catch (e) {
@@ -448,6 +477,8 @@ app.post("/workspace/rename", async (req, res) => {
         }
         await promises_1.default.mkdir(path_1.default.dirname(toPath), { recursive: true });
         await promises_1.default.rename(fromPath, toPath);
+        aiEngine.notifyWorkspaceFileChanged(root, String(from || ""));
+        aiEngine.notifyWorkspaceFileChanged(root, String(to || ""));
         res.json({ status: "ok", from, to });
     }
     catch (e) {
@@ -462,44 +493,6 @@ function parsePort(value, fallback) {
     if (p < 1 || p > 65535)
         return fallback;
     return p;
-}
-async function fileExists(p) {
-    try {
-        const st = await promises_1.default.stat(p);
-        return st.isFile();
-    }
-    catch {
-        return false;
-    }
-}
-async function pickFirstExistingFile(candidates) {
-    for (const p of candidates) {
-        if (!p)
-            continue;
-        if (await fileExists(p))
-            return p;
-    }
-    return "";
-}
-async function ensureEmbeddingDependencies() {
-    const envBaseUrl = (process.env.LLAMACPP_EMBEDDINGS_BASE_URL || "").trim();
-    if (envBaseUrl)
-        return;
-    const envBin = (process.env.LLAMACPP_SERVER_BIN || "").trim();
-    const envModelPath = (process.env.LLAMACPP_MODEL_PATH || "").trim();
-    const defaultHipBin = path_1.default.resolve(process.cwd(), "llama.cpp", "build-hip", "bin", "llama-server.exe");
-    const defaultCpuBin = path_1.default.resolve(process.cwd(), "llama.cpp", "build", "bin", "llama-server.exe");
-    const defaultModelPath = path_1.default.resolve(process.cwd(), "models", "qwen3-embedding-0.6b", "Qwen3-Embedding-0.6B-Q8_0.gguf");
-    const modelPath = await pickFirstExistingFile([envModelPath, defaultModelPath]);
-    if (!modelPath) {
-        console.error(`[Embeddings] Model file not found. Set LLAMACPP_MODEL_PATH or place the default model at: ${defaultModelPath}`);
-        process.exit(1);
-    }
-    const bin = await pickFirstExistingFile([envBin, defaultHipBin, defaultCpuBin]);
-    if (!bin) {
-        console.error(`[Embeddings] llama.cpp server binary not found. Set LLAMACPP_SERVER_BIN or build one of: ${defaultHipBin} / ${defaultCpuBin}`);
-        process.exit(1);
-    }
 }
 async function isExistingBackend(port) {
     const controller = new AbortController();
@@ -520,35 +513,28 @@ async function isExistingBackend(port) {
         clearTimeout(t);
     }
 }
-async function main() {
-    await ensureEmbeddingDependencies();
-    const PORT = parsePort(process.env.AI_AGENT_BACKEND_PORT || process.env.PORT, 8000);
-    const server = app.listen(PORT);
-    server.once("listening", () => {
-        console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);
-        aiEngine.init().catch((e) => {
-            console.error(`[AIEngine] init failed: ${e?.message || e}`);
-        });
+const PORT = parsePort(process.env.AI_AGENT_BACKEND_PORT || process.env.PORT, 8000);
+const server = app.listen(PORT);
+server.once('listening', () => {
+    console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);
+    aiEngine.init().catch((e) => {
+        console.error(`[AIEngine] init failed: ${e?.message || e}`);
     });
-    server.on("error", (err) => {
-        if (err && err.code === "EADDRINUSE") {
-            void (async () => {
-                const ok = await isExistingBackend(PORT);
-                if (ok) {
-                    console.log(`Node.js Agent Backend already running on http://localhost:${PORT}`);
-                    setInterval(() => { }, 60_000);
-                    return;
-                }
-                console.error(`Error: listen EADDRINUSE: address already in use :::${PORT}`);
-                process.exit(1);
-            })();
-            return;
-        }
-        console.error(err);
-        process.exit(1);
-    });
-}
-void main().catch((e) => {
-    console.error(e?.message || e);
+});
+server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+        void (async () => {
+            const ok = await isExistingBackend(PORT);
+            if (ok) {
+                console.log(`Node.js Agent Backend already running on http://localhost:${PORT}`);
+                setInterval(() => { }, 60_000);
+                return;
+            }
+            console.error(`Error: listen EADDRINUSE: address already in use :::${PORT}`);
+            process.exit(1);
+        })();
+        return;
+    }
+    console.error(err);
     process.exit(1);
 });

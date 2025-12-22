@@ -14,6 +14,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const aiEngine = new AiEngine();
+registerAiEngineRoutes(app, aiEngine);
+
 app.use(async (req, res, next) => {
   const headerId = req.headers["x-workspace-id"];
   const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
@@ -26,14 +29,12 @@ app.use(async (req, res, next) => {
     const handle = await workspaceManager.openWorkspace(hint);
     const firstFolder = handle.descriptor.folders[0];
     const rootPath = firstFolder ? firstFolder.path : hint;
+    aiEngine.ensureWorkspaceIndex(rootPath);
     workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
   } catch (e) {
     res.status(400).json({ detail: (e as any)?.message || "Failed to open workspace" });
   }
 });
-
-const aiEngine = new AiEngine();
-registerAiEngineRoutes(app, aiEngine);
 
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
@@ -230,7 +231,12 @@ app.post("/workspaces/close", async (req, res) => {
       res.status(400).json({ detail: "Workspace id is required" });
       return;
     }
+    const handle = workspaceManager.getWorkspace(String(id));
     await workspaceManager.closeWorkspace(String(id));
+    const root = handle?.descriptor?.folders?.[0]?.path;
+    if (root) {
+      await aiEngine.disposeWorkspaceIndex(root);
+    }
     res.json({ id: String(id), status: "closed" });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
@@ -247,6 +253,7 @@ app.post("/workspace/bind-root", async (req, res) => {
     const handle = await workspaceManager.openWorkspace(root, { settings: settings && typeof settings === "object" ? settings : {} });
     const firstFolder = handle.descriptor.folders[0];
     const appliedRoot = firstFolder ? firstFolder.path : root;
+    aiEngine.ensureWorkspaceIndex(appliedRoot);
     const dataDir = path.join(appliedRoot, ".aichat");
     const rpc = createWorkspaceRpcEnvelope(handle.descriptor.id, {
       root: appliedRoot,
@@ -302,6 +309,26 @@ app.post("/workspace/search", async (req, res) => {
   }
 });
 
+app.post("/workspace/notify-changed", async (req, res) => {
+  try {
+    const root = getWorkspaceRoot();
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const paths = Array.isArray((body as any).paths) ? (body as any).paths : null;
+    const single = typeof (body as any).path === "string" ? (body as any).path : "";
+    const list = paths ? paths.filter((p: any) => typeof p === "string" && p.trim().length > 0) : (single ? [single] : []);
+    if (list.length === 0) {
+      res.status(400).json({ detail: "path or paths is required" });
+      return;
+    }
+    for (const p of list) {
+      aiEngine.notifyWorkspaceFileChanged(root, String(p));
+    }
+    res.json({ status: "ok", count: list.length });
+  } catch (e: any) {
+    res.status(400).json({ detail: e.message });
+  }
+});
+
 app.get("/workspace/read", async (req, res) => {
   try {
     const root = getWorkspaceRoot();
@@ -332,6 +359,7 @@ app.post("/workspace/write", async (req, res) => {
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
     }
     await fs.writeFile(fullPath, content || "", "utf-8");
+    aiEngine.notifyWorkspaceFileChanged(root, String(relativePath || ""));
     const afterSnapshot = await takeSnapshot(relativePath);
     try {
       await persistDiffSafely({
@@ -385,6 +413,7 @@ app.post("/workspace/delete", async (req, res) => {
     } else {
       await fs.unlink(fullPath);
     }
+    aiEngine.notifyWorkspaceFileChanged(root, String(rel || ""));
     res.json({ status: "ok", path: rel, existed: true });
   } catch (e: any) {
     res.status(400).json({ detail: e.message });
@@ -410,6 +439,8 @@ app.post("/workspace/rename", async (req, res) => {
     }
     await fs.mkdir(path.dirname(toPath), { recursive: true });
     await fs.rename(fromPath, toPath);
+    aiEngine.notifyWorkspaceFileChanged(root, String(from || ""));
+    aiEngine.notifyWorkspaceFileChanged(root, String(to || ""));
     res.json({ status: "ok", from, to });
   } catch (e: any) {
     res.status(400).json({ detail: e.message });

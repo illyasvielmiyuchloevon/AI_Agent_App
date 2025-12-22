@@ -29,6 +29,7 @@ import { AiToolExecutor } from './tool_executor';
 import { normalizeRuntimeConfig, AiEngineRuntimeConfig } from './runtime_config';
 import { getWorkspaceRoot } from '../context';
 import { getProjectStructure } from '../tools/filesystem';
+import { RagIndex } from './rag_index';
 
 function ensureRequestId(req: AiEngineRequest) {
   return req.requestId && req.requestId.trim().length > 0 ? req.requestId : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -316,6 +317,7 @@ export class AiEngine {
   private llamaServerShuttingDown = false;
   private llamaServerRestartTimer: NodeJS.Timeout | null = null;
   private llamaServerRestartAttempts = 0;
+  private ragIndexesByRoot = new Map<string, RagIndex>();
 
   constructor(opts?: {
     configStore?: AiEngineConfigStore;
@@ -336,6 +338,34 @@ export class AiEngine {
     await this.configStore.loadOnce();
     await this.maybeStartLlamaCppEmbeddingServer();
     this.configStore.startWatching();
+  }
+
+  ensureWorkspaceIndex(rootPath: string, llmConfig?: Record<string, unknown>) {
+    const root = path.resolve(String(rootPath || ''));
+    const baseCfg = this.configStore.get();
+    const cfg = mergeRuntimeConfig(baseCfg, llmConfig);
+    const embeddingModel = cfg.defaultModels?.embeddings || 'text-embedding-3-small';
+    const idx = this.getOrCreateRagIndex(root);
+    idx.startWatching();
+    idx.kickoffInitialRefresh(cfg, embeddingModel);
+  }
+
+  notifyWorkspaceFileChanged(rootPath: string, relPath: string, llmConfig?: Record<string, unknown>) {
+    const root = path.resolve(String(rootPath || ''));
+    const baseCfg = this.configStore.get();
+    const cfg = mergeRuntimeConfig(baseCfg, llmConfig);
+    const idx = this.getOrCreateRagIndex(root);
+    idx.setRuntimeConfig(cfg);
+    idx.startWatching();
+    idx.notifyFileChanged(root, relPath);
+  }
+
+  async disposeWorkspaceIndex(rootPath: string) {
+    const root = path.resolve(String(rootPath || ''));
+    const idx = this.ragIndexesByRoot.get(root);
+    if (!idx) return;
+    this.ragIndexesByRoot.delete(root);
+    await idx.dispose();
   }
 
   getMetrics() {
@@ -591,13 +621,14 @@ export class AiEngine {
             })();
             if (root) {
               const maxChars = Math.max(1500, Math.min(5000, Math.floor(getSystemContextMaxChars(contextMaxLength) * 0.4)));
-              ragAddendum = await buildRagAddendum({
-                root,
+              const embeddingModel = (req.llmConfig as any)?.rag_embedding_model || cfg.defaultModels?.embeddings || 'text-embedding-3-small';
+              const idx = self.getOrCreateRagIndex(root);
+              ragAddendum = await idx.buildAddendum({
                 query: req.message || '',
-                editorFilePath: req.editor?.filePath,
                 cfg,
+                embeddingModel,
                 maxChars,
-                embeddingModel: (req.llmConfig as any)?.rag_embedding_model
+                topK: 4
               });
             }
           }
@@ -675,6 +706,15 @@ export class AiEngine {
         );
       }
     }
+  }
+
+  private getOrCreateRagIndex(rootPath: string) {
+    const root = path.resolve(String(rootPath || ''));
+    const existing = this.ragIndexesByRoot.get(root);
+    if (existing) return existing;
+    const created = new RagIndex(root);
+    this.ragIndexesByRoot.set(root, created);
+    return created;
   }
 
   async inline(req: AiInlineRequest): Promise<AiInlineResponse> {
