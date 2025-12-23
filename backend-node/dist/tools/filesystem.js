@@ -212,8 +212,8 @@ class ReadFileTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, _context = {}) {
         console.log(`[Filesystem] ReadFileTool: ${args.path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             const content = await promises_1.default.readFile(fullPath, 'utf-8');
             console.log(`[Filesystem] Read success: ${args.path} (${content.length} chars)`);
@@ -244,8 +244,8 @@ class WriteFileTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, context = {}) {
         console.log(`[Filesystem] WriteFileTool: ${args.path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
             if (args.create_directories !== false) {
                 await promises_1.default.mkdir(path_1.default.dirname(fullPath), { recursive: true });
@@ -332,8 +332,8 @@ class EditFileTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, context = {}) {
         console.log(`[Filesystem] EditFileTool: ${args.path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             const beforeSnapshot = await (0, diffs_1.takeSnapshot)(args.path);
             let content = await promises_1.default.readFile(fullPath, 'utf-8');
@@ -526,12 +526,12 @@ class ListFilesTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, _context = {}) {
         console.log(`[Filesystem] ListFilesTool: ${args.path || '.'}`);
-        const root = (0, context_1.getWorkspaceRoot)();
-        const handle = manager_1.workspaceManager.getWorkspaceByRoot(root);
-        const folders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
-            ? handle.descriptor.folders
-            : [{ path: root }];
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
+            const handle = manager_1.workspaceManager.getWorkspaceByRoot(root);
+            const folders = handle && handle.descriptor && handle.descriptor.folders && handle.descriptor.folders.length > 0
+                ? handle.descriptor.folders
+                : [{ path: root }];
             const entries = [];
             if (args.path) {
                 const { fullPath, rootPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
@@ -573,8 +573,8 @@ class CreateFolderTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, _context = {}) {
         console.log(`[Filesystem] CreateFolderTool: ${args.path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: false, preferExistingParent: true });
             await promises_1.default.mkdir(fullPath, { recursive: true });
             return { status: "ok", path: args.path, created: true };
@@ -598,8 +598,8 @@ class DeleteFileTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, context = {}) {
         console.log(`[Filesystem] DeleteFileTool: ${args.path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath } = await resolveWorkspaceFilePath(root, args.path, { mustExist: true });
             let shouldCapture = false;
             try {
@@ -641,8 +641,8 @@ class RenameFileTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, context = {}) {
         console.log(`[Filesystem] RenameFileTool: ${args.old_path} -> ${args.new_path}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const { fullPath: oldFullPath, rootPath } = await resolveWorkspaceFilePath(root, args.old_path, { mustExist: true });
             const newFullPath = path_1.default.resolve(rootPath, args.new_path);
             const rootLower = rootPath.toLowerCase();
@@ -703,8 +703,8 @@ class SearchInFilesTool extends base_tool_1.BaseToolImplementation {
     };
     async execute(args, _context = {}) {
         console.log(`[Filesystem] SearchInFilesTool: ${args.query} in ${args.path || args.paths?.join(',') || args.files?.join(',') || '.'}`);
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const results = [];
             const MAX_RESULTS = args.max_results || 200;
             const context = args.context_lines ?? 2;
@@ -816,8 +816,8 @@ class ProjectStructureTool extends base_tool_1.BaseToolImplementation {
         required: []
     };
     async execute(args, _context = {}) {
-        const root = (0, context_1.getWorkspaceRoot)();
         try {
+            const root = (0, context_1.getWorkspaceRoot)();
             const structure = await getProjectStructure(root);
             if (args.include_content) {
                 const filesWithContent = [];

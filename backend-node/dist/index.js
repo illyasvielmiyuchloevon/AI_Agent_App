@@ -51,19 +51,21 @@ const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 const aiEngine = new ai_engine_1.AiEngine();
-(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.use(async (req, res, next) => {
     const headerId = req.headers["x-workspace-id"];
     const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
-    const hint = (typeof headerId === "string" && headerId) ? headerId : (typeof headerRoot === "string" ? headerRoot : "");
-    if (!hint) {
+    const workspaceId = typeof headerId === "string" ? headerId : "";
+    const workspaceRoot = typeof headerRoot === "string" ? headerRoot : "";
+    if (!workspaceId && !workspaceRoot) {
         next();
         return;
     }
     try {
-        const handle = await manager_1.workspaceManager.openWorkspace(hint);
+        const handle = workspaceRoot
+            ? await manager_1.workspaceManager.openWorkspace(workspaceRoot, { id: workspaceId || undefined })
+            : await manager_1.workspaceManager.openWorkspace(workspaceId);
         const firstFolder = handle.descriptor.folders[0];
-        const rootPath = firstFolder ? firstFolder.path : hint;
+        const rootPath = firstFolder ? firstFolder.path : (workspaceRoot || workspaceId);
         const body = req.body && typeof req.body === "object" ? req.body : null;
         const llmConfig = body && typeof body.llmConfig === "object"
             ? body.llmConfig
@@ -75,6 +77,7 @@ app.use(async (req, res, next) => {
         res.status(400).json({ detail: e?.message || "Failed to open workspace" });
     }
 });
+(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
     // Check config

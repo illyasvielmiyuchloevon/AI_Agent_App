@@ -32,6 +32,18 @@ async function runTests() {
     ];
     tools.forEach(t => registry.register(t));
     registry.debugMode = true;
+    try {
+        const unbound = await registry.execute('create_folder', { path: 'src' });
+        const status = typeof unbound === 'object' && unbound ? unbound.status : '';
+        if (status !== 'error') {
+            throw new Error(`Expected create_folder to return status=error when workspace is unbound, got ${JSON.stringify(unbound)}`);
+        }
+        console.log('CreateFolderTool (unbound workspace): Passed');
+    }
+    catch (e) {
+        console.error('CreateFolderTool (unbound workspace): Failed', e);
+        process.exit(1);
+    }
     await context_1.workspaceContext.run({ id: testDir, root: testDir }, async () => {
         try {
             // 1. Write File

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
+import { AiReviewSession } from '../workbench/aiReview/AiReviewSession';
 
 const MonacoEditor = React.lazy(() =>
   Promise.all([
@@ -496,6 +497,9 @@ function Workspace({
   const monacoRef = useRef(null);
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
+  const reviewSessionRef = useRef(null);
+  const [reviewVersion, setReviewVersion] = useState(0);
+  const [activeReviewBlockId, setActiveReviewBlockId] = useState(null);
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
   const [aiPanel, setAiPanel] = useState({
     open: false,
@@ -574,6 +578,8 @@ function Workspace({
       code = monaco.KeyCode.Escape;
     } else if (upper === 'TAB') {
       code = monaco.KeyCode.Tab;
+    } else if (upper === 'BACKSPACE') {
+      code = monaco.KeyCode.Backspace;
     } else if (upper === ',') {
       code = monaco.KeyCode.Comma;
     } else if (upper === '.') {
@@ -772,6 +778,35 @@ function Workspace({
     runEditorAiAction({ action }).catch(() => {});
   }, [canUseEditorAi, openPromptForAction, runEditorAiAction]);
 
+  const startAiReviewSession = useCallback((baselineSnapshot, fileUri) => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco || !fileUri) return;
+    if (reviewSessionRef.current) {
+      reviewSessionRef.current.dispose({ keepText: true });
+      reviewSessionRef.current = null;
+    }
+    const session = AiReviewSession.createFromDiff({
+      editor,
+      monaco,
+      fileUri,
+      baselineSnapshot,
+      onUpdate: () => setReviewVersion((v) => v + 1),
+      onDispose: () => {
+        reviewSessionRef.current = null;
+        setReviewVersion((v) => v + 1);
+      },
+    });
+    reviewSessionRef.current = session;
+    if (session) {
+      const firstPending = session.getPendingBlocks()[0];
+      setActiveReviewBlockId(firstPending ? firstPending.id : null);
+    } else {
+      setActiveReviewBlockId(null);
+    }
+    setReviewVersion((v) => v + 1);
+  }, []);
+
   const applyAiResultToSelection = useCallback(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -780,11 +815,17 @@ function Workspace({
     if (!range) return;
     const model = editor.getModel?.();
     if (!model) return;
+    const baselineSnapshot = model.getValue();
     const text = extractFirstCodeBlock(aiPanel.content || '');
     if (!text) return;
+    editor.pushUndoStop();
     editor.executeEdits('ai-editor-action', [{ range, text, forceMoveMarkers: true }]);
+    editor.pushUndoStop();
     editor.focus?.();
-  }, [aiPanel.content, aiPanel.selectionRange, extractFirstCodeBlock]);
+    if (activeFile) {
+      startAiReviewSession(baselineSnapshot, activeFile);
+    }
+  }, [activeFile, aiPanel.content, aiPanel.selectionRange, extractFirstCodeBlock, startAiReviewSession]);
 
   const applyAiResultToFile = useCallback(() => {
     const editor = editorRef.current;
@@ -792,16 +833,86 @@ function Workspace({
     if (!editor || !monaco) return;
     const model = editor.getModel?.();
     if (!model) return;
+    const baselineSnapshot = model.getValue();
     const lineCount = model.getLineCount?.() || 1;
     const lastCol = model.getLineMaxColumn?.(lineCount) || 1;
     const fullRange = new monaco.Range(1, 1, lineCount, lastCol);
     const text = extractFirstCodeBlock(aiPanel.content || '');
     if (!text) return;
+    editor.pushUndoStop();
     editor.executeEdits('ai-editor-action', [{ range: fullRange, text, forceMoveMarkers: true }]);
+    editor.pushUndoStop();
     editor.focus?.();
-  }, [aiPanel.content, extractFirstCodeBlock]);
+    if (activeFile) {
+      startAiReviewSession(baselineSnapshot, activeFile);
+    }
+  }, [activeFile, aiPanel.content, extractFirstCodeBlock, startAiReviewSession]);
 
   const [isEditorReady, setIsEditorReady] = useState(false);
+
+  useEffect(() => () => {
+    if (reviewSessionRef.current) {
+      reviewSessionRef.current.dispose({ keepText: true });
+      reviewSessionRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const session = reviewSessionRef.current;
+    if (!session) {
+      if (activeReviewBlockId) setActiveReviewBlockId(null);
+      return;
+    }
+    if (activeFile && session.fileUri !== activeFile) return;
+    const pending = session.getPendingBlocks();
+    if (!pending.length) {
+      setActiveReviewBlockId(null);
+      return;
+    }
+    const stillPending = activeReviewBlockId && pending.some((b) => b.id === activeReviewBlockId);
+    if (!stillPending) {
+      setActiveReviewBlockId(pending[0].id);
+    }
+  }, [reviewVersion, activeFile, activeReviewBlockId]);
+
+  const focusReviewBlock = useCallback((blockId) => {
+    const session = reviewSessionRef.current;
+    if (!session) return;
+    const block = session.getBlockById(blockId);
+    if (!block) return;
+    session.revealBlock(block);
+    setActiveReviewBlockId(blockId);
+  }, []);
+
+  const stepReviewBlock = useCallback((direction) => {
+    const session = reviewSessionRef.current;
+    if (!session) return;
+    const pending = session.getPendingBlocks();
+    if (!pending.length) return;
+    const currentIndex = pending.findIndex((b) => b.id === activeReviewBlockId);
+    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (baseIndex + direction + pending.length) % pending.length;
+    const nextBlock = pending[nextIndex];
+    if (nextBlock) {
+      focusReviewBlock(nextBlock.id);
+    }
+  }, [activeReviewBlockId, focusReviewBlock]);
+
+  const acceptAllReviewBlocks = useCallback(() => {
+    const session = reviewSessionRef.current;
+    if (!session) return;
+    session.acceptAll();
+    setActiveReviewBlockId(null);
+    setReviewVersion((v) => v + 1);
+  }, []);
+
+  const revertAllReviewBlocks = useCallback(() => {
+    const session = reviewSessionRef.current;
+    if (!session) return;
+    session.revertAll();
+    setActiveReviewBlockId(null);
+    setReviewVersion((v) => v + 1);
+  }, []);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -836,6 +947,26 @@ function Workspace({
           contextMenuOrder: 1.0 + idx / 100,
           run: () => {
             triggerAiAction(d.action);
+          },
+        });
+        aiDisposables.push(disposable);
+      });
+
+      const reviewDefs = [
+        { id: 'ai.review.acceptAll', label: 'AI Review：保留所有变更', key: 'Ctrl+Enter', run: acceptAllReviewBlocks },
+        { id: 'ai.review.revertAll', label: 'AI Review：撤销所有变更', key: 'Ctrl+Backspace', run: revertAllReviewBlocks },
+      ];
+      reviewDefs.forEach((d, idx) => {
+        const parsed = parseMonacoKeybinding(d.key, monaco);
+        const disposable = editor.addAction({
+          id: d.id,
+          label: d.label,
+          keybindings: parsed ? [parsed] : undefined,
+          contextMenuGroupId: '9_ai',
+          contextMenuOrder: 2.0 + idx / 100,
+          run: () => {
+            if (!reviewSessionRef.current) return;
+            d.run();
           },
         });
         aiDisposables.push(disposable);
@@ -878,7 +1009,7 @@ function Workspace({
     return () => {
       aiDisposables.forEach((d) => d?.dispose?.());
     };
-  }, [canUseEditorAi, getKeybinding, parseMonacoKeybinding, triggerAiAction, isEditorReady]);
+  }, [acceptAllReviewBlocks, canUseEditorAi, getKeybinding, parseMonacoKeybinding, revertAllReviewBlocks, triggerAiAction, isEditorReady]);
 
   const handleEditorMount = useCallback((editor, monaco) => {
     disposablesRef.current.forEach((d) => d?.dispose?.());
@@ -909,6 +1040,21 @@ function Workspace({
       disposablesRef.current = [];
     };
   }, []);
+
+  const reviewState = useMemo(() => {
+    const session = reviewSessionRef.current;
+    if (!session || !activeFile || session.fileUri !== activeFile) return null;
+    const pending = session.getPendingBlocks();
+    if (!pending.length) return null;
+    const total = session.blocks.length;
+    return { session, pending, total };
+  }, [activeFile, reviewVersion]);
+
+  const activeReviewIndex = useMemo(() => {
+    if (!reviewState) return 0;
+    const idx = reviewState.pending.findIndex((b) => b.id === activeReviewBlockId);
+    return idx >= 0 ? idx + 1 : 1;
+  }, [reviewState, activeReviewBlockId]);
 
   const editorPane = (
     <div className="workspace-editor">
@@ -968,6 +1114,22 @@ function Workspace({
             ))}
           </div>
           <div className="monaco-shell" style={{ position: 'relative' }}>
+            {reviewState ? (
+              <div className="ai-review-bar" role="region" aria-label="AI 变更审阅">
+                <div className="ai-review-title">变更已完成，请确认是否采纳</div>
+                <div className="ai-review-count">
+                  {activeReviewIndex}/{reviewState.total}
+                </div>
+                <div className="ai-review-nav">
+                  <button type="button" className="ghost-btn ai-review-btn" onClick={() => stepReviewBlock(-1)}>上一个</button>
+                  <button type="button" className="ghost-btn ai-review-btn" onClick={() => stepReviewBlock(1)}>下一个</button>
+                </div>
+                <div className="ai-review-actions">
+                  <button type="button" className="ghost-btn ai-review-btn" onClick={revertAllReviewBlocks}>撤销</button>
+                  <button type="button" className="primary-btn ai-review-btn" onClick={acceptAllReviewBlocks}>保留</button>
+                </div>
+              </div>
+            ) : null}
             {activeFile ? (
                 settingsTabPath && activeFile === settingsTabPath && renderSettingsTab
                   ? renderSettingsTab()

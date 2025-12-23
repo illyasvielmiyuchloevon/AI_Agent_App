@@ -27,9 +27,12 @@ class ExecuteShellTool extends base_tool_1.BaseToolImplementation {
         required: ["command"]
     };
     async execute(args, _context = {}) {
-        const root = (0, context_1.getWorkspaceRoot)();
-        if (!root) {
-            return 'Error: Workspace root is not bound; cannot execute shell command.';
+        let root = '';
+        try {
+            root = (0, context_1.getWorkspaceRoot)();
+        }
+        catch (e) {
+            return `Error: ${e?.message || String(e)}`;
         }
         const rootPath = path_1.default.resolve(root);
         const cwd = args.workdir ? path_1.default.resolve(rootPath, args.workdir) : rootPath;
