@@ -57,7 +57,7 @@ const normalizeDiffRange = (model, monaco, startLine, endLine) => {
 
 const findUniqueMatchRange = (model, text) => {
   if (!text) return null;
-  const matches = model.findMatches(text, true, false, false, null, true);
+  const matches = model.findMatches(text, false, false, false, null, true);
   if (matches && matches.length === 1) {
     return matches[0].range;
   }
@@ -111,13 +111,14 @@ class AiReviewBlockWidget {
 }
 
 export class AiReviewSession {
-  constructor({ editor, monaco, fileUri, baselineSnapshot, blocks, onUpdate, onDispose }) {
+  constructor({ editor, monaco, fileUri, baselineSnapshot, blocks, onUpdate, onDispose, source }) {
     this.editor = editor;
     this.monaco = monaco;
     this.fileUri = fileUri;
     this.modelUri = editor.getModel()?.uri?.toString() || '';
     this.baselineSnapshot = baselineSnapshot;
     this.blocks = Array.isArray(blocks) ? blocks : [];
+    this.source = source || null;
     this.onUpdate = typeof onUpdate === 'function' ? onUpdate : () => {};
     this.onDispose = typeof onDispose === 'function' ? onDispose : () => {};
     this.disposables = [];
@@ -136,7 +137,7 @@ export class AiReviewSession {
     }
   }
 
-  static createFromDiff({ editor, monaco, fileUri, baselineSnapshot, onUpdate, onDispose }) {
+  static createFromDiff({ editor, monaco, fileUri, baselineSnapshot, onUpdate, onDispose, source }) {
     const model = editor.getModel();
     if (!model) return null;
     const originalModel = monaco.editor.createModel(baselineSnapshot || '', model.getLanguageId?.() || undefined);
@@ -156,7 +157,8 @@ export class AiReviewSession {
 
       if (!originalText && !modifiedText) continue;
 
-      const anchorRange = modifiedRange || buildAnchorRange(modifiedModel, monaco, change.modifiedStartLineNumber);
+      const anchorLine = change.modifiedStartLineNumber || change.originalStartLineNumber || 1;
+      const anchorRange = modifiedRange || buildAnchorRange(modifiedModel, monaco, anchorLine);
       const contextSource = modifiedRange ? modifiedModel : originalModel;
       const context = buildContext(
         contextSource,
@@ -185,7 +187,7 @@ export class AiReviewSession {
     modifiedModel.dispose();
 
     if (!blocks.length) return null;
-    return new AiReviewSession({ editor, monaco, fileUri, baselineSnapshot, blocks, onUpdate, onDispose });
+    return new AiReviewSession({ editor, monaco, fileUri, baselineSnapshot, blocks, onUpdate, onDispose, source });
   }
 
   getPendingBlocks() {

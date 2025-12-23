@@ -412,6 +412,9 @@ function Workspace({
   currentSessionId,
   backendWorkspaceId,
   onRegisterEditorAiInvoker,
+  taskReview,
+  onTaskKeepFile,
+  onTaskRevertFile,
   undoRedoLimit = 16,
 }) {
   const monacoTheme = useMemo(() => {
@@ -498,6 +501,7 @@ function Workspace({
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
   const reviewSessionRef = useRef(null);
+  const reviewSourceRef = useRef(null);
   const [reviewVersion, setReviewVersion] = useState(0);
   const [activeReviewBlockId, setActiveReviewBlockId] = useState(null);
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
@@ -778,7 +782,7 @@ function Workspace({
     runEditorAiAction({ action }).catch(() => {});
   }, [canUseEditorAi, openPromptForAction, runEditorAiAction]);
 
-  const startAiReviewSession = useCallback((baselineSnapshot, fileUri) => {
+  const startAiReviewSession = useCallback((baselineSnapshot, fileUri, source = null) => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco || !fileUri) return;
@@ -791,13 +795,16 @@ function Workspace({
       monaco,
       fileUri,
       baselineSnapshot,
+      source,
       onUpdate: () => setReviewVersion((v) => v + 1),
       onDispose: () => {
         reviewSessionRef.current = null;
+        reviewSourceRef.current = null;
         setReviewVersion((v) => v + 1);
       },
     });
     reviewSessionRef.current = session;
+    reviewSourceRef.current = source;
     if (session) {
       const firstPending = session.getPendingBlocks()[0];
       setActiveReviewBlockId(firstPending ? firstPending.id : null);
@@ -823,7 +830,7 @@ function Workspace({
     editor.pushUndoStop();
     editor.focus?.();
     if (activeFile) {
-      startAiReviewSession(baselineSnapshot, activeFile);
+      startAiReviewSession(baselineSnapshot, activeFile, { type: 'editorAi', path: activeFile });
     }
   }, [activeFile, aiPanel.content, aiPanel.selectionRange, extractFirstCodeBlock, startAiReviewSession]);
 
@@ -844,7 +851,7 @@ function Workspace({
     editor.pushUndoStop();
     editor.focus?.();
     if (activeFile) {
-      startAiReviewSession(baselineSnapshot, activeFile);
+      startAiReviewSession(baselineSnapshot, activeFile, { type: 'editorAi', path: activeFile });
     }
   }, [activeFile, aiPanel.content, extractFirstCodeBlock, startAiReviewSession]);
 
@@ -854,6 +861,7 @@ function Workspace({
     if (reviewSessionRef.current) {
       reviewSessionRef.current.dispose({ keepText: true });
       reviewSessionRef.current = null;
+      reviewSourceRef.current = null;
     }
   }, []);
 
@@ -884,6 +892,29 @@ function Workspace({
     setActiveReviewBlockId(blockId);
   }, []);
 
+  const pendingTaskReviewEntry = useMemo(() => {
+    if (!taskReview?.files?.length || !activeFile) return null;
+    return taskReview.files.find((f) => f.path === activeFile && f.action === 'pending') || null;
+  }, [taskReview, activeFile]);
+
+  useEffect(() => {
+    if (!activeFile) return;
+    const session = reviewSessionRef.current;
+    const source = reviewSourceRef.current;
+    if (pendingTaskReviewEntry) {
+      if (!session || session.fileUri !== activeFile || source?.type !== 'taskReview') {
+        startAiReviewSession(pendingTaskReviewEntry.before || '', activeFile, { type: 'taskReview', path: activeFile });
+      }
+      return;
+    }
+    if (session && source?.type === 'taskReview' && session.fileUri === activeFile) {
+      session.dispose({ keepText: true });
+      reviewSessionRef.current = null;
+      reviewSourceRef.current = null;
+      setReviewVersion((v) => v + 1);
+    }
+  }, [activeFile, pendingTaskReviewEntry, startAiReviewSession]);
+
   const stepReviewBlock = useCallback((direction) => {
     const session = reviewSessionRef.current;
     if (!session) return;
@@ -901,18 +932,32 @@ function Workspace({
   const acceptAllReviewBlocks = useCallback(() => {
     const session = reviewSessionRef.current;
     if (!session) return;
+    if (reviewSourceRef.current?.type === 'taskReview' && pendingTaskReviewEntry && typeof onTaskKeepFile === 'function') {
+      session.acceptAll();
+      onTaskKeepFile(activeFile);
+      setActiveReviewBlockId(null);
+      setReviewVersion((v) => v + 1);
+      return;
+    }
     session.acceptAll();
     setActiveReviewBlockId(null);
     setReviewVersion((v) => v + 1);
-  }, []);
+  }, [activeFile, onTaskKeepFile, pendingTaskReviewEntry]);
 
   const revertAllReviewBlocks = useCallback(() => {
     const session = reviewSessionRef.current;
     if (!session) return;
+    if (reviewSourceRef.current?.type === 'taskReview' && pendingTaskReviewEntry && typeof onTaskRevertFile === 'function') {
+      session.dispose({ keepText: true });
+      onTaskRevertFile(activeFile);
+      setActiveReviewBlockId(null);
+      setReviewVersion((v) => v + 1);
+      return;
+    }
     session.revertAll();
     setActiveReviewBlockId(null);
     setReviewVersion((v) => v + 1);
-  }, []);
+  }, [activeFile, onTaskRevertFile, pendingTaskReviewEntry]);
 
   useEffect(() => {
     const editor = editorRef.current;

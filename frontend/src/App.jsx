@@ -3826,6 +3826,9 @@ function App() {
                     currentSessionId={currentSessionId}
                     backendWorkspaceId={backendWorkspaceId}
                     onRegisterEditorAiInvoker={setEditorAiInvoker}
+                    taskReview={taskReview}
+                    onTaskKeepFile={keepTaskFile}
+                    onTaskRevertFile={revertTaskFile}
                     undoRedoLimit={config?.editorUndoRedoLimit}
                     welcomeTabPath={WELCOME_TAB_PATH}
                     onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
