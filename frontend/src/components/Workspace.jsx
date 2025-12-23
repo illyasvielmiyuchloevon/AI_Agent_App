@@ -137,6 +137,66 @@ const themedFallback = (message) => `
 const stripExternalScripts = (html = '') =>
   html.replace(/<script[^>]*src=["'][^"']+["'][^>]*>\s*<\/script>/gi, '');
 
+const extractIdHints = (script = '') => {
+  const hints = new Set();
+  if (!script) return [];
+  const patterns = [
+    /getElementById\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
+    /querySelector\s*\(\s*['"`]#([^'"`]+)['"`]\s*\)/g,
+    /querySelectorAll\s*\(\s*['"`]#([^'"`]+)['"`]\s*\)/g,
+  ];
+  patterns.forEach((pattern) => {
+    let match;
+    while ((match = pattern.exec(script)) !== null) {
+      const id = String(match[1] || '').trim();
+      if (id) hints.add(id);
+    }
+  });
+  return Array.from(hints);
+};
+
+const injectIdPlaceholders = (html = '', ids = []) => {
+  if (!ids.length) return html;
+  const placeholders = ids.map((id) => `<div id="${id}"></div>`).join('');
+  if (html.includes('</body>')) {
+    return html.replace('</body>', `${placeholders}</body>`);
+  }
+  return `${html}${placeholders}`;
+};
+
+const previewStorageShim = `
+  <script>
+    (function () {
+      try {
+        const testKey = '__preview_test__';
+        window.localStorage.setItem(testKey, '1');
+        window.localStorage.removeItem(testKey);
+      } catch (err) {
+        const store = new Map();
+        const safeStorage = {
+          getItem: (key) => (store.has(String(key)) ? store.get(String(key)) : null),
+          setItem: (key, value) => { store.set(String(key), String(value)); },
+          removeItem: (key) => { store.delete(String(key)); },
+          clear: () => { store.clear(); },
+          key: (index) => Array.from(store.keys())[index] || null,
+          get length() { return store.size; }
+        };
+        try {
+          Object.defineProperty(window, 'localStorage', {
+            value: safeStorage,
+            configurable: true
+          });
+        } catch (e) {
+          try {
+            window.localStorage = safeStorage;
+          } catch {}
+          window.__localStorage = safeStorage;
+        }
+      }
+    })();
+  </script>
+`;
+
 const wrapHtml = (content, css, scripts, headExtras = '') => {
   const base =
     content && content.includes('<html')
@@ -145,12 +205,12 @@ const wrapHtml = (content, css, scripts, headExtras = '') => {
           content || themedFallback('Nothing to preview')
         }</body></html>`;
 
-  const headInjected = base.includes('</head>')
-    ? base.replace(
-        '</head>',
-        `${headExtras || ''}<style>${css || ''}</style></head>`
-      )
-    : `${headExtras || ''}<style>${css || ''}</style>${base}`;
+  const extraHead = `${previewStorageShim}${headExtras || ''}<style>${css || ''}</style>`;
+  const headInjected = base.includes('<head>')
+    ? base.replace('<head>', `<head>${extraHead}`)
+    : (base.includes('</head>')
+        ? base.replace('</head>', `${extraHead}</head>`)
+        : `${extraHead}${base}`);
 
   if (headInjected.includes('</body>')) {
     return headInjected.replace('</body>', `${scripts || ''}</body>`);
@@ -189,6 +249,9 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
   const entry = resolveEntry();
   const entryFile = entry ? fileMap[entry] : null;
   const entryExt = entry ? entry.toLowerCase().split('.').pop() : '';
+  const htmlCandidate =
+    (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
+    files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
 
   // If HTML entry
   if (entryFile && entryExt === 'html') {
@@ -206,6 +269,9 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
   // If JSX/TSX entry
   if (entryFile && (entryExt === 'jsx' || entryExt === 'tsx')) {
     const jsx = entryFile.content || '';
+    const htmlBase = !preferredEntry && htmlCandidate ? (fileMap[htmlCandidate]?.content || '') : '';
+    const sanitizedHtml = htmlBase ? stripExternalScripts(htmlBase) : '';
+    const idHints = !preferredEntry ? extractIdHints(jsx) : [];
     const headExtras = `
       <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
       <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -213,17 +279,30 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
     `;
     const scripts = `
       <script type="text/babel">
-        ${jsx}
+        document.addEventListener('DOMContentLoaded', () => {
+          ${jsx}
+        });
       </script>
     `;
-    return wrapHtml(`<div id="root"></div>`, css, scripts, headExtras);
+    const jsxMount = injectIdPlaceholders(sanitizedHtml || `<div id="root"></div>`, idHints);
+    return wrapHtml(jsxMount, css, scripts, headExtras);
   }
 
   // If JS entry
   if (entryFile && entryExt === 'js') {
     const js = entryFile.content || '';
-    const scripts = `<script>${js}</script>`;
-    return wrapHtml(`<div id="root"></div>`, css, scripts, '');
+    const scripts = `
+      <script>
+        document.addEventListener('DOMContentLoaded', () => {
+          ${js}
+        });
+      </script>
+    `;
+    const htmlBase = !preferredEntry && htmlCandidate ? (fileMap[htmlCandidate]?.content || '') : '';
+    const sanitizedHtml = htmlBase ? stripExternalScripts(htmlBase) : '';
+    const idHints = !preferredEntry ? extractIdHints(js) : [];
+    const jsMount = injectIdPlaceholders(sanitizedHtml || `<div id="root"></div>`, idHints);
+    return wrapHtml(jsMount, css, scripts, '');
   }
 
   // If Python entry fallback
@@ -236,10 +315,6 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
   }
 
   // Fallback: auto aggregate
-  const htmlCandidate =
-    (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
-    files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
-
   const jsxCandidate =
     (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.jsx') || f.toLowerCase().endsWith('.tsx')) ||
     files.find((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))?.path;
@@ -260,6 +335,10 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
   }
 
   const sanitizedHtml = htmlSource ? stripExternalScripts(htmlSource) : htmlSource;
+  const idHints = !preferredEntry ? extractIdHints(`${js}\n${jsx}`) : [];
+  const sanitizedWithHints = sanitizedHtml
+    ? injectIdPlaceholders(sanitizedHtml, idHints)
+    : sanitizedHtml;
   const htmlHasInlineScript = sanitizedHtml ? /<script[\s\S]*?>[\s\S]*?<\/script>/i.test(sanitizedHtml) : false;
 
   const needsBabel = jsx.trim().length > 0 && !htmlHasInlineScript;
@@ -274,13 +353,13 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
   const shouldInjectAppScripts = !htmlHasInlineScript;
   const scripts = shouldInjectAppScripts
     ? `
-    ${js ? `<script>${js}</script>` : ''}
-    ${jsx ? `<script type="text/babel">${jsx}</script>` : ''}
+    ${js ? `<script>document.addEventListener('DOMContentLoaded', () => { ${js} });</script>` : ''}
+    ${jsx ? `<script type="text/babel">document.addEventListener('DOMContentLoaded', () => { ${jsx} });</script>` : ''}
   `
     : '';
 
   return wrapHtml(
-    sanitizedHtml || themedFallback('请选择文件以预览'),
+    sanitizedWithHints || themedFallback('请选择文件以预览'),
     css,
     scripts,
     headExtras

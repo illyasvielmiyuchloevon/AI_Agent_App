@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    applySnapLayout: (layoutId, zoneIndex) => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex }),
     close: () => ipcRenderer.invoke('window:close'),
   },
   workspace: {

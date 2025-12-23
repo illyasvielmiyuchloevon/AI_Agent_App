@@ -2,6 +2,45 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getTranslation } from '../utils/i18n';
 
+const SNAP_LAYOUTS = [
+    {
+        id: 'halves',
+        label: 'Halves',
+        columns: 2,
+        rows: 1,
+        zones: [
+            { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
+            { col: 2, row: 1, colSpan: 1, rowSpan: 1 },
+        ],
+    },
+    {
+        id: 'thirds',
+        label: 'Thirds',
+        columns: 3,
+        rows: 1,
+        zones: [
+            { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
+            { col: 2, row: 1, colSpan: 1, rowSpan: 1 },
+            { col: 3, row: 1, colSpan: 1, rowSpan: 1 },
+        ],
+    },
+    {
+        id: 'grid',
+        label: 'Grid',
+        columns: 2,
+        rows: 2,
+        zones: [
+            { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
+            { col: 2, row: 1, colSpan: 1, rowSpan: 1 },
+            { col: 1, row: 2, colSpan: 1, rowSpan: 1 },
+            { col: 2, row: 2, colSpan: 1, rowSpan: 1 },
+        ],
+    },
+];
+
+const SNAP_PANEL_WIDTH = 240;
+const SNAP_PANEL_GAP = 6;
+
 const Icon = ({ name, ...props }) => {
     const common = {
         stroke: 'currentColor',
@@ -190,8 +229,13 @@ const TitleBar = ({
     const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
     const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
     const [isMaximized, setIsMaximized] = useState(false);
+    const [showSnapLayouts, setShowSnapLayouts] = useState(false);
+    const [snapAnchor, setSnapAnchor] = useState({ top: 0, left: 0 });
     const menuRef = useRef(null);
     const workspaceMenuRef = useRef(null);
+    const maximizeBtnRef = useRef(null);
+    const snapOpenTimerRef = useRef(null);
+    const snapCloseTimerRef = useRef(null);
     const t = (key) => getTranslation(language, key);
     const windowApi = typeof window !== 'undefined' ? window.electronAPI?.window : null;
 
@@ -222,6 +266,27 @@ const TitleBar = ({
             setIsMaximized(!!res?.maximized);
         }).catch(() => {});
     }, [windowApi]);
+
+    useEffect(() => {
+        return () => {
+            if (snapOpenTimerRef.current) clearTimeout(snapOpenTimerRef.current);
+            if (snapCloseTimerRef.current) clearTimeout(snapCloseTimerRef.current);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!showSnapLayouts) return;
+        const handleResize = () => {
+            if (!maximizeBtnRef.current) return;
+            const rect = maximizeBtnRef.current.getBoundingClientRect();
+            const left = Math.max(8, Math.round(rect.right - SNAP_PANEL_WIDTH));
+            const top = Math.round(rect.bottom + SNAP_PANEL_GAP);
+            setSnapAnchor({ top, left });
+        };
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [showSnapLayouts]);
 
     const toggleMenu = (menuName) => {
         setActiveMenu(activeMenu === menuName ? null : menuName);
@@ -297,6 +362,46 @@ const TitleBar = ({
 
     const handleMinimize = () => {
         windowApi?.minimize?.();
+    };
+
+    const scheduleSnapOpen = () => {
+        if (!windowApi?.applySnapLayout) return;
+        if (snapCloseTimerRef.current) {
+            clearTimeout(snapCloseTimerRef.current);
+            snapCloseTimerRef.current = null;
+        }
+        if (snapOpenTimerRef.current) {
+            clearTimeout(snapOpenTimerRef.current);
+        }
+        snapOpenTimerRef.current = setTimeout(() => {
+            if (!maximizeBtnRef.current) return;
+            const rect = maximizeBtnRef.current.getBoundingClientRect();
+            const left = Math.max(8, Math.round(rect.right - SNAP_PANEL_WIDTH));
+            const top = Math.round(rect.bottom + SNAP_PANEL_GAP);
+            setSnapAnchor({ top, left });
+            setShowSnapLayouts(true);
+        }, 120);
+    };
+
+    const scheduleSnapClose = () => {
+        if (snapOpenTimerRef.current) {
+            clearTimeout(snapOpenTimerRef.current);
+            snapOpenTimerRef.current = null;
+        }
+        if (snapCloseTimerRef.current) {
+            clearTimeout(snapCloseTimerRef.current);
+        }
+        snapCloseTimerRef.current = setTimeout(() => {
+            setShowSnapLayouts(false);
+        }, 160);
+    };
+
+    const handleSnapSelection = async (layoutId, zoneIndex) => {
+        if (!windowApi?.applySnapLayout) return;
+        setShowSnapLayouts(false);
+        try {
+            await windowApi.applySnapLayout(layoutId, zoneIndex);
+        } catch {}
     };
 
     const handleToggleMaximize = async () => {
@@ -425,43 +530,66 @@ const TitleBar = ({
 
                 <div className="title-bar-actions">
                 <div className="window-actions">
-                     <button className="icon-action" onClick={() => onSelectProject()} title={t('openFolder')}>
-                        <Icon name="folder-open" />
-                    </button>
-                    <button className="icon-action" onClick={onBindBackend} title={t('bindBackend')}>
-                        <Icon name="link" />
-                    </button>
                     <button className="icon-action" onClick={onToggleTheme} title={t('toggleTheme')}>
                         <Icon name={theme === 'dark' ? 'moon' : 'sun'} />
                     </button>
                     <button className="icon-action" onClick={onToggleView} title={t('toggleView')}>
                         <Icon name={viewMode === 'code' ? 'eye' : 'code'} />
                     </button>
-                    <button className="icon-action" onClick={onAddFile} disabled={!hasDriver} title={t('newFile')}>
-                        <Icon name="doc-plus" />
-                    </button>
-                    <button className="icon-action" onClick={onAddFolder} disabled={!hasDriver} title={t('newFolder')}>
-                        <Icon name="folder-plus" />
-                    </button>
-                    <button className="icon-action" onClick={onSync} disabled={!hasDriver} title={t('sync')}>
-                        <Icon name="sync" />
-                    </button>
-                    <button className="icon-action" onClick={onRefreshPreview} disabled={!hasDriver} title={t('refresh')}>
-                        <Icon name="refresh" />
-                    </button>
-                    {bindingError && <span className="error-badge">!</span>}
                 </div>
                 <div className="window-controls" style={{ display: windowApi ? 'flex' : 'none' }}>
                     <button className="window-control-btn" onClick={handleMinimize} title={t('minimize')}>
                         <Icon name="minimize" />
                     </button>
-                    <button className="window-control-btn" onClick={handleToggleMaximize} title={t('maximize')}>
+                    <button
+                        className="window-control-btn"
+                        onClick={handleToggleMaximize}
+                        onMouseEnter={scheduleSnapOpen}
+                        onMouseLeave={scheduleSnapClose}
+                        ref={maximizeBtnRef}
+                        title={t('maximize')}
+                    >
                         <Icon name={isMaximized ? 'restore' : 'maximize'} />
                     </button>
                     <button className="window-control-btn close" onClick={handleClose} title={t('close')}>
                         <Icon name="close" />
                     </button>
                 </div>
+                {showSnapLayouts && windowApi?.applySnapLayout && createPortal(
+                    <div
+                        className="snap-layout-panel"
+                        style={{ top: snapAnchor.top, left: snapAnchor.left }}
+                        onMouseEnter={scheduleSnapOpen}
+                        onMouseLeave={scheduleSnapClose}
+                    >
+                        {SNAP_LAYOUTS.map((layout) => (
+                            <div key={layout.id} className="snap-layout-card">
+                                <div
+                                    className="snap-layout-grid"
+                                    style={{
+                                        gridTemplateColumns: `repeat(${layout.columns}, 1fr)`,
+                                        gridTemplateRows: `repeat(${layout.rows}, 1fr)`,
+                                    }}
+                                    aria-label={layout.label}
+                                >
+                                    {layout.zones.map((zone, zoneIndex) => (
+                                        <button
+                                            key={`${layout.id}-${zoneIndex}`}
+                                            className="snap-layout-zone"
+                                            style={{
+                                                gridColumn: `${zone.col} / span ${zone.colSpan}`,
+                                                gridRow: `${zone.row} / span ${zone.rowSpan}`,
+                                            }}
+                                            onClick={() => handleSnapSelection(layout.id, zoneIndex)}
+                                            type="button"
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>,
+                    document.body
+                )}
                 </div>
             </div>
         </div>

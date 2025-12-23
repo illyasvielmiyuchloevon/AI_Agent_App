@@ -14,7 +14,7 @@ function createWindow() {
 
   const win = new BrowserWindow({
     width: 1400,
-    height: 900,
+    height: 800,
     frame: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -28,6 +28,16 @@ function createWindow() {
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     win.webContents.openDevTools({ mode: 'detach' });
+    win.webContents.once('devtools-opened', () => {
+      const devtools = win.webContents.devToolsWebContents;
+      if (!devtools) return;
+      devtools.executeJavaScript(`
+        try {
+          localStorage.setItem('showSizeOnResize', 'false');
+          localStorage.setItem('emulation.showSizeOnResize', 'false');
+        } catch {}
+      `, true).catch(() => {});
+    });
   } else {
     const indexPath = path.join(__dirname, '../frontend/dist/index.html');
     win.loadFile(indexPath);

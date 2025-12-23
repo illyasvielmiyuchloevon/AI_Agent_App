@@ -565,7 +565,6 @@ function App() {
   
   // --- Resizer State ---
   // 拖拽分隔条时悬浮提示内容（null 表示隐藏）
-  const [resizeTooltip, setResizeTooltip] = useState(null);
   
   const lastSidebarWidthRef = useRef(pickLayoutNumber('sidebarWidth', DEFAULT_PROJECT_CONFIG.sidebarWidth));
   const sidebarResizerGhostRef = useRef(null);
@@ -3465,23 +3464,11 @@ function App() {
           if (nextWidth <= MIN_WIDTH) {
               nextWidth = MIN_WIDTH;
               // Visual Feedback
-              setResizeTooltip({
-                  text: '无法继续缩小',
-                  x: mouseMoveEvent.clientX,
-                  y: mouseMoveEvent.clientY,
-                  warning: true
-              });
               if (sidebarResizerGhostRef.current) {
                   sidebarResizerGhostRef.current.style.background = '#FF5722';
               }
           } else {
               // Normal resize
-              setResizeTooltip({
-                  text: `${Math.round(nextWidth)}px`,
-                  x: mouseMoveEvent.clientX,
-                  y: mouseMoveEvent.clientY,
-                  warning: false
-              });
               if (sidebarResizerGhostRef.current) {
                   sidebarResizerGhostRef.current.style.background = 'var(--sidebar-active, #2196F3)';
               }
@@ -3514,9 +3501,6 @@ function App() {
           resizeRafRef.current = null;
       }
       
-      // Clear tooltip
-      setResizeTooltip(null);
-
       resizePendingRef.current = { target: null, width: 0, delta: 0 };
       resizeStateRef.current = { target: null, startX: 0, startWidth: 0 };
       setActiveResizeTarget(null);
@@ -3946,25 +3930,6 @@ function App() {
           )}
       </div>
 
-      {resizeTooltip && (
-        <div style={{
-            position: 'fixed',
-            left: resizeTooltip.x + 15,
-            top: resizeTooltip.y,
-            background: resizeTooltip.warning ? '#FF5722' : 'rgba(0,0,0,0.8)',
-            color: '#fff',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            fontSize: '12px',
-            pointerEvents: 'none',
-            zIndex: 10002,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-            transition: 'opacity 0.2s',
-            whiteSpace: 'nowrap'
-        }}>
-            {resizeTooltip.text}
-        </div>
-      )}
       <ConnectRemoteModal 
           isOpen={showRemoteModal} 
           onClose={() => setShowRemoteModal(false)}

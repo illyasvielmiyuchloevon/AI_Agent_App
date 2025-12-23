@@ -2827,13 +2827,13 @@ select.settings-control optgroup {
   position: fixed;
   top: 0;
   left: 48px;
-  right: 12px;
+  right: 0;
   height: 48px;
   display: flex;
   align-items: center;
   background: transparent;
   border: none;
-  padding: 0 8px 0 0;
+  padding: 0;
   -webkit-app-region: drag;
   user-select: none;
   gap: 12px;
@@ -2917,7 +2917,7 @@ select.settings-control optgroup {
   align-items: center;
   justify-content: space-between;
   flex: 1;
-  padding: 0 12px;
+  padding: 0 6px 0 12px;
 }
 
 .project-info {
@@ -3059,7 +3059,7 @@ select.settings-control optgroup {
   align-items: center;
   justify-content: space-between;
   height: 100%;
-  padding: 0 12px;
+  padding: 0 6px 0 12px;
 }
 
 .project-info {
@@ -3095,6 +3095,7 @@ select.settings-control optgroup {
   align-items: center;
   gap: 10px;
   -webkit-app-region: no-drag;
+  margin-left: auto;
 }
 
 .window-actions {
@@ -3136,6 +3137,53 @@ select.settings-control optgroup {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.snap-layout-panel {
+  position: fixed;
+  width: 240px;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-strong);
+  z-index: 100000;
+  -webkit-app-region: no-drag;
+}
+
+.snap-layout-card {
+  padding: 8px;
+  background: var(--panel-sub);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.snap-layout-grid {
+  display: grid;
+  gap: 6px;
+  grid-auto-rows: 28px;
+}
+
+.snap-layout-zone {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.snap-layout-zone:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.snap-layout-zone:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
 }
 
 .window-control-btn {
@@ -4291,4 +4339,3 @@ select.settings-control optgroup {
 .title-bar-search-button:active {
   background: var(--surface-hover);
 }
-
