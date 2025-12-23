@@ -150,13 +150,14 @@ export default function WelcomeEditor({
       return name.includes(q) || secondary.includes(q) || normalizeText(p?.id).includes(q);
     });
   }, [filterText, recentProjects]);
+  const visibleRecents = useMemo(() => filteredRecents.slice(0, 6), [filteredRecents]);
 
   useEffect(() => {
     setSelectedRecentIndex((prev) => {
-      if (!filteredRecents.length) return -1;
-      return clamp(prev, 0, filteredRecents.length - 1);
+      if (!visibleRecents.length) return -1;
+      return clamp(prev, 0, visibleRecents.length - 1);
     });
-  }, [filteredRecents.length]);
+  }, [visibleRecents.length]);
 
   useEffect(() => {
     if (!statusText) return undefined;
@@ -224,7 +225,7 @@ export default function WelcomeEditor({
   };
 
   const openRecentAt = async (idx) => {
-    const proj = filteredRecents[idx];
+    const proj = visibleRecents[idx];
     if (!proj) return;
     if (proj.missing) {
       setStatusText('Folder is missing. You can remove it from Recent.');
@@ -248,7 +249,7 @@ export default function WelcomeEditor({
   };
 
   const removeRecentAt = async (idx) => {
-    const proj = filteredRecents[idx];
+    const proj = visibleRecents[idx];
     if (!proj) return;
     try {
       await onRemoveRecent?.(proj);
@@ -259,13 +260,13 @@ export default function WelcomeEditor({
   };
 
   const onRecentKeyDown = (e) => {
-    if (!filteredRecents.length) return;
+    if (!visibleRecents.length) return;
     const key = e.key;
     if (key === 'ArrowDown' || key === 'ArrowUp') {
       e.preventDefault();
       const delta = key === 'ArrowDown' ? 1 : -1;
       setSelectedRecentIndex((prev) => {
-        const next = clamp((prev < 0 ? 0 : prev) + delta, 0, filteredRecents.length - 1);
+        const next = clamp((prev < 0 ? 0 : prev) + delta, 0, visibleRecents.length - 1);
         requestAnimationFrame(() => focusRecent(next));
         return next;
       });
@@ -764,7 +765,7 @@ export default function WelcomeEditor({
                   onChange={(e) => setFilterText(e.target.value)}
                   placeholder="Filter recent"
                   onKeyDown={(e) => {
-                    if (e.key === 'ArrowDown' && filteredRecents.length) {
+                    if (e.key === 'ArrowDown' && visibleRecents.length) {
                       e.preventDefault();
                       const next = selectedRecentIndex >= 0 ? selectedRecentIndex : 0;
                       setSelectedRecentIndex(next);
@@ -778,11 +779,11 @@ export default function WelcomeEditor({
                 />
               </div>
 
-              {!filteredRecents.length ? (
+              {!visibleRecents.length ? (
                 <div className={styles.emptyState}>No recent folders</div>
               ) : (
                 <div className={styles.recentList} role="listbox" aria-label="Recent folders" onKeyDown={onRecentKeyDown}>
-                  {filteredRecents.map((proj, idx) => {
+                  {visibleRecents.map((proj, idx) => {
                     const selected = idx === selectedRecentIndex;
                     const inTabOrder = selectedRecentIndex < 0 ? idx === 0 : selected;
                     const name = getProjectDisplayName(proj);

@@ -881,18 +881,16 @@ function App() {
             lmstudio: { ...config.lmstudio },
             llamacpp: { ...config.llamacpp },
         }));
-        if (!silent) checkApiStatus();
     } catch (err) {
       console.error(err);
       if (!silent) alert(`Error configuring agent: ${err.message}`);
     }
   };
 
-  const applyStoredConfig = useCallback(async ({ silent = false } = {}) => {
+  const applyStoredConfig = useCallback(async () => {
       // Backend config persistence is deprecated.
       setConfigured(true);
-      checkApiStatus();
-  }, [checkApiStatus]);
+  }, []);
 
   // --- Workspace helpers ---
   const persistToolSettings = (updater) => {
@@ -3924,18 +3922,7 @@ function App() {
           </div>
       </div>
       
-      <div className="status-bar" style={{
-          height: '22px',
-          background: 'var(--accent)',
-          color: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 8px',
-          fontSize: '11px',
-          cursor: 'default',
-          userSelect: 'none',
-          zIndex: 100
-      }}>
+      <div className="status-bar">
           <div 
             className="status-item" 
             style={{ display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer', marginRight: '10px' }}
