@@ -21,6 +21,46 @@ const inferLanguage = (path = '') => {
   return LANG_MAP[ext] || 'plaintext';
 };
 
+const ManagedDiffEditor = (props) => {
+  const modelRef = useRef({ original: null, modified: null });
+  const onMount = useCallback((editor, monaco) => {
+    const model = editor?.getModel?.();
+    modelRef.current = {
+      original: model?.original || null,
+      modified: model?.modified || null,
+    };
+    if (typeof props.onMount === 'function') {
+      props.onMount(editor, monaco);
+    }
+  }, [props]);
+
+  useEffect(() => () => {
+    const { original, modified } = modelRef.current;
+    setTimeout(() => {
+      try {
+        if (original && typeof original.isDisposed === 'function' && !original.isDisposed()) {
+          original.dispose();
+        }
+        if (modified && typeof modified.isDisposed === 'function' && !modified.isDisposed()) {
+          modified.dispose();
+        }
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }, []);
+
+  const { onMount: _ignore, ...rest } = props;
+  return (
+    <MonacoDiffEditor
+      {...rest}
+      onMount={onMount}
+      keepCurrentOriginalModel={true}
+      keepCurrentModifiedModel={true}
+    />
+  );
+};
+
 class EditorErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -55,7 +95,7 @@ const findFirstDiffLine = (before = '', after = '') => {
   return null;
 };
 
-function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) {
+function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace, diffViewMode = 'compact', onDiffViewModeChange }) {
   const hasDiff = !!diff && typeof diff === 'object';
   const path = hasDiff ? diff.path : '';
   const before = hasDiff ? diff.before || '' : '';
@@ -63,10 +103,10 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
   const beforeTruncated = hasDiff ? !!diff.before_truncated : false;
   const afterTruncated = hasDiff ? !!diff.after_truncated : false;
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [compactView, setCompactView] = useState(true); // true: 仅改动块；false: 全量文件
+  const [compactView, setCompactView] = useState(diffViewMode === 'compact'); // true: 仅改动块；false: 全量文件
   const editorKey = useMemo(
-    () => `${(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}-${compactView ? 'compact' : 'full'}`,
-    [diff, compactView]
+    () => `${(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}`,
+    [diff]
   );
   const editorRef = useRef(null);
   const modifiedEditorRef = useRef(null);
@@ -90,6 +130,10 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
     if (theme === 'high-contrast') return 'hc-black';
     return theme === 'dark' ? 'vs-dark' : 'vs';
   }, [theme]);
+
+  useEffect(() => {
+    setCompactView(diffViewMode === 'compact');
+  }, [diffViewMode]);
 
   const handleMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -184,7 +228,14 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
             <button
               className="ghost-btn"
               title={compactView ? '切换为全量文件对比' : '仅显示改动块'}
-              onClick={() => setCompactView((v) => !v)}
+              onClick={() => {
+                setCompactView((v) => {
+                  const next = !v;
+                  const nextMode = next ? 'compact' : 'full';
+                  if (onDiffViewModeChange) onDiffViewModeChange(nextMode);
+                  return next;
+                });
+              }}
             >
               <span className="codicon codicon-diff" aria-hidden />
               <span style={{ marginLeft: '0.35rem' }}>{compactView ? '全量对比' : '仅改动'}</span>
@@ -222,7 +273,7 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
               // Single-file View
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
                 <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
-                  <MonacoDiffEditor
+                  <ManagedDiffEditor
                     key={editorKey}
                     height="100%"
                     language={language}
@@ -230,8 +281,6 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
                     modified={after}
                     theme={monacoTheme}
                     onMount={handleMount}
-                    keepCurrentOriginalModel={true}
-                    keepCurrentModifiedModel={true}
                     originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
                     modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
                     options={{
@@ -318,7 +367,7 @@ const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDi
                 <div style={{ height: '300px' }}>
                     <EditorErrorBoundary>
                         <Suspense fallback={<div className="monaco-fallback">Loading...</div>}>
-                            <MonacoDiffEditor
+                            <ManagedDiffEditor
                                 height="300px"
                                 language={language}
                                 original={file.before || ''}
@@ -326,8 +375,6 @@ const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDi
                                 theme={theme}
                                 originalModelPath={`original://${file.path}`}
                                 modifiedModelPath={`modified://${file.path}`}
-                                keepCurrentOriginalModel={true}
-                                keepCurrentModifiedModel={true}
                                 options={{
                                     renderSideBySide: true,
                                     readOnly: true,

@@ -391,6 +391,22 @@ function ConfigPanel({
           </SettingRow>
 
           <SettingRow
+            title={language === 'zh' ? 'Diff 默认展示模式' : 'Diff default view mode'}
+            description={language === 'zh' ? '选择查看 Diff 时是全量对比还是仅显示改动块' : 'Choose whether Diff shows the whole file or only changed hunks.'}
+            htmlFor="settings-diff-view-mode"
+          >
+            <select
+              id="settings-diff-view-mode"
+              className="settings-control compact"
+              value={displayPreferences?.diffView || 'compact'}
+              onChange={(e) => onChangeDisplayPreference && onChangeDisplayPreference('diffView', e.target.value)}
+            >
+              <option value="compact">{language === 'zh' ? '仅改动' : 'Only changes'}</option>
+              <option value="full">{language === 'zh' ? '全量对比' : 'Full file'}</option>
+            </select>
+          </SettingRow>
+
+          <SettingRow
             title={language === 'zh' ? '撤销/重做历史上限' : 'Undo/Redo history limit'}
             description={language === 'zh' ? '每个文件独立；仅对新打开/新建文件生效（8–64，默认 16）' : 'Per file; applies to newly opened/created files only (8–64, default 16).'}
             htmlFor="settings-editor-undo-limit"

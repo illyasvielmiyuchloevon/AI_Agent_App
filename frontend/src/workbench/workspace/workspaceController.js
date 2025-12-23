@@ -159,7 +159,14 @@ export function createWorkspaceController(deps) {
     if (typeof setBackendWorkspaceRoot === 'function') setBackendWorkspaceRoot('');
     if (typeof setBackendWorkspaceId === 'function') setBackendWorkspaceId('');
     if (typeof setProjectMeta === 'function') setProjectMeta({ id: null, name: '', pathLabel: '' });
+    if (typeof setSessions === 'function') setSessions([]);
+    if (typeof setMessages === 'function') setMessages([]);
+    if (typeof setToolRuns === 'function') setToolRuns({});
+    if (typeof setLogs === 'function') setLogs([]);
     if (typeof setTaskReview === 'function') setTaskReview({ taskId: null, files: [], status: 'idle', expanded: false });
+    if (typeof setShowLogs === 'function') setShowLogs(false);
+    if (typeof setCurrentSessionId === 'function') setCurrentSessionId(null);
+    if (typeof setDiffTabs === 'function') setDiffTabs({});
     try {
       if (recentTouchRef) recentTouchRef.current = { id: null, fsPath: null };
     } catch {

@@ -91,6 +91,11 @@ const isFileUnderRoot = (rootAbs = '', fileAbs = '') => {
   if (!root || !file) return false;
   return file.toLowerCase().startsWith(root.toLowerCase());
 };
+
+const isMissingPathError = (err) => {
+  if (!err || !err.message) return false;
+  return err.message.toLowerCase().includes('does not exist');
+};
 const readStoredTheme = () => {
   if (typeof window === 'undefined') return null;
   try {
@@ -220,7 +225,12 @@ const isAbsolutePath = (path = '') => {
 const normalizeRelPath = (path = '') => (path || '').replace(/^[./\\]+/, '');
 const shouldHidePath = (path = '') => {
   const clean = normalizeRelPath(path);
-  return clean === '.aichat' || clean.startsWith('.aichat/') || clean.startsWith('.aichat\\');
+  return clean === '.aichat'
+    || clean.startsWith('.aichat/')
+    || clean.startsWith('.aichat\\')
+    || clean === 'aichat'
+    || clean.startsWith('aichat/')
+    || clean.startsWith('aichat\\');
 };
 
 const safeDiffStat = (before = '', after = '') => {
@@ -461,7 +471,8 @@ function App() {
   });
   const [uiDisplayPreferences, setUiDisplayPreferences] = useState(() => {
     const stored = readGlobalConfig();
-    return stored?.uiDisplayPreferences || { settings: 'modal', diff: 'modal' };
+    const defaults = { settings: 'modal', diff: 'modal', diffView: 'compact' }; // diffView: compact | full
+    return { ...defaults, ...(stored?.uiDisplayPreferences || {}) };
   });
   const [showConfig, setShowConfig] = useState(false);
   const [configured, setConfigured] = useState(false);
@@ -1743,6 +1754,7 @@ function App() {
 
   const loadFileContent = useCallback(async (path) => {
       if (!workspaceDriver) return;
+      if (shouldHidePath(path)) return;
       try {
           const data = await workspaceDriver.readFile(path);
           setWorkspaceState((prev) => {
@@ -1753,6 +1765,10 @@ function App() {
               return { ...prev, files: nextFiles };
           });
       } catch (err) {
+          if (isMissingPathError(err)) {
+              console.warn('File no longer exists in workspace', path, err);
+              return;
+          }
           console.error('Failed to load file', err);
           setWorkspaceBindingError(err.message);
           setWorkspaceBindingStatus('error');
@@ -3300,6 +3316,7 @@ function App() {
 
   const handleOpenWorkingCopyDiff = useCallback(async (path, staged = false) => {
       if (!backendWorkspaceRoot || !workspaceDriver) return;
+      if (shouldHidePath(path)) return;
       try {
           let before = '';
           let after = '';
@@ -3312,8 +3329,17 @@ function App() {
               // Unstaged: Index vs Worktree
               before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
               // For worktree, read directly from disk
-              const fileData = await workspaceDriver.readFile(path);
-              after = fileData.content || '';
+              try {
+                  const fileData = await workspaceDriver.readFile(path);
+                  after = fileData.content || '';
+              } catch (err) {
+                  if (isMissingPathError(err)) {
+                      // Deleted in working copy: treat as empty for diff
+                      after = '';
+                  } else {
+                      throw err;
+                  }
+              }
           }
           const diff = { path, before, after };
           if (uiDisplayPreferences.diff === 'editor') {
@@ -3334,6 +3360,7 @@ function App() {
       try {
           const diffs = await Promise.all(files.map(async (file) => {
               const path = file.path;
+              if (shouldHidePath(path)) return null;
               let before = '';
               let after = '';
               if (type === 'staged') {
@@ -3341,12 +3368,22 @@ function App() {
                   after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
               } else {
                   before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
-                  const fileData = await workspaceDriver.readFile(path);
-                  after = fileData.content || '';
+                  try {
+                      const fileData = await workspaceDriver.readFile(path);
+                      after = fileData.content || '';
+                  } catch (err) {
+                      if (isMissingPathError(err)) {
+                          after = '';
+                      } else {
+                          throw err;
+                      }
+                  }
               }
               return { path, before, after };
           }));
-          const diff = { files: diffs };
+          const validDiffs = diffs.filter(Boolean);
+          if (!validDiffs.length) return;
+          const diff = { files: validDiffs };
           if (uiDisplayPreferences.diff === 'editor') {
               openDiffTabInWorkspace(diff);
               setDiffModal(null);
@@ -3875,6 +3912,7 @@ function App() {
                   )}
                   diffTabPrefix={DIFF_TAB_PREFIX}
                   diffTabs={diffTabs}
+                  diffViewMode={uiDisplayPreferences?.diffView || 'compact'}
                 />
               )}
               {showLogs && (
@@ -3962,6 +4000,8 @@ function App() {
           theme={theme} 
           onOpenFile={openFile}
           onOpenDiffInWorkspace={handleOpenDiffInWorkspace}
+          diffViewMode={uiDisplayPreferences?.diffView || 'compact'}
+          onDiffViewModeChange={(mode) => handleChangeDisplayPreference('diffView', mode)}
       />
       <InputModal 
           isOpen={inputModal.isOpen}

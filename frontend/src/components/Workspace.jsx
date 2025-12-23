@@ -51,6 +51,46 @@ const MonacoDiffEditor = React.lazy(() =>
   import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
 );
 
+const ManagedDiffEditor = (props) => {
+  const modelRef = useRef({ original: null, modified: null });
+  const onMount = useCallback((editor, monaco) => {
+    const model = editor?.getModel?.();
+    modelRef.current = {
+      original: model?.original || null,
+      modified: model?.modified || null,
+    };
+    if (typeof props.onMount === 'function') {
+      props.onMount(editor, monaco);
+    }
+  }, [props]);
+
+  useEffect(() => () => {
+    const { original, modified } = modelRef.current;
+    setTimeout(() => {
+      try {
+        if (original && typeof original.isDisposed === 'function' && !original.isDisposed()) {
+          original.dispose();
+        }
+        if (modified && typeof modified.isDisposed === 'function' && !modified.isDisposed()) {
+          modified.dispose();
+        }
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }, []);
+
+  const { onMount: _ignore, ...rest } = props;
+  return (
+    <MonacoDiffEditor
+      {...rest}
+      onMount={onMount}
+      keepCurrentOriginalModel={true}
+      keepCurrentModifiedModel={true}
+    />
+  );
+};
+
 const EXT_ICONS = {
   js: 'codicon-file-code',
   jsx: 'codicon-file-code',
@@ -286,6 +326,7 @@ function Workspace({
   renderSettingsTab,
   diffTabPrefix,
   diffTabs,
+  diffViewMode = 'compact',
   aiEngineClient,
   getBackendConfig,
   currentSessionId,
@@ -324,6 +365,7 @@ function Workspace({
     }),
     []
   );
+  const compactDiff = diffViewMode === 'compact';
 
   const previewOptions = useMemo(
     () =>
@@ -342,6 +384,11 @@ function Workspace({
   );
 
   const activeContent = files.find((f) => f.path === activeFile)?.content || '';
+  const diffModelBase = useMemo(() => {
+    if (!diffTabPrefix || !activeFile || !activeFile.startsWith(diffTabPrefix)) return activeFile || 'diff';
+    const diff = diffTabs && diffTabs[activeFile];
+    return (diff && (diff.id || diff.diff_id || diff.path)) || activeFile || 'diff';
+  }, [activeFile, diffTabPrefix, diffTabs]);
   
   const updatedPaths = useMemo(
     () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
@@ -875,12 +922,14 @@ function Workspace({
                                           {file.path}
                                       </div>
                                       <div style={{ flex: 1, minHeight: 0 }}>
-                                          <MonacoDiffEditor
+                                          <ManagedDiffEditor
                                               height="100%"
                                               language={inferLanguage(file.path || '')}
                                               original={file.before || ''}
                                               modified={file.after || ''}
                                               theme={monacoTheme}
+                                              originalModelPath={`diff-tab-original://${diffModelBase}/${file.path}`}
+                                              modifiedModelPath={`diff-tab-modified://${diffModelBase}/${file.path}`}
                                               options={{
                                                   ...monacoOptions,
                                                   readOnly: true,
@@ -888,7 +937,12 @@ function Workspace({
                                                   wordWrap: 'off',
                                                   minimap: { enabled: false },
                                                   scrollBeyondLastLine: false,
-                                                  padding: { top: 8, bottom: 8 }
+                                                  padding: { top: 8, bottom: 8 },
+                                                  hideUnchangedRegions: compactDiff ? {
+                                                    enabled: true,
+                                                    revealLinePadding: 3,
+                                                    contextLineCount: 3
+                                                  } : { enabled: false }
                                               }}
                                           />
                                       </div>
@@ -896,17 +950,24 @@ function Workspace({
                                   ))}
                                 </div>
                               ) : (
-                                <MonacoDiffEditor
+                                <ManagedDiffEditor
                                   height="100%"
                                   language={inferLanguage(diffTabs[activeFile].path || '')}
                                   original={diffTabs[activeFile].before || ''}
                                   modified={diffTabs[activeFile].after || ''}
                                   theme={monacoTheme}
+                                  originalModelPath={`diff-tab-original://${diffModelBase}`}
+                                  modifiedModelPath={`diff-tab-modified://${diffModelBase}`}
                                   options={{
                                     ...monacoOptions,
                                     readOnly: true,
                                     renderSideBySide: true,
-                                    wordWrap: 'off'
+                                    wordWrap: 'off',
+                                    hideUnchangedRegions: compactDiff ? {
+                                      enabled: true,
+                                      revealLinePadding: 3,
+                                      contextLineCount: 3
+                                    } : { enabled: false }
                                   }}
                                 />
                               )}
