@@ -274,6 +274,117 @@ const safeDiffStat = (before = '', after = '') => {
   return { added, removed };
 };
 
+const buildLineDiffBlocks = (before = '', after = '') => {
+  const a = String(before || '').split('\n');
+  const b = String(after || '').split('\n');
+  const m = a.length;
+  const n = b.length;
+  if (m === 0 && n === 0) return [];
+  if (m * n > 2000000) {
+      return [{
+          id: 'block-0',
+          beforeStartIndex: 0,
+          beforeEndIndex: m,
+          afterStartIndex: 0,
+          afterEndIndex: n,
+          beforeText: String(before || ''),
+          afterText: String(after || ''),
+          changeType: 'modified',
+          action: 'pending',
+          contextBefore: '',
+          contextAfter: '',
+      }];
+  }
+
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i += 1) {
+      for (let j = 1; j <= n; j += 1) {
+          dp[i][j] = a[i - 1] === b[j - 1]
+              ? dp[i - 1][j - 1] + 1
+              : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+  }
+
+  const ops = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+          ops.push({ t: 'eq', v: a[i - 1] });
+          i -= 1;
+          j -= 1;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+          ops.push({ t: 'ins', v: b[j - 1] });
+          j -= 1;
+      } else {
+          ops.push({ t: 'del', v: a[i - 1] });
+          i -= 1;
+      }
+  }
+  ops.reverse();
+
+  const blocks = [];
+  let bi = 0;
+  let ai = 0;
+  let active = null;
+
+  const startBlock = () => {
+      active = {
+          beforeStartIndex: bi,
+          afterStartIndex: ai,
+          beforeLines: [],
+          afterLines: [],
+      };
+  };
+
+  const finishBlock = () => {
+      if (!active) return;
+      const beforeEndIndex = bi;
+      const afterEndIndex = ai;
+      const beforeText = active.beforeLines.join('\n');
+      const afterText = active.afterLines.join('\n');
+      const changeType = active.beforeLines.length === 0 ? 'added' : (active.afterLines.length === 0 ? 'deleted' : 'modified');
+
+      const ctxBefore = b.slice(Math.max(0, active.afterStartIndex - 2), active.afterStartIndex).join('\n');
+      const ctxAfter = b.slice(afterEndIndex, Math.min(n, afterEndIndex + 2)).join('\n');
+      const id = `block-${blocks.length}`;
+      blocks.push({
+          id,
+          beforeStartIndex: active.beforeStartIndex,
+          beforeEndIndex,
+          afterStartIndex: active.afterStartIndex,
+          afterEndIndex,
+          beforeText,
+          afterText,
+          changeType,
+          action: 'pending',
+          contextBefore: ctxBefore,
+          contextAfter: ctxAfter,
+      });
+      active = null;
+  };
+
+  for (const op of ops) {
+      if (op.t === 'eq') {
+          finishBlock();
+          bi += 1;
+          ai += 1;
+          continue;
+      }
+      if (!active) startBlock();
+      if (op.t === 'del') {
+          active.beforeLines.push(op.v);
+          bi += 1;
+      } else if (op.t === 'ins') {
+          active.afterLines.push(op.v);
+          ai += 1;
+      }
+  }
+  finishBlock();
+
+  return blocks;
+};
+
 const readLayoutPrefs = () => {
   if (typeof window === 'undefined') return {};
   try {
@@ -1257,13 +1368,50 @@ function App() {
           if (prev === next) return;
           const changeType = prev === null ? 'added' : (next === null ? 'deleted' : 'modified');
           const stat = safeDiffStat(prev || '', next || '');
+          let blocks = [];
+          if (changeType === 'modified') {
+              blocks = buildLineDiffBlocks(prev || '', next || '').map((b, idx) => ({ ...b, id: `${path}#${idx}` }));
+          } else if (changeType === 'added') {
+              const afterText = String(next || '');
+              const afterEndIndex = afterText ? afterText.split('\n').length : 0;
+              blocks = [{
+                  id: `${path}#0`,
+                  beforeStartIndex: 0,
+                  beforeEndIndex: 0,
+                  afterStartIndex: 0,
+                  afterEndIndex,
+                  beforeText: '',
+                  afterText,
+                  changeType: 'added',
+                  action: 'pending',
+                  contextBefore: '',
+                  contextAfter: '',
+              }];
+          } else if (changeType === 'deleted') {
+              const beforeText = String(prev || '');
+              const beforeEndIndex = beforeText ? beforeText.split('\n').length : 0;
+              blocks = [{
+                  id: `${path}#0`,
+                  beforeStartIndex: 0,
+                  beforeEndIndex,
+                  afterStartIndex: 0,
+                  afterEndIndex: 0,
+                  beforeText,
+                  afterText: '',
+                  changeType: 'deleted',
+                  action: 'pending',
+                  contextBefore: '',
+                  contextAfter: '',
+              }];
+          }
           diffs.push({
               path,
               before: prev,
               after: next,
               changeType,
               stat,
-              action: 'pending'
+              action: 'pending',
+              blocks
           });
       });
       return diffs.sort((a, b) => a.path.localeCompare(b.path));
@@ -1279,7 +1427,8 @@ function App() {
               taskId,
               files: diffs,
               expanded: diffs.length > 0,
-              status: diffs.length ? 'ready' : 'clean'
+              status: diffs.length ? 'ready' : 'clean',
+              cursorByPath: {}
           });
           if (after?.raw) {
               await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true, snapshot: after.raw });
@@ -2604,19 +2753,43 @@ function App() {
       setTaskReview((prev) => (prev ? { ...prev, expanded: !prev.expanded } : prev));
   }, []);
 
+  const computeTaskFileAction = useCallback((file) => {
+      if (!file) return 'pending';
+      const blocks = Array.isArray(file.blocks) ? file.blocks : [];
+      if (!blocks.length) return file.action || 'pending';
+      const pending = blocks.filter((b) => b.action === 'pending').length;
+      if (pending > 0) return 'pending';
+      const kept = blocks.filter((b) => b.action === 'kept').length;
+      const reverted = blocks.filter((b) => b.action === 'reverted').length;
+      if (kept === blocks.length) return 'kept';
+      if (reverted === blocks.length) return 'reverted';
+      return 'mixed';
+  }, []);
+
+  const computeTaskStatus = useCallback((files, fallback = 'ready') => {
+      const list = Array.isArray(files) ? files : [];
+      if (list.length === 0) return 'clean';
+      const anyPending = list.some((f) => computeTaskFileAction(f) === 'pending');
+      return anyPending ? fallback : 'resolved';
+  }, [computeTaskFileAction]);
+
   const keepTaskFile = useCallback((path) => {
       if (!taskReview?.files?.length) return;
       setTaskReview((prev) => {
           if (!prev) return prev;
-          const files = prev.files.map((f) => f.path === path ? { ...f, action: 'kept' } : f);
-          const status = files.every((f) => f.action !== 'pending') ? 'resolved' : prev.status;
-          return { ...prev, files, status };
+          const files = prev.files.map((f) => {
+              if (f.path !== path) return f;
+              const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => ({ ...b, action: 'kept' })) : f.blocks;
+              return { ...f, action: 'kept', blocks };
+          });
+          const status = computeTaskStatus(files, prev.status);
+          return { ...prev, files, status, cursorByPath: prev.cursorByPath || {} };
       });
       setWorkspaceState((prev) => ({
           ...prev,
           files: prev.files.map((f) => f.path === path ? { ...f, updated: false } : f)
       }));
-  }, [taskReview]);
+  }, [computeTaskStatus, taskReview]);
 
   const keepAllTaskFiles = useCallback(() => {
       const paths = taskReview?.files?.map((f) => f.path) || [];
@@ -2630,11 +2803,56 @@ function App() {
       }));
       setTaskReview((prev) => (prev ? {
           ...prev,
-          files: prev.files.map((f) => ({ ...f, action: 'kept' })),
+          files: prev.files.map((f) => ({
+              ...f,
+              action: 'kept',
+              blocks: Array.isArray(f.blocks) ? f.blocks.map((b) => ({ ...b, action: 'kept' })) : f.blocks
+          })),
           status: 'resolved',
           expanded: false
       } : prev));
   }, [taskReview]);
+
+  const setTaskReviewCursor = useCallback((path, index) => {
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const cursorByPath = { ...(prev.cursorByPath || {}) };
+          cursorByPath[path] = Number.isFinite(Number(index)) ? Math.max(0, Math.floor(Number(index))) : 0;
+          return { ...prev, cursorByPath };
+      });
+  }, []);
+
+  const keepTaskBlock = useCallback((path, blockId) => {
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((f) => {
+              if (f.path !== path) return f;
+              const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => b.id === blockId ? { ...b, action: 'kept' } : b) : f.blocks;
+              const nextFile = { ...f, blocks };
+              return { ...nextFile, action: computeTaskFileAction(nextFile) };
+          });
+          const status = computeTaskStatus(files, prev.status);
+          return { ...prev, files, status, cursorByPath: prev.cursorByPath || {} };
+      });
+      setWorkspaceState((prev) => ({
+          ...prev,
+          files: prev.files.map((f) => f.path === path ? { ...f, updated: false } : f)
+      }));
+  }, [computeTaskFileAction, computeTaskStatus]);
+
+  const revertTaskBlock = useCallback((path, blockId) => {
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((f) => {
+              if (f.path !== path) return f;
+              const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => b.id === blockId ? { ...b, action: 'reverted' } : b) : f.blocks;
+              const nextFile = { ...f, blocks };
+              return { ...nextFile, action: computeTaskFileAction(nextFile) };
+          });
+          const status = computeTaskStatus(files, prev.status);
+          return { ...prev, files, status, cursorByPath: prev.cursorByPath || {} };
+      });
+  }, [computeTaskFileAction, computeTaskStatus]);
 
   const revertTaskFile = useCallback(async (path) => {
       const target = taskReview?.files?.find((f) => f.path === path);
@@ -2649,16 +2867,20 @@ function App() {
           await syncWorkspaceFromDisk({ includeContent: true, highlight: false, force: true });
           setTaskReview((prev) => {
               if (!prev) return prev;
-              const files = prev.files.map((f) => f.path === path ? { ...f, action: 'reverted' } : f);
-              const status = files.every((f) => f.action !== 'pending') ? 'resolved' : 'ready';
-              return { ...prev, files, status };
+              const files = prev.files.map((f) => {
+                  if (f.path !== path) return f;
+                  const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => ({ ...b, action: 'reverted' })) : f.blocks;
+                  return { ...f, action: 'reverted', blocks };
+              });
+              const status = computeTaskStatus(files, 'ready');
+              return { ...prev, files, status, cursorByPath: prev.cursorByPath || {} };
           });
       } catch (err) {
           console.error('Revert file failed', err);
           alert(`撤销失败：${err.message || err}`);
           setTaskReview((prev) => (prev ? { ...prev, status: prev.status === 'applying' ? 'ready' : prev.status } : prev));
       }
-  }, [syncWorkspaceFromDisk, taskReview, workspaceDriver]);
+  }, [computeTaskStatus, syncWorkspaceFromDisk, taskReview, workspaceDriver]);
 
   const revertAllTaskFiles = useCallback(async () => {
       if (!taskReview?.files?.length || !workspaceDriver) return;
@@ -2675,7 +2897,11 @@ function App() {
           await syncWorkspaceFromDisk({ includeContent: true, highlight: false, force: true });
           setTaskReview((prev) => (prev ? {
               ...prev,
-              files: prev.files.map((f) => ({ ...f, action: 'reverted' })),
+              files: prev.files.map((f) => ({
+                  ...f,
+                  action: 'reverted',
+                  blocks: Array.isArray(f.blocks) ? f.blocks.map((b) => ({ ...b, action: 'reverted' })) : f.blocks
+              })),
               status: 'resolved',
               expanded: false
           } : prev));
@@ -3892,6 +4118,12 @@ function App() {
                       variant="inline"
                     />
                   )}
+                  taskReview={taskReview}
+                  onTaskKeepFile={keepTaskFile}
+                  onTaskRevertFile={revertTaskFile}
+                  onTaskKeepBlock={keepTaskBlock}
+                  onTaskRevertBlock={revertTaskBlock}
+                  onTaskSetCursor={setTaskReviewCursor}
                   diffTabPrefix={DIFF_TAB_PREFIX}
                   diffTabs={diffTabs}
                   diffViewMode={uiDisplayPreferences?.diffView || 'compact'}

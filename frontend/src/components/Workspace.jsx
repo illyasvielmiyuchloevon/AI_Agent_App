@@ -403,6 +403,12 @@ function Workspace({
   onPreviewEntryChange,
   settingsTabPath,
   renderSettingsTab,
+  taskReview,
+  onTaskKeepFile,
+  onTaskRevertFile,
+  onTaskKeepBlock,
+  onTaskRevertBlock,
+  onTaskSetCursor,
   diffTabPrefix,
   diffTabs,
   diffViewMode = 'compact',
@@ -496,6 +502,9 @@ function Workspace({
   const monacoRef = useRef(null);
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
+  const taskReviewDecorationsRef = useRef(null);
+  const taskReviewWidgetsRef = useRef(new Map());
+  const taskReviewKeyDisposableRef = useRef(null);
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
   const [aiPanel, setAiPanel] = useState({
     open: false,
@@ -511,6 +520,99 @@ function Workspace({
   });
   const [aiPrompt, setAiPrompt] = useState({ open: false, action: '', title: '', placeholder: '', value: '' });
   const applyActions = useMemo(() => new Set(['optimize', 'generateComments', 'rewrite', 'modify']), []);
+
+  const taskReviewFile = useMemo(() => {
+    const list = taskReview?.files;
+    if (!activeFile || !Array.isArray(list)) return null;
+    return list.find((f) => f && f.path === activeFile) || null;
+  }, [activeFile, taskReview]);
+
+  const taskBlocks = useMemo(() => (
+    taskReviewFile && Array.isArray(taskReviewFile.blocks) ? taskReviewFile.blocks : []
+  ), [taskReviewFile]);
+
+  const taskCursorIndex = useMemo(() => {
+    const raw = taskReview?.cursorByPath && activeFile ? taskReview.cursorByPath[activeFile] : 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.floor(n));
+  }, [activeFile, taskReview]);
+
+  const taskActiveIndex = useMemo(() => {
+    if (!taskBlocks.length) return 0;
+    return Math.min(taskCursorIndex, taskBlocks.length - 1);
+  }, [taskBlocks.length, taskCursorIndex]);
+
+  const canUseTaskReview = !!activeFile
+    && !(settingsTabPath && activeFile === settingsTabPath)
+    && !(welcomeTabPath && activeFile === welcomeTabPath)
+    && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix))
+    && !!taskReviewFile
+    && taskBlocks.length > 0;
+
+  const toLines = useCallback((text) => {
+    const s = typeof text === 'string' ? text : String(text || '');
+    if (!s) return [];
+    return s.split('\n');
+  }, []);
+
+  const resolveBlockInLines = useCallback((lines, block, preferredIndex = 0) => {
+    const hay = Array.isArray(lines) ? lines : [];
+    const afterLines = toLines(block?.afterText || '');
+    const beforeLines = toLines(block?.beforeText || '');
+    const ctxBefore = toLines(block?.contextBefore || '');
+    const ctxAfter = toLines(block?.contextAfter || '');
+    const cb = ctxBefore.length > 2 ? ctxBefore.slice(ctxBefore.length - 2) : ctxBefore;
+    const ca = ctxAfter.length > 2 ? ctxAfter.slice(0, 2) : ctxAfter;
+
+    const rawPreferred = Number(block?.afterStartIndex);
+    const prefer = Number.isFinite(rawPreferred) ? Math.max(0, Math.floor(rawPreferred)) : Math.max(0, Math.floor(Number(preferredIndex) || 0));
+
+    const matches = [];
+    for (let i = 0; i <= hay.length; i += 1) {
+      let ok = true;
+      if (cb.length) {
+        if (i - cb.length < 0) ok = false;
+        for (let k = 0; ok && k < cb.length; k += 1) {
+          if (hay[i - cb.length + k] !== cb[k]) ok = false;
+        }
+      }
+      if (!ok) continue;
+      if (afterLines.length) {
+        if (i + afterLines.length > hay.length) continue;
+        for (let k = 0; ok && k < afterLines.length; k += 1) {
+          if (hay[i + k] !== afterLines[k]) ok = false;
+        }
+      }
+      if (!ok) continue;
+      if (ca.length) {
+        const start = i + afterLines.length;
+        if (start + ca.length > hay.length) continue;
+        for (let k = 0; ok && k < ca.length; k += 1) {
+          if (hay[start + k] !== ca[k]) ok = false;
+        }
+      }
+      if (ok) matches.push(i);
+    }
+
+    const startIndex = matches.length
+      ? matches.reduce((best, cur) => (Math.abs(cur - prefer) < Math.abs(best - prefer) ? cur : best), matches[0])
+      : Math.min(Math.max(0, prefer), hay.length);
+
+    const anchorLineNumber = (() => {
+      if (hay.length === 0) return 1;
+      if (startIndex >= hay.length) return hay.length;
+      return startIndex + 1;
+    })();
+
+    return {
+      startIndex,
+      afterLineCount: afterLines.length,
+      beforeLines,
+      afterLines,
+      anchorLineNumber,
+    };
+  }, [toLines]);
 
   const normalizedUndoRedoLimit = useMemo(() => {
     const raw = Number(undoRedoLimit);
@@ -570,10 +672,16 @@ function Workspace({
       code = monaco.KeyCode[`Digit${upper}`];
     } else if (upper === 'ENTER') {
       code = monaco.KeyCode.Enter;
+    } else if (upper === 'BACKSPACE') {
+      code = monaco.KeyCode.Backspace;
     } else if (upper === 'ESC' || upper === 'ESCAPE') {
       code = monaco.KeyCode.Escape;
     } else if (upper === 'TAB') {
       code = monaco.KeyCode.Tab;
+    } else if (upper === 'UP') {
+      code = monaco.KeyCode.UpArrow;
+    } else if (upper === 'DOWN') {
+      code = monaco.KeyCode.DownArrow;
     } else if (upper === ',') {
       code = monaco.KeyCode.Comma;
     } else if (upper === '.') {
@@ -626,6 +734,334 @@ function Workspace({
       selectedText: clipText(selectedText, 8000),
     };
   }, [activeFile, clipText]);
+
+  const taskActiveBlock = useMemo(() => {
+    if (!taskBlocks.length) return null;
+    return taskBlocks[taskActiveIndex] || null;
+  }, [taskActiveIndex, taskBlocks]);
+
+  const resolveBlockPosition = useCallback((lines, { needleLines, contextBefore, contextAfter, preferredIndex = 0 } = {}) => {
+    const hay = Array.isArray(lines) ? lines : [];
+    const needle = Array.isArray(needleLines) ? needleLines : [];
+    const cb = Array.isArray(contextBefore) ? (contextBefore.length > 2 ? contextBefore.slice(contextBefore.length - 2) : contextBefore) : [];
+    const ca = Array.isArray(contextAfter) ? (contextAfter.length > 2 ? contextAfter.slice(0, 2) : contextAfter) : [];
+    const prefer = Number.isFinite(Number(preferredIndex)) ? Math.max(0, Math.floor(Number(preferredIndex))) : 0;
+
+    const matches = [];
+    for (let i = 0; i <= hay.length; i += 1) {
+      let ok = true;
+      if (cb.length) {
+        if (i - cb.length < 0) ok = false;
+        for (let k = 0; ok && k < cb.length; k += 1) {
+          if (hay[i - cb.length + k] !== cb[k]) ok = false;
+        }
+      }
+      if (!ok) continue;
+      if (needle.length) {
+        if (i + needle.length > hay.length) continue;
+        for (let k = 0; ok && k < needle.length; k += 1) {
+          if (hay[i + k] !== needle[k]) ok = false;
+        }
+      }
+      if (!ok) continue;
+      if (ca.length) {
+        const start = i + needle.length;
+        if (start + ca.length > hay.length) continue;
+        for (let k = 0; ok && k < ca.length; k += 1) {
+          if (hay[start + k] !== ca[k]) ok = false;
+        }
+      }
+      if (ok) matches.push(i);
+    }
+
+    const startIndex = matches.length
+      ? matches.reduce((best, cur) => (Math.abs(cur - prefer) < Math.abs(best - prefer) ? cur : best), matches[0])
+      : Math.min(Math.max(0, prefer), hay.length);
+
+    const anchorLineNumber = (() => {
+      if (hay.length === 0) return 1;
+      if (startIndex >= hay.length) return hay.length;
+      return startIndex + 1;
+    })();
+
+    return { startIndex, anchorLineNumber };
+  }, []);
+
+  const applyTaskBlockToModel = useCallback((block, nextAction) => {
+    if (!canUseTaskReview) return false;
+    if (!block || !activeFile) return false;
+    if (nextAction !== 'kept' && nextAction !== 'reverted') return false;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return false;
+    const model = editor.getModel?.();
+    if (!model) return false;
+
+    const currentLines = (model.getValue?.() || '').split('\n');
+
+    const beforeLines = toLines(block.beforeText || '');
+    const afterLines = toLines(block.afterText || '');
+    const ctxBefore = toLines(block.contextBefore || '');
+    const ctxAfter = toLines(block.contextAfter || '');
+    const preferredIndex = Number.isFinite(Number(block.afterStartIndex)) ? Number(block.afterStartIndex) : 0;
+
+    const currentState = block.action === 'reverted' ? 'before' : 'after';
+    if (nextAction === 'reverted' && currentState === 'before') return true;
+    if (nextAction === 'kept' && currentState === 'after') return true;
+
+    const fromLines = nextAction === 'reverted' ? afterLines : beforeLines;
+    const toReplaceText = nextAction === 'reverted' ? beforeLines.join('\n') : afterLines.join('\n');
+
+    const pos = resolveBlockPosition(currentLines, {
+      needleLines: fromLines,
+      contextBefore: ctxBefore,
+      contextAfter: ctxAfter,
+      preferredIndex,
+    });
+
+    const startLineNumber = Math.max(1, pos.anchorLineNumber);
+    const range = (() => {
+      if (!fromLines.length) {
+        return new monaco.Range(startLineNumber, 1, startLineNumber, 1);
+      }
+      const endLineNumber = Math.max(startLineNumber, startLineNumber + fromLines.length - 1);
+      const endCol = model.getLineMaxColumn?.(endLineNumber) || 1;
+      return new monaco.Range(startLineNumber, 1, endLineNumber, endCol);
+    })();
+    editor.executeEdits('task-review', [{ range, text: toReplaceText, forceMoveMarkers: true }]);
+    editor.focus?.();
+    return true;
+  }, [activeFile, canUseTaskReview, resolveBlockPosition, toLines]);
+
+  const keepActiveTaskBlock = useCallback(() => {
+    if (!taskActiveBlock || typeof onTaskKeepBlock !== 'function') return;
+    const changed = applyTaskBlockToModel(taskActiveBlock, 'kept');
+    if (changed) onTaskKeepBlock(activeFile, taskActiveBlock.id);
+  }, [activeFile, applyTaskBlockToModel, onTaskKeepBlock, taskActiveBlock]);
+
+  const revertActiveTaskBlock = useCallback(() => {
+    if (!taskActiveBlock || typeof onTaskRevertBlock !== 'function') return;
+    const changed = applyTaskBlockToModel(taskActiveBlock, 'reverted');
+    if (changed) onTaskRevertBlock(activeFile, taskActiveBlock.id);
+  }, [activeFile, applyTaskBlockToModel, onTaskRevertBlock, taskActiveBlock]);
+
+  const setTaskCursor = useCallback((nextIndex) => {
+    if (!activeFile || typeof onTaskSetCursor !== 'function') return;
+    onTaskSetCursor(activeFile, nextIndex);
+  }, [activeFile, onTaskSetCursor]);
+
+  const revealTaskBlock = useCallback((block) => {
+    const editor = editorRef.current;
+    const model = editor?.getModel?.();
+    if (!editor || !model || !block) return;
+    const lines = (model.getValue?.() || '').split('\n');
+    const needleLines = block.action === 'reverted' ? toLines(block.beforeText || '') : toLines(block.afterText || '');
+    const pos = resolveBlockPosition(lines, {
+      needleLines,
+      contextBefore: toLines(block.contextBefore || ''),
+      contextAfter: toLines(block.contextAfter || ''),
+      preferredIndex: block.afterStartIndex,
+    });
+    const boundedLine = Math.max(1, Math.min(model.getLineCount?.() || 1, pos.anchorLineNumber));
+    editor.revealLineInCenter?.(boundedLine);
+    editor.setPosition?.({ lineNumber: boundedLine, column: 1 });
+  }, [resolveBlockPosition, toLines]);
+
+  useEffect(() => {
+    if (!canUseTaskReview) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const disposables = [];
+    const keepShortcut = getKeybinding('taskReview.keepBlock', 'Ctrl+Enter');
+    const revertShortcut = getKeybinding('taskReview.revertBlock', 'Ctrl+Backspace');
+    const keepKb = parseMonacoKeybinding(keepShortcut, monaco);
+    const revertKb = parseMonacoKeybinding(revertShortcut, monaco);
+
+    disposables.push(editor.addAction({
+      id: 'taskReview.keepBlock',
+      label: 'Task Review: Keep Block',
+      keybindings: keepKb ? [keepKb] : undefined,
+      run: () => keepActiveTaskBlock(),
+    }));
+    disposables.push(editor.addAction({
+      id: 'taskReview.revertBlock',
+      label: 'Task Review: Revert Block',
+      keybindings: revertKb ? [revertKb] : undefined,
+      run: () => revertActiveTaskBlock(),
+    }));
+
+    taskReviewKeyDisposableRef.current?.dispose?.();
+    taskReviewKeyDisposableRef.current = { dispose: () => disposables.forEach((d) => d?.dispose?.()) };
+
+    return () => {
+      disposables.forEach((d) => d?.dispose?.());
+      if (taskReviewKeyDisposableRef.current) taskReviewKeyDisposableRef.current = null;
+    };
+  }, [canUseTaskReview, getKeybinding, keepActiveTaskBlock, parseMonacoKeybinding, revertActiveTaskBlock]);
+
+  useEffect(() => {
+    if (!canUseTaskReview) return undefined;
+    if (!taskActiveBlock) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    revealTaskBlock(taskActiveBlock);
+    return undefined;
+  }, [canUseTaskReview, revealTaskBlock, taskActiveBlock, taskActiveIndex]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const widgets = taskReviewWidgetsRef.current;
+    for (const widget of widgets.values()) {
+      try {
+        editor.removeContentWidget?.(widget);
+      } catch {
+        // ignore
+      }
+    }
+    widgets.clear();
+
+    try {
+      taskReviewDecorationsRef.current?.clear?.();
+    } catch {
+      // ignore
+    }
+    taskReviewDecorationsRef.current = null;
+
+    if (!canUseTaskReview) return undefined;
+    const model = editor.getModel?.();
+    if (!model) return undefined;
+    const lines = (model.getValue?.() || '').split('\n');
+
+    const decorations = [];
+    taskBlocks.forEach((block, idx) => {
+      const needleLines = block.action === 'reverted' ? toLines(block.beforeText || '') : toLines(block.afterText || '');
+      const fromLen = needleLines.length || 1;
+      const pos = resolveBlockPosition(lines, {
+        needleLines,
+        contextBefore: toLines(block.contextBefore || ''),
+        contextAfter: toLines(block.contextAfter || ''),
+        preferredIndex: block.afterStartIndex,
+      });
+      const startLineNumber = Math.max(1, Math.min(model.getLineCount?.() || 1, pos.anchorLineNumber));
+      const endLineNumber = Math.max(startLineNumber, Math.min(model.getLineCount?.() || 1, startLineNumber + fromLen - 1));
+      decorations.push({
+        range: new monaco.Range(startLineNumber, 1, endLineNumber, 1),
+        options: {
+          isWholeLine: true,
+          className: `task-review-hunk task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}${idx === taskActiveIndex ? ' task-review-active' : ''}`,
+          linesDecorationsClassName: `task-review-glyph task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}${idx === taskActiveIndex ? ' task-review-active' : ''}`,
+        }
+      });
+
+      const widgetId = `task-review-widget:${activeFile}:${block.id}`;
+      const dom = document.createElement('div');
+      dom.className = `task-review-inline ${idx === taskActiveIndex ? 'active' : ''}`;
+
+      const header = document.createElement('div');
+      header.className = 'task-review-inline-header';
+
+      const left = document.createElement('div');
+      left.className = 'task-review-inline-title';
+      left.textContent = `变更 ${idx + 1}/${taskBlocks.length}`;
+
+      const actions = document.createElement('div');
+      actions.className = 'task-review-inline-actions';
+
+      const btnRevert = document.createElement('button');
+      btnRevert.type = 'button';
+      btnRevert.className = 'task-review-btn subtle';
+      btnRevert.textContent = '撤销';
+      btnRevert.disabled = block.action === 'reverted';
+      btnRevert.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onTaskSetCursor?.(activeFile, idx);
+        applyTaskBlockToModel(block, 'reverted');
+        onTaskRevertBlock?.(activeFile, block.id);
+      };
+
+      const btnKeep = document.createElement('button');
+      btnKeep.type = 'button';
+      btnKeep.className = 'task-review-btn primary';
+      btnKeep.textContent = '保留';
+      btnKeep.disabled = block.action === 'kept';
+      btnKeep.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onTaskSetCursor?.(activeFile, idx);
+        applyTaskBlockToModel(block, 'kept');
+        onTaskKeepBlock?.(activeFile, block.id);
+      };
+
+      actions.appendChild(btnRevert);
+      actions.appendChild(btnKeep);
+      header.appendChild(left);
+      header.appendChild(actions);
+      dom.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'task-review-inline-body';
+
+      const beforeText = String(block.beforeText || '');
+      const afterText = String(block.afterText || '');
+      if (beforeText) {
+        const del = document.createElement('pre');
+        del.className = 'task-review-inline-diff deleted';
+        del.textContent = beforeText.split('\n').map((l) => `- ${l}`).join('\n');
+        body.appendChild(del);
+      }
+      if (afterText) {
+        const add = document.createElement('pre');
+        add.className = 'task-review-inline-diff added';
+        add.textContent = afterText.split('\n').map((l) => `+ ${l}`).join('\n');
+        body.appendChild(add);
+      }
+
+      dom.appendChild(body);
+
+      const widget = {
+        getId: () => widgetId,
+        getDomNode: () => dom,
+        getPosition: () => ({
+          position: { lineNumber: startLineNumber, column: 1 },
+          preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE, monaco.editor.ContentWidgetPositionPreference.EXACT],
+        }),
+      };
+      widgets.set(widgetId, widget);
+      try {
+        editor.addContentWidget?.(widget);
+      } catch {
+        // ignore
+      }
+    });
+
+    taskReviewDecorationsRef.current = editor.createDecorationsCollection(decorations);
+    editor.layout?.();
+
+    return () => {
+      try {
+        taskReviewDecorationsRef.current?.clear?.();
+      } catch {
+        // ignore
+      }
+      taskReviewDecorationsRef.current = null;
+      for (const widget of widgets.values()) {
+        try {
+          editor.removeContentWidget?.(widget);
+        } catch {
+          // ignore
+        }
+      }
+      widgets.clear();
+    };
+  }, [activeFile, applyTaskBlockToModel, canUseTaskReview, onTaskKeepBlock, onTaskRevertBlock, resolveBlockPosition, taskActiveIndex, taskBlocks, toLines]);
 
   const buildInstruction = useCallback((action, { hasSelection, userInstruction }) => {
     if (action === 'explain') {
@@ -968,6 +1404,52 @@ function Workspace({
             ))}
           </div>
           <div className="monaco-shell" style={{ position: 'relative' }}>
+            {canUseTaskReview ? (
+              <div className="task-review-floating" role="region" aria-label="Task Review">
+                <div className="task-review-floating-main">
+                  <div className="task-review-floating-text">变更已完成，请确认是否采纳</div>
+                  <div className="task-review-floating-actions">
+                    <button type="button" className="task-review-btn subtle" onClick={revertActiveTaskBlock}>
+                      撤销（Ctrl+Backspace）
+                    </button>
+                    <button type="button" className="task-review-btn primary" onClick={keepActiveTaskBlock}>
+                      保留（Ctrl+Enter）
+                    </button>
+                    {typeof onTaskRevertFile === 'function' ? (
+                      <button type="button" className="task-review-btn" onClick={() => onTaskRevertFile(activeFile)}>
+                        全部撤销
+                      </button>
+                    ) : null}
+                    {typeof onTaskKeepFile === 'function' ? (
+                      <button type="button" className="task-review-btn" onClick={() => onTaskKeepFile(activeFile)}>
+                        全部采纳
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="task-review-floating-nav">
+                  <div className="task-review-floating-count">{taskActiveIndex + 1}/{taskBlocks.length}</div>
+                  <button
+                    type="button"
+                    className="task-review-btn"
+                    disabled={taskActiveIndex <= 0}
+                    onClick={() => setTaskCursor(taskActiveIndex - 1)}
+                    title="上一处变更"
+                  >
+                    <span className="codicon codicon-chevron-up" aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    className="task-review-btn"
+                    disabled={taskActiveIndex >= taskBlocks.length - 1}
+                    onClick={() => setTaskCursor(taskActiveIndex + 1)}
+                    title="下一处变更"
+                  >
+                    <span className="codicon codicon-chevron-down" aria-hidden />
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {activeFile ? (
                 settingsTabPath && activeFile === settingsTabPath && renderSettingsTab
                   ? renderSettingsTab()

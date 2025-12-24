@@ -613,7 +613,7 @@ function ChatArea({
                                             </div>
                                             {file.action !== 'pending' && (
                                                 <span className={`task-review-state ${file.action === 'reverted' ? 'danger' : 'muted'}`}>
-                                                    {file.action === 'reverted' ? '已撤销' : '已保留'}
+                                                    {file.action === 'reverted' ? '已撤销' : (file.action === 'mixed' ? '部分处理' : '已保留')}
                                                 </span>
                                             )}
                                         </div>

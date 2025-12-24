@@ -826,6 +826,159 @@ input:focus, select:focus, textarea:focus {
   box-shadow: none;
 }
 
+.task-review-floating {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-strong);
+  max-width: min(980px, calc(100% - 24px));
+}
+
+.task-review-floating-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-review-floating-text {
+  font-weight: 700;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.task-review-floating-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.task-review-floating-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-review-floating-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-width: 50px;
+  text-align: right;
+}
+
+.monaco-editor .task-review-hunk.task-review-added {
+  background: rgba(46, 160, 67, 0.16);
+}
+
+.monaco-editor .task-review-hunk.task-review-deleted {
+  background: rgba(248, 81, 73, 0.14);
+}
+
+.monaco-editor .task-review-hunk.task-review-modified {
+  background: rgba(56, 139, 253, 0.12);
+}
+
+.monaco-editor .task-review-hunk.task-review-reverted {
+  opacity: 0.6;
+}
+
+.monaco-editor .task-review-hunk.task-review-kept {
+  opacity: 0.85;
+}
+
+.monaco-editor .task-review-hunk.task-review-active {
+  outline: 1px solid rgba(56, 139, 253, 0.65);
+  outline-offset: -1px;
+}
+
+.monaco-editor .task-review-glyph.task-review-added {
+  border-left: 3px solid #2ea043;
+}
+
+.monaco-editor .task-review-glyph.task-review-deleted {
+  border-left: 3px solid #f85149;
+}
+
+.monaco-editor .task-review-glyph.task-review-modified {
+  border-left: 3px solid #388bfd;
+}
+
+.task-review-inline {
+  width: min(720px, calc(100vw - 40px));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow-strong);
+  overflow: hidden;
+}
+
+.task-review-inline.active {
+  border-color: var(--accent-border);
+}
+
+.task-review-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.task-review-inline-title {
+  font-weight: 800;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.task-review-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-review-inline-body {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-review-inline-diff {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: var(--monospace, 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+.task-review-inline-diff.deleted {
+  background: rgba(248, 81, 73, 0.12);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+.task-review-inline-diff.added {
+  background: rgba(46, 160, 67, 0.12);
+  border-color: rgba(46, 160, 67, 0.3);
+}
+
 .task-review-list {
   display: flex;
   flex-direction: column;
