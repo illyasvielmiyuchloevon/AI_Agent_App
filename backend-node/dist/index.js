@@ -51,20 +51,32 @@ const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 const aiEngine = new ai_engine_1.AiEngine();
-(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.use(async (req, res, next) => {
+    const body = req.body && typeof req.body === "object" ? req.body : null;
     const headerId = req.headers["x-workspace-id"];
     const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
-    const hint = (typeof headerId === "string" && headerId) ? headerId : (typeof headerRoot === "string" ? headerRoot : "");
-    if (!hint) {
+    const bodyWorkspaceId = body && typeof body.workspaceId === "string" ? String(body.workspaceId) : "";
+    const bodyWorkspaceRoot = body && typeof body.workspaceRoot === "string" ? String(body.workspaceRoot) : "";
+    const rootHintRaw = (typeof headerRoot === "string" ? headerRoot : "") || bodyWorkspaceRoot;
+    const idHintRaw = (typeof headerId === "string" ? headerId : "") || bodyWorkspaceId;
+    const rootHint = String(rootHintRaw || "").trim();
+    const idHint = String(idHintRaw || "").trim();
+    if (!rootHint && !idHint) {
         next();
         return;
     }
     try {
-        const handle = await manager_1.workspaceManager.openWorkspace(hint);
+        const existingById = idHint ? manager_1.workspaceManager.getWorkspace(idHint) : undefined;
+        const openRoot = rootHint || (path_1.default.isAbsolute(idHint) ? idHint : "");
+        if (!existingById && !openRoot) {
+            res.status(400).json({ detail: "Workspace root is required" });
+            return;
+        }
+        const handle = existingById
+            ? existingById
+            : await manager_1.workspaceManager.openWorkspace(openRoot);
         const firstFolder = handle.descriptor.folders[0];
-        const rootPath = firstFolder ? firstFolder.path : hint;
-        const body = req.body && typeof req.body === "object" ? req.body : null;
+        const rootPath = firstFolder ? firstFolder.path : (rootHint || idHint);
         const llmConfig = body && typeof body.llmConfig === "object"
             ? body.llmConfig
             : (body && typeof body.settings?.llmConfig === "object" ? body.settings.llmConfig : undefined);
@@ -75,6 +87,7 @@ app.use(async (req, res, next) => {
         res.status(400).json({ detail: e?.message || "Failed to open workspace" });
     }
 });
+(0, ai_engine_1.registerAiEngineRoutes)(app, aiEngine);
 app.post("/health", async (req, res) => {
     console.log("[Health] Checking health...");
     // Check config
