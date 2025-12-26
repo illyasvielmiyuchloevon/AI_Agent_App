@@ -349,12 +349,13 @@ input:focus, select:focus, textarea:focus {
 
 .explorer-header {
   height: 50px;
-  padding: 0 1rem;
-  border-bottom: none;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  background: var(--panel);
 }
 
 .explorer-title {
@@ -365,27 +366,69 @@ input:focus, select:focus, textarea:focus {
 }
 
 .explorer-label {
-  font-size: 0.9rem;
-  letter-spacing: 0.05em;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
   font-weight: 700;
   line-height: 1;
 }
 
 .explorer-sub {
-  font-size: 0.9rem;
-  color: var(--text);
+  font-size: 12px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 120px;
+  max-width: 260px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.explorer-sub .codicon {
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+.explorer-sub-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .explorer-actions {
   display: flex;
-  gap: 0.2rem;
+  gap: 4px;
   align-items: center;
+}
+
+.explorer-action-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  height: 28px;
+  width: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.explorer-action-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.explorer-action-btn:active {
+  transform: translateY(0.5px);
+}
+
+.explorer-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .session-list {
@@ -1412,11 +1455,79 @@ input:focus, select:focus, textarea:focus {
   gap: 0.2rem;
   padding: 0;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
+  overflow: hidden;
   align-items: stretch;
   min-height: 50px;
   height: 50px;
   background: var(--panel);
+}
+
+.tab-row-tabs {
+  display: flex;
+  gap: 0.2rem;
+  overflow-x: auto;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 4px;
+  flex-shrink: 0;
+}
+
+.tab-flag {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.tab-preview .tab-text {
+  font-style: italic;
+}
+
+.context-sep {
+  height: 1px;
+  background: var(--border);
+  opacity: 0.6;
+  margin: 4px 0;
+}
+
+.editor-groups {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.editor-groups-vertical {
+  flex-direction: row;
+}
+
+.editor-groups-horizontal {
+  flex-direction: column;
+}
+
+.editor-groups-single {
+  flex-direction: column;
+}
+
+.editor-group-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-group-pane:not(:first-child) {
+  border-left: 1px solid var(--border);
+}
+
+.editor-group-pane.active .tab-row {
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0);
 }
 
 .tab {
@@ -1620,8 +1731,13 @@ input:focus, select:focus, textarea:focus {
   pointer-events: auto;
 }
 
+.context-item {
+  border-radius: 8px;
+  margin: 2px 4px;
+}
+
 .context-item:hover {
-  background: var(--panel-sub);
+  background: var(--surface-hover);
 }
 
 .context-item.disabled {
@@ -1633,6 +1749,17 @@ input:focus, select:focus, textarea:focus {
 .tree-item-virtual:hover {
   background: var(--surface-hover);
   border-radius: 6px;
+}
+
+.explorer-row.active,
+.explorer-row.revealed {
+  background: var(--surface-hover);
+  border-radius: 6px;
+}
+
+.explorer-row.revealed {
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
 }
 
 /* Sidebar Resizer Styles */

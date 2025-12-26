@@ -114,10 +114,17 @@ export function createWorkspaceController(deps) {
 
   const openWelcomeTab = ({ focus = true } = {}) => {
     setWorkspaceState((prev) => {
-      const exists = prev.openTabs.includes(welcomeTabPath);
-      const nextTabs = exists ? prev.openTabs : [...prev.openTabs, welcomeTabPath];
-      const nextActive = focus ? welcomeTabPath : (prev.activeFile || (exists ? prev.activeFile : welcomeTabPath));
-      return { ...prev, openTabs: nextTabs, activeFile: nextActive, view: 'code' };
+      const fallbackGroup = { id: 'group-1', openTabs: Array.isArray(prev.openTabs) ? prev.openTabs : [], activeFile: String(prev.activeFile || ''), locked: false, previewTab: '' };
+      const groups = Array.isArray(prev.editorGroups) && prev.editorGroups.length > 0 ? prev.editorGroups : [fallbackGroup];
+      const activeGroupId = String(prev.activeGroupId || groups[0].id);
+      const group = groups.find((g) => g.id === activeGroupId) || groups[0];
+
+      const exists = (group.openTabs || []).includes(welcomeTabPath);
+      const nextTabs = exists ? (group.openTabs || []) : [...(group.openTabs || []), welcomeTabPath];
+      const nextActive = focus ? welcomeTabPath : (group.activeFile || (exists ? group.activeFile : welcomeTabPath));
+
+      const nextGroups = groups.map((g) => g.id === group.id ? { ...g, openTabs: nextTabs, activeFile: nextActive } : g);
+      return { ...prev, editorGroups: nextGroups, activeGroupId: group.id, openTabs: nextTabs, activeFile: nextActive, view: 'code' };
     });
   };
 
@@ -175,6 +182,8 @@ export function createWorkspaceController(deps) {
 
     setWorkspaceState({
       ...initialWorkspaceState,
+      editorGroups: [{ id: 'group-1', openTabs: [welcomeTabPath], activeFile: welcomeTabPath, locked: false, previewTab: '' }],
+      activeGroupId: 'group-1',
       openTabs: [welcomeTabPath],
       activeFile: welcomeTabPath,
       view: 'code',
@@ -186,9 +195,15 @@ export function createWorkspaceController(deps) {
   const effectEnsureWelcomeTabWhenNoWorkspace = ({ workspaceDriver } = {}) => {
     if (workspaceDriver) return;
     setWorkspaceState((prev) => {
-      if (prev.openTabs.includes(welcomeTabPath)) return prev;
-      if (prev.openTabs.length > 0) return prev;
-      return { ...prev, openTabs: [welcomeTabPath], activeFile: welcomeTabPath, view: 'code' };
+      const fallbackGroup = { id: 'group-1', openTabs: Array.isArray(prev.openTabs) ? prev.openTabs : [], activeFile: String(prev.activeFile || ''), locked: false, previewTab: '' };
+      const groups = Array.isArray(prev.editorGroups) && prev.editorGroups.length > 0 ? prev.editorGroups : [fallbackGroup];
+      const activeGroupId = String(prev.activeGroupId || groups[0].id);
+      const group = groups.find((g) => g.id === activeGroupId) || groups[0];
+      if ((group.openTabs || []).includes(welcomeTabPath)) return prev;
+      if ((group.openTabs || []).length > 0) return prev;
+      const nextTabs = [welcomeTabPath];
+      const nextGroups = groups.map((g) => g.id === group.id ? { ...g, openTabs: nextTabs, activeFile: welcomeTabPath } : g);
+      return { ...prev, editorGroups: nextGroups, activeGroupId: group.id, openTabs: nextTabs, activeFile: welcomeTabPath, view: 'code' };
     });
   };
 
@@ -196,10 +211,15 @@ export function createWorkspaceController(deps) {
     if (!workspaceDriver) return;
     if (workspaceBindingStatus !== 'ready') return;
     setWorkspaceState((prev) => {
-      if (!prev.openTabs.includes(welcomeTabPath)) return prev;
-      const nextTabs = prev.openTabs.filter((t) => t !== welcomeTabPath);
-      const nextActive = prev.activeFile === welcomeTabPath ? (nextTabs[nextTabs.length - 1] || '') : prev.activeFile;
-      return { ...prev, openTabs: nextTabs, activeFile: nextActive };
+      const fallbackGroup = { id: 'group-1', openTabs: Array.isArray(prev.openTabs) ? prev.openTabs : [], activeFile: String(prev.activeFile || ''), locked: false, previewTab: '' };
+      const groups = Array.isArray(prev.editorGroups) && prev.editorGroups.length > 0 ? prev.editorGroups : [fallbackGroup];
+      const activeGroupId = String(prev.activeGroupId || groups[0].id);
+      const group = groups.find((g) => g.id === activeGroupId) || groups[0];
+      if (!(group.openTabs || []).includes(welcomeTabPath)) return prev;
+      const nextTabs = (group.openTabs || []).filter((t) => t !== welcomeTabPath);
+      const nextActive = group.activeFile === welcomeTabPath ? (nextTabs[nextTabs.length - 1] || '') : group.activeFile;
+      const nextGroups = groups.map((g) => g.id === group.id ? { ...g, openTabs: nextTabs, activeFile: nextActive } : g);
+      return { ...prev, editorGroups: nextGroups, activeGroupId: group.id, openTabs: nextTabs, activeFile: nextActive };
     });
   };
 

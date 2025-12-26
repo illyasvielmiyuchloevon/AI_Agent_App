@@ -1,10 +1,13 @@
-const { ipcMain, dialog, BrowserWindow, screen } = require('electron');
+const { ipcMain, dialog, BrowserWindow, screen, app, shell } = require('electron');
+const path = require('path');
 const recentStore = require('./recentStore');
 const { createWorkspaceService } = require('./workspaceService');
 
 const workspaceService = createWorkspaceService();
 
 function registerIpcHandlers() {
+  const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
+
   const getWindowFromEvent = (event) => {
     try {
       return BrowserWindow.fromWebContents(event.sender);
@@ -140,6 +143,72 @@ function registerIpcHandlers() {
     const win = getWindowFromEvent(event);
     if (win) win.close();
     return { ok: true };
+  });
+
+  ipcMain.handle('shell:showItemInFolder', async (_event, fsPath) => {
+    const target = String(fsPath || '').trim();
+    if (!target) return { ok: false, error: 'missing path' };
+    try {
+      shell.showItemInFolder(target);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('shell:openPath', async (_event, fsPath) => {
+    const target = String(fsPath || '').trim();
+    if (!target) return { ok: false, error: 'missing path' };
+    try {
+      const res = await shell.openPath(target);
+      if (res) return { ok: false, error: String(res) };
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('window:openNewWindow', async (_event, payload) => {
+    const openFile = payload && payload.openFile ? String(payload.openFile) : '';
+    const openMode = payload && payload.openMode ? String(payload.openMode) : '';
+    const workspaceFsPath = payload && payload.workspaceFsPath ? String(payload.workspaceFsPath) : '';
+
+    const win = new BrowserWindow({
+      width: 1400,
+      height: 800,
+      frame: false,
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    try {
+      if (isDev && process.env.VITE_DEV_SERVER_URL) {
+        const url = new URL(process.env.VITE_DEV_SERVER_URL);
+        if (openFile) url.searchParams.set('openFile', openFile);
+        if (openMode) url.searchParams.set('openMode', openMode);
+        if (workspaceFsPath) url.searchParams.set('workspaceFsPath', workspaceFsPath);
+        await win.loadURL(url.toString());
+      } else {
+        const indexPath = path.join(__dirname, '../../frontend/dist/index.html');
+        await win.loadFile(indexPath, {
+          query: {
+            ...(openFile ? { openFile } : {}),
+            ...(openMode ? { openMode } : {}),
+            ...(workspaceFsPath ? { workspaceFsPath } : {}),
+          },
+        });
+      }
+      win.focus();
+      return { ok: true };
+    } catch (err) {
+      try { win.close(); } catch {}
+      return { ok: false, error: err?.message || String(err) };
+    }
   });
 }
 

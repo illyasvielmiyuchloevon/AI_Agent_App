@@ -11,7 +11,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
     applySnapLayout: (layoutId, zoneIndex) => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex }),
+    openNewWindow: (payload) => ipcRenderer.invoke('window:openNewWindow', payload),
     close: () => ipcRenderer.invoke('window:close'),
+  },
+  shell: {
+    showItemInFolder: (fsPath) => ipcRenderer.invoke('shell:showItemInFolder', fsPath),
+    openPath: (fsPath) => ipcRenderer.invoke('shell:openPath', fsPath),
   },
   workspace: {
     pickFolder: () => ipcRenderer.invoke('workspace:pickFolder'),

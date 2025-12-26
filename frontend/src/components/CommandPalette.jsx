@@ -5,8 +5,13 @@ import { createPortal } from 'react-dom';
 const CommandPalette = ({
     isOpen,
     onClose,
+    initialQuery = '',
+    context = null,
     files = [],
+    editorGroups = [],
+    activeGroupId = '',
     onOpenFile,
+    onCloseEditor,
     onSearchText,
     workspaceRoots = [],
     aiInvoker
@@ -19,14 +24,89 @@ const CommandPalette = ({
     useEffect(() => {
         if (isOpen && inputRef.current) {
             inputRef.current.focus();
-            setQuery('');
+            setQuery(String(initialQuery || ''));
             setSelectedIndex(0);
         }
-    }, [isOpen]);
+    }, [isOpen, initialQuery]);
+
+    const editorNavState = useMemo(() => {
+        const raw = String(query || '').trim();
+        const lower = raw.toLowerCase();
+        const isEditorNav = lower === 'edt' || lower.startsWith('edt ') || lower.startsWith('>edt') || lower.startsWith('> edt');
+        const normalized = lower.startsWith('>') ? lower.slice(1).trim() : lower;
+        const filterText = normalized.startsWith('edt') ? normalized.slice(3).trim() : '';
+
+        const groupIdHint = (context && typeof context === 'object' && context.type === 'editorNav' && context.groupId)
+            ? String(context.groupId)
+            : '';
+        const groupId = groupIdHint || String(activeGroupId || '').trim() || (editorGroups[0]?.id ? String(editorGroups[0]?.id) : '');
+        const groupIndex = editorGroups.findIndex((g) => String(g?.id) === groupId);
+        const group = groupIndex >= 0 ? editorGroups[groupIndex] : (editorGroups[0] || null);
+
+        return {
+            isEditorNav,
+            filterText,
+            groupId: group ? String(group?.id || groupId) : groupId,
+            groupIndex: groupIndex >= 0 ? groupIndex : (group ? 0 : -1),
+            group,
+        };
+    }, [activeGroupId, context, editorGroups, query]);
+
+    const getFileIcon = (path) => {
+        const ext = String(path || '').split('.').pop()?.toLowerCase();
+        const map = {
+            js: 'codicon-file-code',
+            jsx: 'codicon-file-code',
+            ts: 'codicon-file-code',
+            tsx: 'codicon-file-code',
+            html: 'codicon-code',
+            css: 'codicon-symbol-color',
+            json: 'codicon-json',
+            md: 'codicon-markdown',
+            txt: 'codicon-file-text',
+            py: 'codicon-symbol-keyword',
+        };
+        return map[ext] || 'codicon-file';
+    };
 
     const filteredItems = useMemo(() => {
         const items = [];
         const q = query.toLowerCase();
+
+        if (editorNavState.isEditorNav) {
+            const group = editorNavState.group;
+            const groupId = editorNavState.groupId;
+            const filter = String(editorNavState.filterText || '').toLowerCase();
+            const openTabs = Array.isArray(group?.openTabs) ? group.openTabs.filter(Boolean) : [];
+            const active = String(group?.activeFile || '').trim();
+
+            const ordered = active && openTabs.includes(active)
+                ? [active, ...openTabs.filter((t) => t !== active)]
+                : openTabs;
+
+            ordered
+                .filter((p) => {
+                    if (!filter) return true;
+                    const hay = `${p.split('/').pop()} ${p}`.toLowerCase();
+                    return hay.includes(filter);
+                })
+                .slice(0, 80)
+                .forEach((p) => {
+                    items.push({
+                        type: 'editor',
+                        id: `editor:${groupId}:${p}`,
+                        label: p.split('/').pop(),
+                        description: p,
+                        action: () => onOpenFile?.(p, { groupId, mode: 'persistent' }),
+                        icon: getFileIcon(p),
+                        closeAction: () => onCloseEditor?.(p, { groupId }),
+                        isActive: active && p === active,
+                    });
+                });
+
+            return items;
+        }
+
         const inCommandMode = query.trim().startsWith('>');
         const commandQuery = inCommandMode ? query.trim().slice(1).trim().toLowerCase() : '';
         
@@ -92,6 +172,15 @@ const CommandPalette = ({
                 shortcut: 'Ctrl + Shift + O'
             });
 
+            pushIfMatch({
+                type: 'action',
+                id: 'editor-nav',
+                label: '编辑器：打开编辑器导航 (edt)',
+                description: '显示当前组已打开的编辑器',
+                action: () => setQuery('edt '),
+                icon: 'codicon-list-selection',
+            });
+
             if (aiInvoker && typeof aiInvoker.run === 'function') {
                 pushIfMatch({ type: 'action', id: 'ai-explain', label: 'AI: Explain Code', description: 'Explain selection or file', action: () => aiInvoker.run('explain'), icon: 'codicon-lightbulb', shortcut: 'Ctrl + Alt + E' });
                 pushIfMatch({ type: 'action', id: 'ai-tests', label: 'AI: Generate Unit Tests', description: 'Generate tests for selection or file', action: () => aiInvoker.run('generateTests'), icon: 'codicon-beaker', shortcut: 'Ctrl + Alt + T' });
@@ -121,7 +210,7 @@ const CommandPalette = ({
         }
 
         return items;
-    }, [aiInvoker, query, files, onSearchText, onOpenFile]);
+    }, [aiInvoker, editorNavState, files, onCloseEditor, onOpenFile, onSearchText, query]);
 
     useEffect(() => {
         setSelectedIndex(0);
@@ -139,7 +228,7 @@ const CommandPalette = ({
             if (filteredItems[selectedIndex]) {
                 filteredItems[selectedIndex].action();
                 // Only close if it's a real action, not just a hint
-                if (filteredItems[selectedIndex].id !== 'search-files' && filteredItems[selectedIndex].id !== 'show-commands') {
+                if (filteredItems[selectedIndex].id !== 'search-files' && filteredItems[selectedIndex].id !== 'show-commands' && filteredItems[selectedIndex].id !== 'editor-nav') {
                      onClose();
                 }
             }
@@ -159,6 +248,14 @@ const CommandPalette = ({
     }, [selectedIndex]);
 
     if (!isOpen) return null;
+
+    const palettePlaceholder = editorNavState.isEditorNav
+        ? 'edt <filter> (Editor Navigation)'
+        : 'Search files by name (append :<line> to go to line)';
+
+    const groupLabel = editorNavState.groupIndex >= 0
+        ? `第 ${editorNavState.groupIndex + 1} 组`
+        : (editorNavState.groupId ? String(editorNavState.groupId) : '');
 
     return createPortal(
         <div className="command-palette-overlay" onClick={onClose} style={{
@@ -193,7 +290,7 @@ const CommandPalette = ({
                         value={query}
                         onChange={e => setQuery(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Search files by name (append :<line> to go to line)"
+                        placeholder={palettePlaceholder}
                         style={{
                             width: '100%',
                             background: 'var(--bg-subtle)',
@@ -207,6 +304,34 @@ const CommandPalette = ({
                         }}
                     />
                 </div>
+
+                {editorNavState.isEditorNav ? (
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '6px 12px',
+                        borderTop: '1px solid var(--border-subtle)',
+                        borderBottom: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-subtle)'
+                    }}>
+                        <div style={{ flex: 1, color: 'var(--muted)', fontSize: 12 }}>
+                            编辑器导航（当前组已打开的编辑器）
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text)' }}>
+                            <span>{groupLabel}</span>
+                            <button
+                                type="button"
+                                className="ghost-btn tiny"
+                                style={{ height: 22, width: 22, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                onClick={onClose}
+                                title="Close"
+                            >
+                                <i className="codicon codicon-close" aria-hidden />
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
                 
                 <div 
                     className="command-palette-list" 
@@ -214,7 +339,7 @@ const CommandPalette = ({
                     style={{
                         maxHeight: '400px',
                         overflowY: 'auto',
-                        borderTop: '1px solid var(--border-subtle)'
+                        borderTop: editorNavState.isEditorNav ? 'none' : '1px solid var(--border-subtle)'
                     }}
                 >
                     {filteredItems.map((item, index) => (
@@ -223,7 +348,7 @@ const CommandPalette = ({
                             className={`command-item ${index === selectedIndex ? 'selected' : ''}`}
                             onClick={() => {
                                 item.action();
-                                if (item.id !== 'search-files' && item.id !== 'show-commands') {
+                                if (item.id !== 'search-files' && item.id !== 'show-commands' && item.id !== 'editor-nav') {
                                     onClose();
                                 }
                             }}
@@ -274,6 +399,21 @@ const CommandPalette = ({
                                     {item.shortcut}
                                 </div>
                             )}
+
+                            {editorNavState.isEditorNav && item.type === 'editor' && typeof item.closeAction === 'function' ? (
+                                <button
+                                    type="button"
+                                    className="ghost-btn tiny"
+                                    style={{ height: 22, width: 22, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 6 }}
+                                    title="Close editor"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        item.closeAction();
+                                    }}
+                                >
+                                    <i className="codicon codicon-close" aria-hidden />
+                                </button>
+                            ) : null}
                         </div>
                     ))}
                     {filteredItems.length === 0 && (

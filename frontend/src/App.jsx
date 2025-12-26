@@ -181,6 +181,7 @@ const DEFAULT_TOOL_SETTINGS = {
 const DEFAULT_KEYBINDINGS = {
   'app.commandPalette': 'Ctrl+Shift+P',
   'app.quickOpen': 'Ctrl+P',
+  'editor.openEditors': 'Ctrl+E',
   'editor.ai.explain': 'Ctrl+Alt+E',
   'editor.ai.tests': 'Ctrl+Alt+T',
   'editor.ai.optimize': 'Ctrl+Alt+O',
@@ -210,6 +211,15 @@ const DEFAULT_PROJECT_CONFIG = {
   toolSettings: DEFAULT_TOOL_SETTINGS,
   keybindings: DEFAULT_KEYBINDINGS,
   editorUndoRedoLimit: 16,
+  editor: {
+    tabSize: 4,
+    wordWrap: false,
+    minimap: true,
+    fontSize: 13,
+    lineHeight: 21,
+    fontLigatures: true,
+    renderWhitespace: 'none',
+  },
   theme: detectSystemTheme(),
   sidebarWidth: 260,
   chatPanelWidth: 420,
@@ -493,6 +503,12 @@ const initialWorkspaceState = {
   fileTree: [],
   openTabs: [],
   activeFile: '',
+  editorGroups: [{ id: 'group-1', openTabs: [], activeFile: '', locked: false, previewTab: '' }],
+  activeGroupId: 'group-1',
+  editorLayout: { mode: 'single', direction: 'vertical' },
+  previewEditorEnabled: true,
+  tabMeta: {},
+  tabHistory: [],
   previewWidth: 50,
   livePreview: '',
   view: 'code',
@@ -537,6 +553,14 @@ function App() {
     base.embedding_options = { ...(DEFAULT_PROJECT_CONFIG.embedding_options || {}), ...(base.embedding_options || {}) };
     if (!base.keybindings || typeof base.keybindings !== 'object') base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
     else base.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...base.keybindings };
+    if (!base.editor || typeof base.editor !== 'object') base.editor = { ...DEFAULT_PROJECT_CONFIG.editor };
+    else base.editor = { ...DEFAULT_PROJECT_CONFIG.editor, ...base.editor };
+    {
+      const undoLimitRaw = Number(base.editorUndoRedoLimit);
+      base.editorUndoRedoLimit = Number.isFinite(undoLimitRaw)
+        ? Math.max(8, Math.min(64, Math.round(undoLimitRaw)))
+        : DEFAULT_PROJECT_CONFIG.editorUndoRedoLimit;
+    }
 
     const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
     providerIds.forEach((providerId) => {
@@ -571,6 +595,8 @@ function App() {
       routing: base.routing,
       embedding_options: (base.embedding_options && typeof base.embedding_options === 'object') ? base.embedding_options : {},
       keybindings: base.keybindings,
+      editorUndoRedoLimit: base.editorUndoRedoLimit,
+      editor: base.editor,
       openai: { ...DEFAULT_PROJECT_CONFIG.openai, ...(base.openai || {}) },
       anthropic: { ...DEFAULT_PROJECT_CONFIG.anthropic, ...(base.anthropic || {}) },
       openrouter: { ...DEFAULT_PROJECT_CONFIG.openrouter, ...(base.openrouter || {}) },
@@ -622,6 +648,7 @@ function App() {
   const clearPendingOpenFile = useCallback(() => {
       pendingOpenFileRef.current = { absPath: '', expectedRoot: '' };
   }, []);
+  const pendingDeepLinkRef = useRef({ openFile: '', openMode: '', workspaceFsPath: '' });
   const pendingStartActionRef = useRef({ type: null });
   const clearPendingStartAction = useCallback(() => {
       pendingStartActionRef.current = { type: null };
@@ -631,6 +658,7 @@ function App() {
       pendingTemplateRef.current = null;
   }, []);
   const saveTimersRef = useRef({});
+  const saveSeqRef = useRef({});
   const configSaveTimerRef = useRef(null);
   const streamBufferRef = useRef('');
   const toolRunSyncTimerRef = useRef(null);
@@ -650,8 +678,46 @@ function App() {
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [configFullscreen, setConfigFullscreen] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandPaletteInitialQuery, setCommandPaletteInitialQuery] = useState('');
+  const [commandPaletteContext, setCommandPaletteContext] = useState({ type: '', groupId: '' });
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
   const [editorAiInvoker, setEditorAiInvoker] = useState(null);
+
+  const tabMetaKey = useCallback((groupId, tabPath) => `${String(groupId || '')}::${String(tabPath || '')}`, []);
+  const ensureEditorGroups = useCallback((state) => {
+      const rawGroups = Array.isArray(state?.editorGroups) ? state.editorGroups : [];
+      const groups = rawGroups.length
+          ? rawGroups.map((g) => ({
+              id: String(g?.id || ''),
+              openTabs: Array.isArray(g?.openTabs) ? g.openTabs.filter(Boolean) : [],
+              activeFile: String(g?.activeFile || ''),
+              locked: !!g?.locked,
+              previewTab: String(g?.previewTab || ''),
+          })).filter((g) => g.id)
+          : [{ id: 'group-1', openTabs: [], activeFile: '', locked: false, previewTab: '' }];
+
+      const activeGroupIdRaw = String(state?.activeGroupId || '').trim();
+      const activeGroupId = groups.some((g) => g.id === activeGroupIdRaw) ? activeGroupIdRaw : groups[0].id;
+      const activeGroup = groups.find((g) => g.id === activeGroupId) || groups[0];
+
+      return { groups, activeGroupId, activeGroup };
+  }, []);
+
+  const createEditorGroupId = useCallback(() => {
+      const rand = Math.floor(Math.random() * 1e9).toString(36);
+      return `group-${Date.now().toString(36)}-${rand}`;
+  }, []);
+
+  const syncLegacyTabsFromGroups = useCallback((nextState) => {
+      const { groups, activeGroupId, activeGroup } = ensureEditorGroups(nextState);
+      return {
+          ...nextState,
+          editorGroups: groups,
+          activeGroupId,
+          openTabs: activeGroup.openTabs,
+          activeFile: activeGroup.activeFile,
+      };
+  }, [ensureEditorGroups]);
 
   // --- Logs State ---
   const [showLogs, setShowLogs] = useState(false);
@@ -661,6 +727,19 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() => pickLayoutNumber('sidebarWidth', DEFAULT_PROJECT_CONFIG.sidebarWidth));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState('sessions');
+  const [explorerReveal, setExplorerReveal] = useState({ path: '', nonce: 0 });
+
+  useEffect(() => {
+      const handler = (event) => {
+          const path = event?.detail?.path;
+          if (!path) return;
+          setSidebarCollapsed(false);
+          setActiveSidebarPanel('explorer');
+          setExplorerReveal((prev) => ({ path: String(path), nonce: (prev?.nonce || 0) + 1 }));
+      };
+      window.addEventListener('workbench:revealInExplorer', handler);
+      return () => window.removeEventListener('workbench:revealInExplorer', handler);
+  }, []);
   
   // --- Git State ---
   const [gitStatus, setGitStatus] = useState(null);
@@ -708,6 +787,8 @@ function App() {
       merged.embedding_options = { ...(DEFAULT_PROJECT_CONFIG.embedding_options || {}), ...(merged.embedding_options || {}) };
       if (!merged.keybindings || typeof merged.keybindings !== 'object') merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings };
       else merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...merged.keybindings };
+      if (!merged.editor || typeof merged.editor !== 'object') merged.editor = { ...DEFAULT_PROJECT_CONFIG.editor };
+      else merged.editor = { ...DEFAULT_PROJECT_CONFIG.editor, ...merged.editor };
 
       const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
       providerIds.forEach((providerId) => {
@@ -893,6 +974,13 @@ function App() {
       keybindingsRef.current = (config?.keybindings && typeof config.keybindings === 'object') ? config.keybindings : {};
   }, [config?.keybindings]);
 
+  const activeGroupIdRef = useRef('');
+  const editorGroupsRef = useRef([]);
+  useEffect(() => {
+      activeGroupIdRef.current = String(workspaceState?.activeGroupId || 'group-1');
+      editorGroupsRef.current = Array.isArray(workspaceState?.editorGroups) ? workspaceState.editorGroups : [];
+  }, [workspaceState?.activeGroupId, workspaceState?.editorGroups]);
+
   useEffect(() => {
       const normalizeShortcut = (value) => {
           const raw = String(value || '').trim();
@@ -961,9 +1049,31 @@ function App() {
           const kb = keybindingsRef.current || {};
           const quickOpen = kb['app.quickOpen'] || DEFAULT_PROJECT_CONFIG.keybindings['app.quickOpen'];
           const commandPalette = kb['app.commandPalette'] || DEFAULT_PROJECT_CONFIG.keybindings['app.commandPalette'];
+          const openEditors = kb['editor.openEditors'] || DEFAULT_PROJECT_CONFIG.keybindings['editor.openEditors'];
 
           if (matchShortcut(e, commandPalette) || matchShortcut(e, quickOpen)) {
               e.preventDefault();
+              setCommandPaletteInitialQuery('');
+              setCommandPaletteContext({ type: '', groupId: '' });
+              setShowCommandPalette(true);
+              return;
+          }
+
+          if (matchShortcut(e, openEditors)) {
+              const groupId = String(activeGroupIdRef.current || 'group-1');
+              const groups = editorGroupsRef.current || [];
+              const group = Array.isArray(groups) ? groups.find((g) => String(g?.id || '') === groupId) : null;
+              const openTabs = Array.isArray(group?.openTabs) ? group.openTabs : [];
+              const isSpecialTab = (p) =>
+                p === WELCOME_TAB_PATH
+                || p === SETTINGS_TAB_PATH
+                || (DIFF_TAB_PREFIX && String(p || '').startsWith(DIFF_TAB_PREFIX));
+              const hasRealEditor = openTabs.some((p) => p && !isSpecialTab(p));
+              if (!hasRealEditor) return;
+
+              e.preventDefault();
+              setCommandPaletteInitialQuery('edt ');
+              setCommandPaletteContext({ type: 'editorNav', groupId });
               setShowCommandPalette(true);
           }
       };
@@ -1291,45 +1401,69 @@ function App() {
               path: f.path,
               content: f.content ?? '',
               truncated: f.truncated,
-              updated: false
+              updated: false,
+              dirty: false,
           }));
 
-          setWorkspaceState((prev) => {
-              const prevMap = Object.fromEntries(prev.files.map((f) => [f.path, f]));
+          setWorkspaceState((prevRaw) => {
+              const prev = syncLegacyTabsFromGroups(prevRaw);
+              const prevMap = Object.fromEntries((prev.files || []).map((f) => [f.path, f]));
               const merged = incoming.length ? incoming.map((file) => {
                   const prevFile = prevMap[file.path];
+                  if (prevFile?.dirty) {
+                      return { ...prevFile, truncated: file.truncated, updated: prevFile.updated };
+                  }
                   const changed = highlight && prevFile && prevFile.content !== file.content;
                   const isNew = highlight && !prevFile;
-                  return { ...file, updated: changed || isNew };
-              }) : prev.files;
+                  return { ...file, updated: changed || isNew, dirty: false };
+              }) : (prev.files || []);
 
-              const userClosedAll = !prev.activeFile && prev.openTabs.length === 0;
-              let activeFile = userClosedAll ? '' : (prev.activeFile || data.entry_candidates?.[0] || merged[0]?.path || '');
-              let openTabs = prev.openTabs.length ? [...prev.openTabs] : [];
+              const mergedPaths = new Set(merged.map((f) => f.path));
+              const isSpecialTab = (p) => {
+                  if (!p) return true;
+                  if (p === WELCOME_TAB_PATH) return true;
+                  if (p === SETTINGS_TAB_PATH) return true;
+                  if (DIFF_TAB_PREFIX && p.startsWith(DIFF_TAB_PREFIX)) return true;
+                  return false;
+              };
+              const isValidTab = (p) => isSpecialTab(p) || mergedPaths.has(p);
+
+              const { groups, activeGroupId } = ensureEditorGroups(prev);
+              const nextGroups = groups.map((g) => {
+                  const openTabs = (g.openTabs || []).filter(isValidTab);
+                  const active = isValidTab(g.activeFile) ? g.activeFile : '';
+                  const activeFile = active || (openTabs[openTabs.length - 1] || '');
+                  const previewTab = isValidTab(g.previewTab) ? g.previewTab : '';
+                  return { ...g, openTabs, activeFile, previewTab };
+              });
+
+              const hasAnyTabs = nextGroups.some((g) => g.openTabs.length > 0);
+              const userClosedAll = !hasAnyTabs && !nextGroups.some((g) => g.activeFile);
+
+              let nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId) ? activeGroupId : (nextGroups[0]?.id || 'group-1');
+              let nextGroups2 = nextGroups;
 
               if (!userClosedAll) {
-                  merged.forEach((f) => {
-                      if ((f.updated || !openTabs.length) && !openTabs.includes(f.path)) {
-                          openTabs.push(f.path);
-                      }
-                  });
-                  const mergedPaths = new Set(merged.map((f) => f.path));
-                  if (activeFile && !mergedPaths.has(activeFile)) {
-                      activeFile = data.entry_candidates?.[0] || merged[0]?.path || '';
+                  const entry = data.entry_candidates?.[0] || merged[0]?.path || '';
+                  if (entry && mergedPaths.has(entry)) {
+                      nextGroups2 = nextGroups.map((g) => {
+                          if (g.id !== nextActiveGroupId) return g;
+                          const openTabs = g.openTabs.includes(entry) ? g.openTabs : [...g.openTabs, entry];
+                          const activeFile = g.activeFile || entry;
+                          return { ...g, openTabs, activeFile };
+                      });
                   }
-                  openTabs = openTabs.filter((path) => mergedPaths.has(path));
-                  if (activeFile && !openTabs.includes(activeFile)) openTabs.unshift(activeFile);
               }
 
-              return {
+              return syncLegacyTabsFromGroups({
                   ...prev,
                   files: merged,
                   fileTree: (data.entries || []).filter((entry) => !shouldHidePath(entry.path)) || prev.fileTree,
-                  activeFile: userClosedAll ? '' : activeFile,
-                  openTabs: userClosedAll ? [] : (openTabs.length ? openTabs : (activeFile ? [activeFile] : [])),
+                  editorGroups: userClosedAll ? [{ id: nextActiveGroupId, openTabs: [], activeFile: '', locked: false, previewTab: '' }] : nextGroups2,
+                  activeGroupId: nextActiveGroupId,
                   entryCandidates: data.entry_candidates || prev.entryCandidates,
                   workspaceRoots: Array.isArray(data.roots) ? data.roots : prev.workspaceRoots,
-              };
+              });
           });
           lastSyncRef.current = Date.now();
           return { files: incoming, raw: data };
@@ -1341,7 +1475,7 @@ function App() {
           syncLockRef.current = false;
           setWorkspaceLoading(false);
       }
-  }, [workspaceDriver]);
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, workspaceDriver]);
 
   const captureWorkspaceSnapshot = useCallback(async () => {
       if (!workspaceDriver) return null;
@@ -1485,7 +1619,14 @@ function App() {
       if (!driver) return;
       setWorkspaceBindingStatus('checking');
       configHydratedRef.current = false;
-      setWorkspaceState({ ...initialWorkspaceState, openTabs: [WELCOME_TAB_PATH], activeFile: WELCOME_TAB_PATH, view: 'code' });
+      setWorkspaceState({
+          ...initialWorkspaceState,
+          editorGroups: [{ id: 'group-1', openTabs: [WELCOME_TAB_PATH], activeFile: WELCOME_TAB_PATH, locked: false, previewTab: '' }],
+          activeGroupId: 'group-1',
+          openTabs: [WELCOME_TAB_PATH],
+          activeFile: WELCOME_TAB_PATH,
+          view: 'code'
+      });
       setSessions([]);
       setMessages([]);
       setToolRuns({});
@@ -1944,8 +2085,12 @@ function App() {
           setWorkspaceState((prev) => {
               const exists = prev.files.find((f) => f.path === data.path);
               const nextFiles = exists
-                  ? prev.files.map((f) => f.path === data.path ? { ...f, content: data.content, updated: false } : f)
-                  : [...prev.files, { path: data.path, content: data.content, updated: false }];
+                  ? prev.files.map((f) => {
+                      if (f.path !== data.path) return f;
+                      if (f.dirty) return f;
+                      return { ...f, content: data.content, updated: false, dirty: false };
+                  })
+                  : [...prev.files, { path: data.path, content: data.content, updated: false, dirty: false }];
               return { ...prev, files: nextFiles };
           });
       } catch (err) {
@@ -2032,6 +2177,36 @@ function App() {
       workspaceServices,
   ]);
 
+  useEffect(() => {
+      try {
+          const params = new URLSearchParams(window.location.search || '');
+          const openFileParam = String(params.get('openFile') || '').trim();
+          const openModeParam = String(params.get('openMode') || '').trim();
+          const workspaceFsPathParam = String(params.get('workspaceFsPath') || '').trim();
+          if (!openFileParam && !workspaceFsPathParam) return;
+          pendingDeepLinkRef.current = { openFile: openFileParam, openMode: openModeParam, workspaceFsPath: workspaceFsPathParam };
+          if (workspaceFsPathParam) {
+              workspaceController.openWorkspace(workspaceFsPathParam, { preferredRoot: workspaceFsPathParam });
+          }
+      } catch {
+          // ignore
+      }
+  }, [workspaceController]);
+
+  const openCommandPalette = useCallback((options = {}) => {
+      const initialQuery = String(options?.initialQuery || '');
+      const ctx = options?.context && typeof options.context === 'object' ? options.context : { type: '', groupId: '' };
+      setCommandPaletteInitialQuery(initialQuery);
+      setCommandPaletteContext({ type: String(ctx.type || ''), groupId: String(ctx.groupId || '') });
+      setShowCommandPalette(true);
+  }, []);
+
+  const closeCommandPalette = useCallback(() => {
+      setShowCommandPalette(false);
+      setCommandPaletteInitialQuery('');
+      setCommandPaletteContext({ type: '', groupId: '' });
+  }, []);
+
   const handleSelectWorkspace = useCallback(async (projectId = null) => {
       await workspaceController.openWorkspace(projectId);
   }, [workspaceController]);
@@ -2117,12 +2292,20 @@ function App() {
 
   const scheduleSave = (path, content) => {
       if (!workspaceDriver) return;
+      const seq = (saveSeqRef.current[path] || 0) + 1;
+      saveSeqRef.current[path] = seq;
       if (saveTimersRef.current[path]) {
           clearTimeout(saveTimersRef.current[path]);
       }
       saveTimersRef.current[path] = setTimeout(async () => {
           try {
               await workspaceDriver.writeFile(path, content, { createDirectories: true });
+              if (saveSeqRef.current[path] === seq) {
+                  setWorkspaceState((prev) => ({
+                      ...prev,
+                      files: prev.files.map((f) => f.path === path ? { ...f, dirty: false } : f),
+                  }));
+              }
               setWorkspaceState((prev) => ({ ...prev, livePreview: `${Date.now()}` }));
               setHotReloadToken(Date.now());
           } catch (err) {
@@ -2321,6 +2504,8 @@ function App() {
           routing: { ...(config.routing || {}) },
           embedding_options: (config.embedding_options && typeof config.embedding_options === 'object') ? { ...(config.embedding_options || {}) } : {},
           keybindings: { ...(config.keybindings || {}) },
+          editorUndoRedoLimit: Number(config.editorUndoRedoLimit) || DEFAULT_PROJECT_CONFIG.editorUndoRedoLimit,
+          editor: (config.editor && typeof config.editor === 'object') ? { ...(config.editor || {}) } : { ...DEFAULT_PROJECT_CONFIG.editor },
           openai: { ...config.openai },
           anthropic: { ...config.anthropic },
           openrouter: { ...config.openrouter },
@@ -2874,7 +3059,7 @@ function App() {
       });
       setWorkspaceState((prev) => ({
           ...prev,
-          files: prev.files.map((f) => f.path === path ? { ...f, updated: false } : f)
+          files: prev.files.map((f) => f.path === path ? { ...f, updated: false, dirty: false } : f)
       }));
   }, [computeTaskFileAction, computeTaskStatus]);
 
@@ -2982,19 +3167,393 @@ function App() {
       });
   }, [computeTaskStatus]);
 
-  const openFile = (path) => {
-      if (!workspaceDriver) {
+  const openFile = (path, options = {}) => {
+      const filePath = String(path || '');
+      if (!filePath) return;
+      const isSpecialTab = filePath === WELCOME_TAB_PATH
+        || filePath === SETTINGS_TAB_PATH
+        || (filePath && filePath.startsWith(DIFF_TAB_PREFIX));
+
+      if (!isSpecialTab && !workspaceDriver) {
           alert('请先选择项目文件夹');
           return;
       }
-      setWorkspaceState((prev) => {
-          const exists = prev.files.find((f) => f.path === path);
-          const nextFiles = exists ? prev.files : [...prev.files, { path, content: '', updated: false }];
-          const nextTabs = prev.openTabs.includes(path) ? prev.openTabs : [...prev.openTabs, path];
-          return { ...prev, files: nextFiles, openTabs: nextTabs, activeFile: path, previewEntry: path };
+
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+
+          const requestedGroupId = String(options?.groupId || '').trim();
+          const targetGroupId = requestedGroupId && groups.some((g) => g.id === requestedGroupId)
+              ? requestedGroupId
+              : activeGroupId;
+          const targetGroup = groups.find((g) => g.id === targetGroupId) || groups[0];
+          const previewEnabled = prev.previewEditorEnabled !== false;
+          const groupLocked = !!targetGroup.locked;
+          const requestedModeRaw = String(options?.mode || '').trim();
+          const requestedMode = requestedModeRaw === 'persistent' || requestedModeRaw === 'preview' ? requestedModeRaw : '';
+          const mode = requestedMode || ((previewEnabled && !groupLocked && !isSpecialTab) ? 'preview' : 'persistent');
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const getMeta = (groupId, tab) => tabMeta[tabMetaKey(groupId, tab)] || {};
+          const setMeta = (next, groupId, tab, patch) => {
+              const key = tabMetaKey(groupId, tab);
+              const current = next[key] && typeof next[key] === 'object' ? next[key] : {};
+              next[key] = { ...current, ...patch };
+          };
+
+          const files = Array.isArray(prev.files) ? prev.files : [];
+          const exists = files.find((f) => f.path === filePath);
+          const nextFiles = exists ? files : [...files, { path: filePath, content: '', updated: false, dirty: false }];
+
+          const nextTabMeta = { ...tabMeta };
+          const nextGroups = groups.map((g) => {
+              if (g.id !== targetGroupId) return g;
+              let openTabs = Array.isArray(g.openTabs) ? [...g.openTabs] : [];
+              let activeFile = g.activeFile || '';
+              let previewTab = g.previewTab || '';
+
+              if (mode === 'preview') {
+                  const currentPreview = previewTab;
+                  if (currentPreview && currentPreview !== filePath && openTabs.includes(currentPreview)) {
+                      const meta = getMeta(targetGroupId, currentPreview);
+                      const pinnedOrKept = !!meta.pinned || !!meta.keptOpen;
+                      const isDirty = !!nextFiles.find((f) => f.path === currentPreview)?.dirty;
+                      if (!pinnedOrKept && !isDirty) {
+                          openTabs = openTabs.filter((t) => t !== currentPreview);
+                          setMeta(nextTabMeta, targetGroupId, currentPreview, { preview: false });
+                      } else {
+                          previewTab = '';
+                          setMeta(nextTabMeta, targetGroupId, currentPreview, { preview: false });
+                      }
+                  }
+
+                  if (!openTabs.includes(filePath)) openTabs.push(filePath);
+                  activeFile = filePath;
+                  previewTab = filePath;
+                  setMeta(nextTabMeta, targetGroupId, filePath, { preview: true });
+              } else {
+                  if (!openTabs.includes(filePath)) openTabs.push(filePath);
+                  activeFile = filePath;
+                  if (previewTab === filePath) previewTab = '';
+                  setMeta(nextTabMeta, targetGroupId, filePath, { preview: false });
+              }
+
+              return { ...g, openTabs, activeFile, previewTab };
+          });
+
+          const now = Date.now();
+          const history = Array.isArray(prev.tabHistory) ? prev.tabHistory : [];
+          const nextHistory = [
+              { groupId: targetGroupId, path: filePath, ts: now },
+              ...history.filter((h) => !(h?.groupId === targetGroupId && h?.path === filePath)).slice(0, 100),
+          ];
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              files: nextFiles,
+              editorGroups: nextGroups,
+              activeGroupId: targetGroupId,
+              tabMeta: nextTabMeta,
+              tabHistory: nextHistory,
+              previewEntry: filePath,
+          });
       });
-      loadFileContent(path);
+
+      if (!isSpecialTab) loadFileContent(filePath);
   };
+
+  const handleActiveEditorChange = useCallback((path, options = {}) => {
+      const tabPath = String(path || '');
+      if (!tabPath) return;
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const requestedGroupId = String(options?.groupId || '').trim();
+          const containingGroupId = groups.find((g) => Array.isArray(g.openTabs) && g.openTabs.includes(tabPath))?.id || '';
+          const targetGroupId = (requestedGroupId && groups.some((g) => g.id === requestedGroupId))
+              ? requestedGroupId
+              : (containingGroupId || activeGroupId);
+
+          const nextGroups = groups.map((g) => {
+              if (g.id !== targetGroupId) return g;
+              if (!g.openTabs.includes(tabPath)) return g;
+              return { ...g, activeFile: tabPath };
+          });
+
+          const isSpecialTab = tabPath === WELCOME_TAB_PATH
+            || tabPath === SETTINGS_TAB_PATH
+            || (tabPath && tabPath.startsWith(DIFF_TAB_PREFIX));
+
+          const now = Date.now();
+          const history = Array.isArray(prev.tabHistory) ? prev.tabHistory : [];
+          const nextHistory = [
+              { groupId: targetGroupId, path: tabPath, ts: now },
+              ...history.filter((h) => !(h?.groupId === targetGroupId && h?.path === tabPath)).slice(0, 100),
+          ];
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              editorGroups: nextGroups,
+              activeGroupId: targetGroupId,
+              tabHistory: nextHistory,
+              previewEntry: !isSpecialTab ? tabPath : prev.previewEntry,
+          });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups]);
+
+  useEffect(() => {
+      if (workspaceBindingStatus !== 'ready') return;
+      const pending = pendingDeepLinkRef.current;
+      const openFileParam = String(pending?.openFile || '').trim();
+      if (!openFileParam) return;
+      pendingDeepLinkRef.current = { openFile: '', openMode: '', workspaceFsPath: '' };
+
+      // If an absolute file path is provided, reuse the existing pending-open flow.
+      if (isAbsolutePath(openFileParam)) {
+          pendingOpenFileRef.current = { absPath: openFileParam, expectedRoot: String(pending?.workspaceFsPath || '') };
+      } else {
+          openFile(openFileParam, { mode: 'persistent' });
+      }
+
+      // Clear query params to avoid reopening on refresh.
+      try {
+          const url = new URL(window.location.href);
+          url.search = '';
+          window.history.replaceState({}, '', url.toString());
+      } catch {
+          // ignore
+      }
+  }, [workspaceBindingStatus]);
+
+  const handleActiveGroupChange = useCallback((groupId) => {
+      const nextId = String(groupId || '').trim();
+      if (!nextId) return;
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups } = ensureEditorGroups(prev);
+          if (!groups.some((g) => g.id === nextId)) return prev;
+          return syncLegacyTabsFromGroups({ ...prev, activeGroupId: nextId });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups]);
+
+  const toggleGroupLocked = useCallback((groupId) => {
+      const targetId = String(groupId || '').trim();
+      if (!targetId) return;
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups } = ensureEditorGroups(prev);
+          if (!groups.some((g) => g.id === targetId)) return prev;
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const nextGroups = groups.map((g) => {
+              if (g.id !== targetId) return g;
+              const nextLocked = !g.locked;
+              const previewTab = nextLocked ? '' : g.previewTab;
+              if (nextLocked && g.previewTab) {
+                  const key = tabMetaKey(targetId, g.previewTab);
+                  const current = nextTabMeta[key] && typeof nextTabMeta[key] === 'object' ? nextTabMeta[key] : {};
+                  nextTabMeta[key] = { ...current, preview: false };
+              }
+              return { ...g, locked: nextLocked, previewTab };
+          });
+          return syncLegacyTabsFromGroups({ ...prev, editorGroups: nextGroups, tabMeta: nextTabMeta });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, tabMetaKey]);
+
+  const togglePreviewEditorEnabled = useCallback(() => {
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const nextEnabled = prev.previewEditorEnabled === false;
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const nextGroups = (prev.editorGroups || []).map((g) => ({ ...g, previewTab: nextEnabled ? g.previewTab : '' }));
+
+          if (!nextEnabled) {
+              Object.keys(nextTabMeta).forEach((k) => {
+                  const v = nextTabMeta[k];
+                  if (v && typeof v === 'object' && v.preview) {
+                      nextTabMeta[k] = { ...v, preview: false };
+                  }
+              });
+          }
+
+          return syncLegacyTabsFromGroups({ ...prev, previewEditorEnabled: nextEnabled, editorGroups: nextGroups, tabMeta: nextTabMeta });
+      });
+  }, [syncLegacyTabsFromGroups]);
+
+  const toggleTabPinned = useCallback((groupId, tabPath) => {
+      const gid = String(groupId || '').trim();
+      const path = String(tabPath || '');
+      if (!gid || !path) return;
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups } = ensureEditorGroups(prev);
+          if (!groups.some((g) => g.id === gid)) return prev;
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const key = tabMetaKey(gid, path);
+          const current = nextTabMeta[key] && typeof nextTabMeta[key] === 'object' ? nextTabMeta[key] : {};
+          const pinned = !current.pinned;
+          nextTabMeta[key] = { ...current, pinned, preview: pinned ? false : current.preview };
+          const nextGroups = groups.map((g) => {
+              if (g.id !== gid) return g;
+              if (pinned && g.previewTab === path) return { ...g, previewTab: '' };
+              return g;
+          });
+          return syncLegacyTabsFromGroups({ ...prev, editorGroups: nextGroups, tabMeta: nextTabMeta });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, tabMetaKey]);
+
+  const toggleTabKeptOpen = useCallback((groupId, tabPath) => {
+      const gid = String(groupId || '').trim();
+      const path = String(tabPath || '');
+      if (!gid || !path) return;
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups } = ensureEditorGroups(prev);
+          if (!groups.some((g) => g.id === gid)) return prev;
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const key = tabMetaKey(gid, path);
+          const current = nextTabMeta[key] && typeof nextTabMeta[key] === 'object' ? nextTabMeta[key] : {};
+          const keptOpen = !current.keptOpen;
+          nextTabMeta[key] = { ...current, keptOpen, preview: keptOpen ? false : current.preview };
+          const nextGroups = groups.map((g) => {
+              if (g.id !== gid) return g;
+              if (keptOpen && g.previewTab === path) return { ...g, previewTab: '' };
+              return g;
+          });
+          return syncLegacyTabsFromGroups({ ...prev, editorGroups: nextGroups, tabMeta: nextTabMeta });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, tabMetaKey]);
+
+  const splitEditor = useCallback(({ direction = 'right', groupId, tabPath, move = false } = {}) => {
+      const dir = direction === 'down' ? 'down' : 'right';
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const requestedGroupId = String(groupId || '').trim();
+          const sourceGroupId = requestedGroupId && groups.some((g) => g.id === requestedGroupId) ? requestedGroupId : activeGroupId;
+          const sourceGroup = groups.find((g) => g.id === sourceGroupId) || groups[0];
+          const path = String(tabPath || sourceGroup.activeFile || '').trim();
+          if (!path) return prev;
+
+          const newGroupId = createEditorGroupId();
+          const newGroup = { id: newGroupId, openTabs: [path], activeFile: path, locked: false, previewTab: '' };
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const sourceKey = tabMetaKey(sourceGroupId, path);
+          const sourceMeta = nextTabMeta[sourceKey] && typeof nextTabMeta[sourceKey] === 'object' ? nextTabMeta[sourceKey] : {};
+          nextTabMeta[tabMetaKey(newGroupId, path)] = { ...sourceMeta, preview: false };
+
+          const nextGroups = [
+              ...groups.map((g) => {
+                  if (g.id !== sourceGroupId) return g;
+                  if (!move) return g;
+                  const openTabs = (g.openTabs || []).filter((t) => t !== path);
+                  const activeFile = g.activeFile === path ? (openTabs[openTabs.length - 1] || '') : g.activeFile;
+                  const previewTab = g.previewTab === path ? '' : g.previewTab;
+                  return { ...g, openTabs, activeFile, previewTab };
+              }),
+              newGroup,
+          ].filter(Boolean);
+
+          const layout = { mode: 'split', direction: dir === 'down' ? 'horizontal' : 'vertical' };
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              editorGroups: nextGroups,
+              activeGroupId: newGroupId,
+              editorLayout: layout,
+              tabMeta: nextTabMeta,
+          });
+      });
+  }, [createEditorGroupId, ensureEditorGroups, syncLegacyTabsFromGroups, tabMetaKey]);
+
+  const closeEditors = useCallback((action, payload = {}) => {
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+
+          const isSpecialTab = (p) => p === WELCOME_TAB_PATH || p === SETTINGS_TAB_PATH || (p && p.startsWith(DIFF_TAB_PREFIX));
+          const isDirty = (p) => !!(prev.files || []).find((f) => f.path === p)?.dirty;
+
+          const requestedGroupId = String(payload?.groupId || '').trim();
+          const scopeGroupId = requestedGroupId && groups.some((g) => g.id === requestedGroupId) ? requestedGroupId : activeGroupId;
+          const contextPath = String(payload?.tabPath || '').trim();
+
+          const closeInGroup = (g) => {
+              const openTabs = Array.isArray(g.openTabs) ? [...g.openTabs] : [];
+              if (action === 'closeAll') return [];
+              if (action === 'closeSaved') return openTabs.filter((t) => {
+                  if (isSpecialTab(t)) return false;
+                  return isDirty(t);
+              });
+              if (action === 'closeOthers' && contextPath) return openTabs.filter((t) => t === contextPath);
+              if (action === 'closeRight' && contextPath) {
+                  const idx = openTabs.indexOf(contextPath);
+                  if (idx === -1) return openTabs;
+                  return openTabs.filter((t, i) => i <= idx);
+              }
+              return openTabs;
+          };
+
+          let nextGroups = groups.map((g) => {
+              if (payload.scope === 'all') {
+                  const nextTabs = closeInGroup(g);
+                  const nextActive = nextTabs.includes(g.activeFile) ? g.activeFile : (nextTabs[nextTabs.length - 1] || '');
+                  const previewTab = nextTabs.includes(g.previewTab) ? g.previewTab : '';
+                  return { ...g, openTabs: nextTabs, activeFile: nextActive, previewTab };
+              }
+              if (g.id !== scopeGroupId) return g;
+              const nextTabs = closeInGroup(g);
+              const nextActive = nextTabs.includes(g.activeFile) ? g.activeFile : (nextTabs[nextTabs.length - 1] || '');
+              const previewTab = nextTabs.includes(g.previewTab) ? g.previewTab : '';
+              return { ...g, openTabs: nextTabs, activeFile: nextActive, previewTab };
+          });
+
+          if (nextGroups.length > 1) {
+              nextGroups = nextGroups.filter((g) => g.openTabs.length > 0);
+              if (nextGroups.length === 0) {
+                  nextGroups = [{ id: 'group-1', openTabs: [], activeFile: '', locked: false, previewTab: '' }];
+              }
+          }
+
+          // Clear preview meta for any cleared preview tabs.
+          const nextTabMeta = { ...tabMeta };
+          nextGroups.forEach((g) => {
+              const knownPreviewKey = g.previewTab ? tabMetaKey(g.id, g.previewTab) : '';
+              if (!knownPreviewKey) return;
+              // Ensure only current previewTab carries preview flag; everything else gets cleared lazily by open logic.
+          });
+          Object.keys(nextTabMeta).forEach((k) => {
+              const v = nextTabMeta[k];
+              if (!v || typeof v !== 'object' || !v.preview) return;
+              // If its tab is no longer present in its group, clear preview.
+              const [gid, ...rest] = k.split('::');
+              const p = rest.join('::');
+              const g = nextGroups.find((gg) => gg.id === gid);
+              if (!g || !g.openTabs.includes(p) || g.previewTab !== p) {
+                  nextTabMeta[k] = { ...v, preview: false };
+              }
+          });
+
+          const nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId) ? activeGroupId : nextGroups[0].id;
+          const prevLayout = prev.editorLayout && typeof prev.editorLayout === 'object' ? prev.editorLayout : null;
+          const nextLayout = nextGroups.length > 1
+            ? { mode: 'split', direction: prevLayout?.direction === 'horizontal' ? 'horizontal' : 'vertical' }
+            : { mode: 'single', direction: prevLayout?.direction === 'horizontal' ? 'horizontal' : 'vertical' };
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              editorGroups: nextGroups,
+              activeGroupId: nextActiveGroupId,
+              editorLayout: nextLayout,
+              tabMeta: nextTabMeta,
+          });
+      });
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, tabMetaKey]);
 
   useEffect(() => {
       if (!workspaceDriver) return;
@@ -3121,36 +3680,137 @@ function App() {
       });
   }, [clearPendingStartAction, clearPendingTemplate, createTemplateProjectInWorkspace, workspaceBindingStatus, workspaceDriver]);
 
-  const closeFile = (path) => {
-      setWorkspaceState((prev) => {
-          const nextTabs = prev.openTabs.filter((p) => p !== path);
-          const nextActive = prev.activeFile === path ? (nextTabs[nextTabs.length - 1] || '') : prev.activeFile;
-          return { ...prev, openTabs: nextTabs, activeFile: nextActive, previewEntry: nextActive || prev.previewEntry };
+  const closeFile = (path, options = {}) => {
+      const tabPath = String(path || '');
+      if (!tabPath) return;
+
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const requestedGroupId = String(options?.groupId || '').trim();
+
+          const containingGroupId = groups.find((g) => Array.isArray(g.openTabs) && g.openTabs.includes(tabPath))?.id || '';
+          const targetGroupId = (requestedGroupId && groups.some((g) => g.id === requestedGroupId))
+            ? requestedGroupId
+            : (containingGroupId || activeGroupId);
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const metaKey = tabMetaKey(targetGroupId, tabPath);
+          if (nextTabMeta[metaKey] && typeof nextTabMeta[metaKey] === 'object') {
+              nextTabMeta[metaKey] = { ...nextTabMeta[metaKey], preview: false };
+          }
+
+          let nextGroups = groups.map((g) => {
+              if (g.id !== targetGroupId) return g;
+              const openTabs = Array.isArray(g.openTabs) ? g.openTabs.filter((t) => t !== tabPath) : [];
+              const nextActive = g.activeFile === tabPath ? (openTabs[openTabs.length - 1] || '') : g.activeFile;
+              const previewTab = g.previewTab === tabPath ? '' : g.previewTab;
+              return { ...g, openTabs, activeFile: nextActive, previewTab };
+          });
+
+          // Remove empty groups (keep at least one).
+          if (nextGroups.length > 1) {
+              nextGroups = nextGroups.filter((g) => g.openTabs.length > 0);
+              if (nextGroups.length === 0) {
+                  nextGroups = [{ id: 'group-1', openTabs: [], activeFile: '', locked: false, previewTab: '' }];
+              }
+          }
+
+          const nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId)
+            ? activeGroupId
+            : nextGroups[0].id;
+
+          const activeGroup = nextGroups.find((g) => g.id === nextActiveGroupId) || nextGroups[0];
+          const nextPreviewEntry = activeGroup.activeFile || prev.previewEntry;
+          const prevLayout = prev.editorLayout && typeof prev.editorLayout === 'object' ? prev.editorLayout : null;
+          const nextLayout = nextGroups.length > 1
+            ? { mode: 'split', direction: prevLayout?.direction === 'horizontal' ? 'horizontal' : 'vertical' }
+            : { mode: 'single', direction: prevLayout?.direction === 'horizontal' ? 'horizontal' : 'vertical' };
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              editorGroups: nextGroups,
+              activeGroupId: nextActiveGroupId,
+              editorLayout: nextLayout,
+              tabMeta: nextTabMeta,
+              previewEntry: nextPreviewEntry,
+          });
       });
-      if (path && path.startsWith(DIFF_TAB_PREFIX)) {
+
+      if (tabPath && tabPath.startsWith(DIFF_TAB_PREFIX)) {
           setDiffTabs((prev) => {
-              if (!prev || !prev[path]) return prev;
+              if (!prev || !prev[tabPath]) return prev;
               const next = { ...prev };
-              delete next[path];
+              delete next[tabPath];
               return next;
           });
       }
   };
 
-  const handleFileChange = (path, content) => {
-      setWorkspaceState((prev) => {
-          const nextFiles = prev.files.map((f) => f.path === path ? { ...f, content, updated: false } : f);
-          return { ...prev, files: nextFiles, livePreview: prev.livePreview };
+  const handleFileChange = (path, content, options = {}) => {
+      const tabPath = String(path || '');
+      if (!tabPath) return;
+
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const nextFiles = (prev.files || []).map((f) => f.path === tabPath ? { ...f, content, dirty: true } : f);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+
+          const requestedGroupId = String(options?.groupId || '').trim();
+          const containingGroupId = groups.find((g) => Array.isArray(g.openTabs) && g.openTabs.includes(tabPath))?.id || '';
+          const targetGroupId = (requestedGroupId && groups.some((g) => g.id === requestedGroupId))
+              ? requestedGroupId
+              : (containingGroupId || activeGroupId);
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          const key = tabMetaKey(targetGroupId, tabPath);
+          const meta = nextTabMeta[key] && typeof nextTabMeta[key] === 'object' ? nextTabMeta[key] : {};
+          const nextGroups = groups.map((g) => {
+              if (g.id !== targetGroupId) return g;
+              if (g.previewTab !== tabPath) return g;
+              return { ...g, previewTab: '' };
+          });
+
+          if (meta.preview) {
+              nextTabMeta[key] = { ...meta, preview: false, keptOpen: true };
+          }
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              files: nextFiles,
+              editorGroups: nextGroups,
+              tabMeta: nextTabMeta,
+          });
       });
-      scheduleSave(path, content);
+
+      scheduleSave(tabPath, content);
   };
 
-  const handleTabReorder = (from, to) => {
-      setWorkspaceState((prev) => {
-          const tabs = [...prev.openTabs];
-          const [item] = tabs.splice(from, 1);
-          tabs.splice(to, 0, item);
-          return { ...prev, openTabs: tabs };
+  const handleTabReorder = (from, to, options = {}) => {
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const requestedGroupId = String(options?.groupId || '').trim();
+          const targetGroupId = requestedGroupId && groups.some((g) => g.id === requestedGroupId)
+              ? requestedGroupId
+              : activeGroupId;
+
+          const nextGroups = groups.map((g) => {
+              if (g.id !== targetGroupId) return g;
+              const tabs = [...(g.openTabs || [])];
+              const fromIdx = Number(from);
+              const toIdx = Number(to);
+              if (!Number.isFinite(fromIdx) || !Number.isFinite(toIdx)) return g;
+              if (fromIdx < 0 || fromIdx >= tabs.length) return g;
+              const [item] = tabs.splice(fromIdx, 1);
+              const clampedTo = Math.max(0, Math.min(tabs.length, toIdx));
+              tabs.splice(clampedTo, 0, item);
+              return { ...g, openTabs: tabs };
+          });
+
+          return syncLegacyTabsFromGroups({ ...prev, editorGroups: nextGroups });
       });
   };
 
@@ -3241,12 +3901,32 @@ function App() {
       try {
           await workspaceDriver.deletePath(path);
           await syncWorkspaceFromDisk({ includeContent: true, highlight: false });
-          setWorkspaceState((prev) => ({
-              ...prev,
-              files: prev.files.filter((f) => f.path !== path),
-              openTabs: prev.openTabs.filter((tab) => tab !== path),
-              activeFile: prev.activeFile === path ? '' : prev.activeFile,
-          }));
+          setWorkspaceState((prevRaw) => {
+              const prev = syncLegacyTabsFromGroups(prevRaw);
+              const { groups, activeGroupId } = ensureEditorGroups(prev);
+              let nextGroups = groups.map((g) => {
+                  const openTabs = (g.openTabs || []).filter((t) => t !== path);
+                  const activeFile = g.activeFile === path ? (openTabs[openTabs.length - 1] || '') : g.activeFile;
+                  const previewTab = g.previewTab === path ? '' : g.previewTab;
+                  return { ...g, openTabs, activeFile, previewTab };
+              });
+              if (nextGroups.length > 1) nextGroups = nextGroups.filter((g) => g.openTabs.length > 0);
+              const nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId) ? activeGroupId : (nextGroups[0]?.id || 'group-1');
+
+              const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+              const nextTabMeta = { ...tabMeta };
+              Object.keys(nextTabMeta).forEach((k) => {
+                  if (k.endsWith(`::${path}`)) delete nextTabMeta[k];
+              });
+
+              return syncLegacyTabsFromGroups({
+                  ...prev,
+                  files: (prev.files || []).filter((f) => f.path !== path),
+                  editorGroups: nextGroups,
+                  activeGroupId: nextActiveGroupId,
+                  tabMeta: nextTabMeta,
+              });
+          });
       } catch (err) {
           console.error('Failed to delete', err);
       }
@@ -3306,12 +3986,8 @@ function App() {
   const handleOpenConfigInEditor = useCallback(() => {
       setConfigFullscreen(false);
       setShowConfig(false);
-      setWorkspaceState((prev) => {
-          const exists = prev.openTabs.includes(SETTINGS_TAB_PATH);
-          const nextTabs = exists ? prev.openTabs : [...prev.openTabs, SETTINGS_TAB_PATH];
-          return { ...prev, openTabs: nextTabs, activeFile: SETTINGS_TAB_PATH, view: 'code' };
-      });
-  }, []);
+      openFile(SETTINGS_TAB_PATH, { mode: 'persistent' });
+  }, [openFile]);
 
   const handleThemeModeChange = useCallback((mode) => {
       if (mode === 'system') {
@@ -3825,7 +4501,10 @@ function App() {
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const lastLog = logs && logs.length > 0 ? logs[0] : null;
   const logStatus = lastLog ? { requestOk: !!lastLog.success, parseOk: lastLog.parsed_success !== false } : null;
-  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || workspaceState.openTabs.length > 0 || Object.keys(diffTabs).length > 0 || !workspaceDriver || workspaceBindingStatus === 'checking' || workspaceBindingStatus === 'error';
+  const hasAnyEditorTabs = Array.isArray(workspaceState.editorGroups)
+    ? workspaceState.editorGroups.some((g) => Array.isArray(g?.openTabs) && g.openTabs.length > 0)
+    : workspaceState.openTabs.length > 0;
+  const workspaceVisible = ['canva', 'agent'].includes(currentMode) || hasAnyEditorTabs || Object.keys(diffTabs).length > 0 || !workspaceDriver || workspaceBindingStatus === 'checking' || workspaceBindingStatus === 'error';
   const workspaceShellVisible = workspaceVisible || showLogs;
   const gitBranch = gitStatus?.current || '';
   const gitBadgeCount = useMemo(() => {
@@ -3889,7 +4568,7 @@ function App() {
           }}
           onCloneRepository={() => setShowCloneModal(true)}
           onConnectRemote={() => setShowRemoteModal(true)}
-          onOpenCommandPalette={() => setShowCommandPalette(true)}
+          onOpenCommandPalette={() => openCommandPalette()}
       />
             {showResizeOverlay && (
                 <div
@@ -3933,9 +4612,14 @@ function App() {
 
       <CommandPalette 
           isOpen={showCommandPalette}
-          onClose={() => setShowCommandPalette(false)}
+          onClose={closeCommandPalette}
+          initialQuery={commandPaletteInitialQuery}
+          context={commandPaletteContext}
           files={workspaceProps.files}
+          editorGroups={workspaceState.editorGroups}
+          activeGroupId={workspaceState.activeGroupId}
           onOpenFile={openFile}
+          onCloseEditor={closeFile}
           onSearchText={(text) => {
               setGlobalSearchQuery(text);
               handleSidebarTabChange('search');
@@ -4020,6 +4704,8 @@ function App() {
                   workspaceRoots={workspaceProps.workspaceRoots}
                   loading={workspaceLoading}
                   activeFile={workspaceState.activeFile}
+                  revealPath={explorerReveal.path}
+                  revealNonce={explorerReveal.nonce}
                   onOpenFile={openFile}
                   onAddFile={handleAddFile}
                   onAddFolder={handleAddFolder}
@@ -4106,6 +4792,12 @@ function App() {
                   files={workspaceProps.files}
                   openTabs={workspaceProps.openTabs}
                   activeFile={workspaceState.activeFile}
+                  editorGroups={workspaceState.editorGroups}
+                  activeGroupId={workspaceState.activeGroupId}
+                  editorLayout={workspaceState.editorLayout}
+                  previewEditorEnabled={workspaceState.previewEditorEnabled}
+                  tabMeta={workspaceState.tabMeta}
+                  tabHistory={workspaceState.tabHistory}
                   viewMode={workspaceState.view}
                   livePreviewContent={workspaceState.livePreview}
                   entryCandidates={workspaceState.entryCandidates}
@@ -4119,6 +4811,7 @@ function App() {
                     theme={theme}
                     backendRoot={backendWorkspaceRoot}
                     keybindings={config?.keybindings}
+                    editorSettings={config?.editor}
                     aiEngineClient={aiEngineClient}
                     getBackendConfig={getBackendConfig}
                     currentSessionId={currentSessionId}
@@ -4152,8 +4845,15 @@ function App() {
                    onOpenFile={openFile}
                    onCloseFile={closeFile}
                    onFileChange={handleFileChange}
-                  onActiveFileChange={(path) => setWorkspaceState((prev) => ({ ...prev, activeFile: path, previewEntry: path && path !== WELCOME_TAB_PATH ? path : prev.previewEntry }))} 
+                  onActiveFileChange={handleActiveEditorChange}
+                  onActiveGroupChange={handleActiveGroupChange}
                    onTabReorder={handleTabReorder}
+                  onToggleGroupLocked={toggleGroupLocked}
+                  onTogglePreviewEditorEnabled={togglePreviewEditorEnabled}
+                  onToggleTabPinned={toggleTabPinned}
+                  onToggleTabKeptOpen={toggleTabKeptOpen}
+                  onCloseEditors={closeEditors}
+                  onSplitEditor={splitEditor}
                    onAddFile={handleAddFile}
                    onAddFolder={handleAddFolder}
                   onRefreshPreview={handleRefreshPreview}
@@ -4201,6 +4901,7 @@ function App() {
                   diffTabPrefix={DIFF_TAB_PREFIX}
                   diffTabs={diffTabs}
                   diffViewMode={uiDisplayPreferences?.diffView || 'compact'}
+                  onOpenEditorNavigation={(groupId) => openCommandPalette({ initialQuery: 'edt ', context: { type: 'editorNav', groupId } })}
                 />
               )}
               {showLogs && (

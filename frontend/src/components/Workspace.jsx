@@ -368,8 +368,14 @@ const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }
 
 function Workspace({
   files,
-  openTabs,
-  activeFile,
+  openTabs: legacyOpenTabs,
+  activeFile: legacyActiveFile,
+  editorGroups,
+  activeGroupId: activeGroupIdProp,
+  editorLayout,
+  previewEditorEnabled,
+  tabMeta,
+  tabHistory,
   viewMode,
   livePreviewContent,
   entryCandidates,
@@ -383,6 +389,7 @@ function Workspace({
   theme,
   backendRoot,
   keybindings,
+  editorSettings,
   welcomeTabPath,
   renderWelcomeTab,
   onOpenWelcomeTab,
@@ -393,7 +400,15 @@ function Workspace({
   onCloseFile,
   onFileChange,
   onActiveFileChange,
+  onActiveGroupChange,
+  onOpenEditorNavigation,
   onTabReorder,
+  onToggleGroupLocked,
+  onTogglePreviewEditorEnabled,
+  onToggleTabPinned,
+  onToggleTabKeptOpen,
+  onCloseEditors,
+  onSplitEditor,
   onAddFile,
   onAddFolder,
   onRefreshPreview,
@@ -426,33 +441,94 @@ function Workspace({
     return theme === 'dark' ? 'vs-dark' : 'vs';
   }, [theme]);
 
+  const normalizedEditorSettings = useMemo(() => {
+    const s = (editorSettings && typeof editorSettings === 'object') ? editorSettings : {};
+    const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+    const tabSizeRaw = Number(s.tabSize);
+    const tabSize = Number.isFinite(tabSizeRaw) ? clamp(Math.round(tabSizeRaw), 1, 8) : 4;
+    const fontSizeRaw = Number(s.fontSize);
+    const fontSize = Number.isFinite(fontSizeRaw) ? clamp(Math.round(fontSizeRaw), 10, 24) : 13;
+    const lineHeightRaw = Number(s.lineHeight);
+    const lineHeight = Number.isFinite(lineHeightRaw) ? clamp(Math.round(lineHeightRaw), 14, 36) : 21;
+    const wordWrapEnabled = s.wordWrap === true || s.wordWrap === 'on';
+    const minimapEnabled = s.minimap !== false;
+    const fontLigaturesEnabled = s.fontLigatures !== false;
+    const renderWhitespace = typeof s.renderWhitespace === 'string' ? s.renderWhitespace : 'none';
+    return {
+      tabSize,
+      fontSize,
+      lineHeight,
+      wordWrapEnabled,
+      minimapEnabled,
+      fontLigaturesEnabled,
+      renderWhitespace,
+    };
+  }, [editorSettings]);
+
   const monacoOptions = useMemo(
     () => ({
-      minimap: { enabled: true, renderCharacters: false },
+      minimap: { enabled: normalizedEditorSettings.minimapEnabled, renderCharacters: false },
       glyphMargin: true,
       folding: true,
       renderLineHighlight: 'all',
       lineNumbers: 'on',
-      wordWrap: 'off',
+      wordWrap: normalizedEditorSettings.wordWrapEnabled ? 'on' : 'off',
       automaticLayout: true,
       scrollBeyondLastLine: true,
       fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
-      fontLigatures: true,
-      fontSize: 13,
-      lineHeight: 21,
+      fontLigatures: normalizedEditorSettings.fontLigaturesEnabled,
+      fontSize: normalizedEditorSettings.fontSize,
+      lineHeight: normalizedEditorSettings.lineHeight,
       letterSpacing: 0,
-      tabSize: 4,
+      tabSize: normalizedEditorSettings.tabSize,
       contextmenu: true,
       smoothScrolling: true,
-      renderWhitespace: 'none',
+      renderWhitespace: normalizedEditorSettings.renderWhitespace,
       bracketPairColorization: { enabled: true },
       guides: { indentation: true, highlightActiveIndentation: true },
       quickSuggestions: true,
       cursorBlinking: 'blink',
     }),
-    []
+    [normalizedEditorSettings]
   );
   const compactDiff = diffViewMode === 'compact';
+
+  const previewEnabled = previewEditorEnabled !== false;
+
+  const groups = useMemo(() => {
+    if (Array.isArray(editorGroups) && editorGroups.length > 0) {
+      return editorGroups
+        .map((g, idx) => ({
+          id: String(g?.id || `group-${idx + 1}`),
+          openTabs: Array.isArray(g?.openTabs) ? g.openTabs.filter(Boolean) : [],
+          activeFile: String(g?.activeFile || ''),
+          locked: !!g?.locked,
+          previewTab: String(g?.previewTab || ''),
+        }))
+        .filter((g) => g.id);
+    }
+    return [{ id: 'group-1', openTabs: Array.isArray(legacyOpenTabs) ? legacyOpenTabs : [], activeFile: String(legacyActiveFile || ''), locked: false, previewTab: '' }];
+  }, [editorGroups, legacyActiveFile, legacyOpenTabs]);
+
+  const activeGroupId = useMemo(() => {
+    const desired = String(activeGroupIdProp || '').trim();
+    if (desired && groups.some((g) => g.id === desired)) return desired;
+    return groups[0]?.id || 'group-1';
+  }, [activeGroupIdProp, groups]);
+
+  const activeGroup = useMemo(() => groups.find((g) => g.id === activeGroupId) || groups[0] || { id: activeGroupId, openTabs: [], activeFile: '' }, [activeGroupId, groups]);
+  const openTabs = activeGroup?.openTabs || [];
+  const activeFile = activeGroup?.activeFile || '';
+
+  const getTabFlags = useCallback((groupId, tabPath) => {
+    const key = `${String(groupId || '')}::${String(tabPath || '')}`;
+    const v = tabMeta && typeof tabMeta === 'object' ? tabMeta[key] : null;
+    return {
+      pinned: !!v?.pinned,
+      keptOpen: !!v?.keptOpen,
+      preview: !!v?.preview,
+    };
+  }, [tabMeta]);
 
   const previewOptions = useMemo(
     () =>
@@ -478,7 +554,7 @@ function Workspace({
   }, [activeFile, diffTabPrefix, diffTabs]);
   
   const updatedPaths = useMemo(
-    () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
+    () => new Set(files.filter((f) => f.dirty).map((f) => f.path)),
     [files]
   );
 
@@ -502,6 +578,7 @@ function Workspace({
 
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
+  const editorInstancesRef = useRef(new Map());
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
   const taskReviewDecorationsRef = useRef(null);
@@ -509,6 +586,8 @@ function Workspace({
   const taskReviewKeyDisposableRef = useRef(null);
   const shouldRevealTaskBlockRef = useRef(true);
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
+  const [tabContextMenu, setTabContextMenu] = useState(null);
+  const [editorNavMenu, setEditorNavMenu] = useState(null);
   const [aiPanel, setAiPanel] = useState({
     open: false,
     busy: false,
@@ -1440,6 +1519,19 @@ function Workspace({
     }, 500);
   }, [normalizedUndoRedoLimit]);
 
+  const handleEditorMountForGroup = useCallback((groupId) => (editor, monaco) => {
+    editorInstancesRef.current.set(String(groupId || 'group-1'), { editor, monaco });
+    if (String(groupId || 'group-1') === String(activeGroupId)) {
+      handleEditorMount(editor, monaco);
+    }
+  }, [activeGroupId, handleEditorMount]);
+
+  useEffect(() => {
+    const inst = editorInstancesRef.current.get(String(activeGroupId || 'group-1'));
+    if (!inst?.editor || !inst?.monaco) return;
+    handleEditorMount(inst.editor, inst.monaco);
+  }, [activeGroupId, handleEditorMount]);
+
   useEffect(() => {
     if (typeof onRegisterEditorAiInvoker !== 'function') return;
     if (!canUseEditorAi) {
@@ -1461,7 +1553,26 @@ function Workspace({
     };
   }, []);
 
-  const editorPane = (
+  useEffect(() => {
+    const onDocClick = () => {
+      setTabContextMenu(null);
+      setEditorNavMenu(null);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setTabContextMenu(null);
+        setEditorNavMenu(null);
+      }
+    };
+    window.addEventListener('click', onDocClick);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('click', onDocClick);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  const renderEditorPaneLegacy = () => (
     <div className="workspace-editor">
           <div className="tab-row">
             {openTabs.map((path, idx) => {
@@ -1850,6 +1961,694 @@ function Workspace({
               </>
             ) : null}
           </div>
+    </div>
+  );
+
+  const absJoin = (baseAbs = '', rel = '') => {
+    const base = String(baseAbs || '').replace(/[\\\/]+$/, '');
+    const suffix = String(rel || '').replace(/^[\\\/]+/, '');
+    if (!base) return suffix;
+    if (!suffix) return base;
+    const sep = base.includes('\\') ? '\\' : '/';
+    const normalized = suffix.replace(/[\\\/]+/g, sep);
+    return `${base}${sep}${normalized}`;
+  };
+
+  const copyToClipboard = async (text) => {
+    const value = String(text || '');
+    if (!value) return false;
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const isSpecialTabPath = (tabPath) => {
+    const p = String(tabPath || '');
+    if (!p) return true;
+    if (settingsTabPath && p === settingsTabPath) return true;
+    if (welcomeTabPath && p === welcomeTabPath) return true;
+    if (diffTabPrefix && p.startsWith(diffTabPrefix)) return true;
+    return false;
+  };
+
+  const resolveDiffModelBaseForPath = (tabPath) => {
+    const p = String(tabPath || '');
+    if (!diffTabPrefix || !p || !p.startsWith(diffTabPrefix)) return p || 'diff';
+    const diff = diffTabs && diffTabs[p];
+    return (diff && (diff.id || diff.diff_id || diff.path)) || p || 'diff';
+  };
+
+  const getTabTitle = (tabPath) => {
+    const p = String(tabPath || '');
+    const isSettingsTab = settingsTabPath && p === settingsTabPath;
+    const isWelcomeTab = welcomeTabPath && p === welcomeTabPath;
+    const isDiffTab = diffTabPrefix && p.startsWith(diffTabPrefix);
+    const diff = isDiffTab && diffTabs ? diffTabs[p] : null;
+    const diffLabel = diff
+      ? (diff.path ? `Diff: ${diff.path}` : (diff.files ? 'Diff (multi-file)' : 'Diff'))
+      : 'Diff';
+    return isSettingsTab ? 'Settings' : (isWelcomeTab ? 'Welcome' : (isDiffTab ? diffLabel : p.split('/').pop()));
+  };
+
+  const renderContextItem = (label, action, { danger = false, disabled = false } = {}) => (
+    <div
+      className={`context-item ${danger ? 'danger' : ''} ${disabled ? 'disabled' : ''}`}
+      style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, ...(danger ? { color: 'var(--danger)' } : {}) }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (disabled) return;
+        action?.();
+        setTabContextMenu(null);
+        setEditorNavMenu(null);
+      }}
+    >
+      {label}
+    </div>
+  );
+
+  const renderSeparator = () => <div className="context-sep" />;
+
+  const openTabMenuAt = (e, groupId, tabPath) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditorNavMenu(null);
+    setTabContextMenu({ x: e.clientX, y: e.clientY, groupId: String(groupId || ''), tabPath: String(tabPath || '') });
+  };
+
+  const openNavMenuAt = (e, groupId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect?.();
+    const x = rect ? Math.max(8, Math.min(rect.left, window.innerWidth - 340)) : e.clientX;
+    const y = rect ? rect.bottom + 6 : e.clientY;
+    setTabContextMenu(null);
+    setEditorNavMenu({ x, y, groupId: String(groupId || '') });
+  };
+
+  const openInNewWindow = async ({ path, groupId, mode }) => {
+    const p = String(path || '');
+    if (!p) return false;
+    const payload = {
+      openFile: p,
+      groupId: String(groupId || ''),
+      workspaceFsPath: String(backendRoot || ''),
+      openMode: mode === 'copy' ? 'copy' : 'move',
+    };
+    try {
+      const api = globalThis?.window?.electronAPI?.window;
+      if (api?.openNewWindow) {
+        const res = await api.openNewWindow(payload);
+        return !!res?.ok;
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('openFile', p);
+      url.searchParams.set('openMode', mode === 'copy' ? 'copy' : 'move');
+      window.open(url.toString(), '_blank');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const revealInExplorer = (path) => {
+    const p = String(path || '');
+    if (!p) return;
+    try {
+      window.dispatchEvent(new CustomEvent('workbench:revealInExplorer', { detail: { path: p } }));
+    } catch {
+      // ignore
+    }
+  };
+
+  const renderGroupTabs = (group) => {
+    const isActiveGroup = group.id === activeGroupId;
+    const showControls = isActiveGroup && group.activeFile && !isSpecialTabPath(group.activeFile);
+    return (
+      <div className="tab-row">
+        <div className="tab-row-tabs">
+          {(group.openTabs || []).map((path, idx) => {
+            const flags = getTabFlags(group.id, path);
+            const isPreviewTab = previewEnabled && !group.locked && flags.preview && group.previewTab === path;
+            const tabClass = [
+              'tab',
+              (group.activeFile === path ? 'active' : ''),
+              (updatedPaths.has(path) ? 'tab-updated' : ''),
+              (isPreviewTab ? 'tab-preview' : ''),
+              (flags.pinned ? 'tab-pinned' : ''),
+            ].filter(Boolean).join(' ');
+
+            return (
+              <div
+                key={`${group.id}:${path}`}
+                className={tabClass}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData('text/plain', idx.toString())}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = Number(e.dataTransfer.getData('text/plain'));
+                  onTabReorder?.(from, idx, { groupId: group.id });
+                }}
+                onContextMenu={(e) => openTabMenuAt(e, group.id, path)}
+              >
+                <button
+                  className="tab-main"
+                  onClick={() => {
+                    onActiveGroupChange?.(group.id);
+                    onActiveFileChange?.(path, { groupId: group.id });
+                  }}
+                  title={path}
+                  type="button"
+                >
+                  {flags.pinned ? <i className="codicon codicon-pin tab-flag" aria-hidden /> : null}
+                  {flags.keptOpen && !flags.pinned ? <i className="codicon codicon-lock tab-flag" aria-hidden /> : null}
+                  {isPreviewTab ? <i className="codicon codicon-eye tab-flag" aria-hidden /> : null}
+                  <span className="tab-text">{getTabTitle(path)}</span>
+                  {updatedPaths.has(path) ? <span className="tab-dirty codicon codicon-circle-filled" aria-label="未保存更改" /> : null}
+                </button>
+                <button onClick={() => onCloseFile?.(path, { groupId: group.id })} className="tab-close" title="Close tab">
+                  <i className="codicon codicon-close" aria-hidden />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {showControls ? (
+          <div className="tab-row-actions">
+            <button
+              type="button"
+              className="ghost-btn tiny"
+              title={`向右拆分编辑器 (Ctrl+\\)\n[Alt] 向下拆分编辑器`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitEditor?.({ direction: e.altKey ? 'down' : 'right', groupId: group.id, tabPath: group.activeFile, move: false });
+              }}
+              style={{ height: 28 }}
+            >
+              <i className="codicon codicon-split-horizontal" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="ghost-btn tiny"
+              title="编辑器导航菜单"
+              onClick={(e) => openNavMenuAt(e, group.id)}
+              style={{ height: 28 }}
+            >
+              ⋯
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderBreadcrumbsForGroup = (group) => {
+    const f = String(group.activeFile || '');
+    if (!f || isSpecialTabPath(f)) return <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs" />;
+    const parts = f.split('/').filter(Boolean);
+    return (
+      <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
+        {projectLabel ? <span className="breadcrumb-root">{projectLabel}</span> : null}
+        {parts.map((part, idx) => (
+          <span key={`${group.id}:${part}-${idx}`} className="breadcrumb-part">
+            <i className="codicon codicon-chevron-right" aria-hidden />
+            <span>{part}</span>
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  const renderEditorForGroup = (group) => {
+    const filePath = String(group.activeFile || '');
+    const diffModelBaseForGroup = resolveDiffModelBaseForPath(filePath);
+    const content = files.find((f) => f.path === filePath)?.content || '';
+
+    if (!filePath) {
+      return (
+        <div className="monaco-empty" aria-label="No file open" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {!hasWorkspace && onOpenWelcomeTab ? (
+            <div style={{ textAlign: 'center', padding: 24 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No editor open</div>
+              <div style={{ color: 'var(--muted)', marginBottom: 12 }}>打开 Welcome 或选择项目文件夹开始</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button className="primary-btn" onClick={onOpenWelcomeTab}>Open Welcome</button>
+                <button className="ghost-btn" onClick={onSelectFolder}>📁 Open Folder</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (settingsTabPath && filePath === settingsTabPath && renderSettingsTab) return renderSettingsTab();
+    if (welcomeTabPath && filePath === welcomeTabPath && renderWelcomeTab) return renderWelcomeTab();
+
+    if (diffTabPrefix && filePath.startsWith(diffTabPrefix) && diffTabs && diffTabs[filePath]) {
+      const diff = diffTabs[filePath];
+      return (
+        <Suspense fallback={<div className="monaco-fallback">Loading Diff Editor…</div>}>
+          {diff.files ? (
+            <div style={{ height: '100%', overflowY: 'auto' }}>
+              {diff.files.map((file) => (
+                <div key={file.path} style={{ height: '300px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{
+                    padding: '8px 16px',
+                    background: 'var(--panel-sub)',
+                    borderBottom: '1px solid var(--border)',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <span style={{
+                      color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')),
+                      fontWeight: 'bold',
+                      width: '16px',
+                      textAlign: 'center'
+                    }}>
+                      {file.status}
+                    </span>
+                    {file.path}
+                  </div>
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <ManagedDiffEditor
+                      height="100%"
+                      language={inferLanguage(file.path || '')}
+                      original={file.before || ''}
+                      modified={file.after || ''}
+                      theme={monacoTheme}
+                      originalModelPath={`diff-tab-original://${diffModelBaseForGroup}/${file.path}`}
+                      modifiedModelPath={`diff-tab-modified://${diffModelBaseForGroup}/${file.path}`}
+                      options={{
+                        ...monacoOptions,
+                        readOnly: true,
+                        renderSideBySide: true,
+                        wordWrap: 'off',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        padding: { top: 8, bottom: 8 },
+                        hideUnchangedRegions: compactDiff ? { enabled: true, revealLinePadding: 3, contextLineCount: 3 } : { enabled: false }
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ManagedDiffEditor
+              height="100%"
+              language={inferLanguage(diff.path || filePath)}
+              original={diff.before || ''}
+              modified={diff.after || ''}
+              theme={monacoTheme}
+              originalModelPath={`diff-tab-original://${diffModelBaseForGroup}`}
+              modifiedModelPath={`diff-tab-modified://${diffModelBaseForGroup}`}
+              options={{
+                ...monacoOptions,
+                readOnly: true,
+                renderSideBySide: true,
+                wordWrap: 'off',
+                hideUnchangedRegions: compactDiff ? { enabled: true, revealLinePadding: 3, contextLineCount: 3 } : { enabled: false }
+              }}
+            />
+          )}
+        </Suspense>
+      );
+    }
+
+    return (
+      <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
+        <div style={{ height: '100%', width: '100%' }}>
+          <MonacoEditor
+            height="100%"
+            path={filePath}
+            language={inferLanguage(filePath)}
+            theme={monacoTheme}
+            value={content}
+            options={monacoOptions}
+            saveViewState
+            keepCurrentModel
+            onMount={handleEditorMountForGroup(group.id)}
+            onChange={(value) => onFileChange?.(filePath, value ?? '', { groupId: group.id })}
+          />
+        </div>
+      </Suspense>
+    );
+  };
+
+  const renderTabContextMenu = () => {
+    if (!tabContextMenu?.tabPath || !tabContextMenu?.groupId) return null;
+    const group = groups.find((g) => g.id === tabContextMenu.groupId);
+    if (!group) return null;
+    const path = tabContextMenu.tabPath;
+    const groupId = tabContextMenu.groupId;
+    const flags = getTabFlags(groupId, path);
+    const isPreviewTab = previewEnabled && !group.locked && flags.preview && group.previewTab === path;
+    const absPath = backendRoot ? absJoin(backendRoot, path) : path;
+
+    return (
+      <div
+        className="context-menu"
+        style={{
+          position: 'fixed',
+          top: tabContextMenu.y,
+          left: tabContextMenu.x,
+          background: 'var(--panel)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          boxShadow: 'var(--shadow-soft)',
+          zIndex: 200,
+          minWidth: 240,
+          padding: 4,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {renderContextItem('关闭当前编辑器', () => onCloseFile?.(path, { groupId }))}
+        {renderContextItem('关闭其他编辑器', () => onCloseEditors?.('closeOthers', { groupId, tabPath: path }))}
+        {renderContextItem('关闭右侧标签页', () => onCloseEditors?.('closeRight', { groupId, tabPath: path }))}
+        {renderContextItem('关闭已保存的编辑器', () => onCloseEditors?.('closeSaved', { groupId }))}
+        {renderContextItem('关闭全部编辑器', () => onCloseEditors?.('closeAll', { groupId }))}
+        {renderSeparator()}
+        {renderContextItem(flags.keptOpen ? '取消保持打开' : '保持打开状态（防止被自动替换）', () => onToggleTabKeptOpen?.(groupId, path))}
+        {renderContextItem(flags.pinned ? '取消固定编辑器' : '固定编辑器', () => onToggleTabPinned?.(groupId, path))}
+        {renderContextItem(isPreviewTab ? '转为持久编辑器' : '设为预览态编辑器', () => onOpenFile?.(path, { groupId, mode: isPreviewTab ? 'persistent' : 'preview' }), { disabled: !previewEnabled || !!group.locked })}
+        {renderSeparator()}
+        {renderContextItem('复制相对路径', () => copyToClipboard(path))}
+        {renderContextItem('复制文件路径', () => copyToClipboard(absPath), { disabled: !backendRoot })}
+        {renderContextItem('在文件资源管理器中显示', async () => {
+          const api = globalThis?.window?.electronAPI?.shell;
+          if (api?.showItemInFolder) {
+            await api.showItemInFolder(absPath);
+            return;
+          }
+          await copyToClipboard(absPath);
+        }, { disabled: !backendRoot })}
+        {renderContextItem('在资源管理器视图中高亮', () => {
+          onActiveGroupChange?.(groupId);
+          onActiveFileChange?.(path, { groupId });
+          revealInExplorer(path);
+        })}
+        {renderSeparator()}
+        {renderContextItem('向右拆分编辑器', () => onSplitEditor?.({ direction: 'right', groupId, tabPath: path, move: false }))}
+        {renderContextItem('向下拆分编辑器', () => onSplitEditor?.({ direction: 'down', groupId, tabPath: path, move: false }))}
+        {renderContextItem('拆分并移动到新编辑器组', () => onSplitEditor?.({ direction: 'right', groupId, tabPath: path, move: true }))}
+        {renderSeparator()}
+        {renderContextItem('移动到新窗口', async () => {
+          const ok = await openInNewWindow({ path, groupId, mode: 'move' });
+          if (ok) onCloseFile?.(path, { groupId });
+        })}
+        {renderContextItem('复制到新窗口', async () => {
+          await openInNewWindow({ path, groupId, mode: 'copy' });
+        })}
+      </div>
+    );
+  };
+
+  const renderEditorNavMenu = () => {
+    if (!editorNavMenu?.groupId) return null;
+    const groupId = editorNavMenu.groupId;
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return null;
+
+    return (
+      <div
+        className="context-menu"
+        style={{
+          position: 'fixed',
+          top: editorNavMenu.y,
+          left: editorNavMenu.x,
+          background: 'var(--panel)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          boxShadow: 'var(--shadow-soft)',
+          zIndex: 200,
+          width: 340,
+          padding: 4,
+          maxHeight: 'min(70vh, 520px)',
+          overflow: 'auto',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {renderContextItem(group.locked ? '解锁当前编辑器组' : '锁定当前编辑器组', () => onToggleGroupLocked?.(groupId))}
+        {renderContextItem(previewEnabled ? '关闭预览编辑器模式' : '启用预览编辑器模式', () => onTogglePreviewEditorEnabled?.())}
+        {renderSeparator()}
+        {renderContextItem('打开编辑器导航（Command Palette）', () => onOpenEditorNavigation?.(groupId))}
+        {renderSeparator()}
+        {renderContextItem('全部关闭', () => onCloseEditors?.('closeAll', { scope: 'all' }))}
+        {renderContextItem('关闭已保存', () => onCloseEditors?.('closeSaved', { scope: 'all' }))}
+        {renderContextItem('编辑器配置入口（Settings）', () => onOpenFile?.(settingsTabPath, { groupId, mode: 'persistent' }))}
+      </div>
+    );
+  };
+
+  const layoutDirection = (editorLayout && editorLayout.mode === 'split' && groups.length > 1)
+    ? (editorLayout.direction === 'horizontal' ? 'horizontal' : 'vertical')
+    : (groups.length > 1 ? 'vertical' : 'single');
+
+  const editorPane = (
+    <div className="workspace-editor">
+      <div className={`editor-groups editor-groups-${layoutDirection}`}>
+        {groups.map((group) => {
+          const isActiveGroup = group.id === activeGroupId;
+          return (
+            <div
+              key={group.id}
+              className={`editor-group-pane ${isActiveGroup ? 'active' : ''}`}
+              onMouseDown={() => onActiveGroupChange?.(group.id)}
+            >
+              {renderGroupTabs(group)}
+              {renderBreadcrumbsForGroup(group)}
+              <div className="monaco-shell" style={{ position: 'relative' }}>
+                {isActiveGroup && shouldShowTaskReviewUI ? (
+                  <div className="task-review-floating" role="region" aria-label="Task Review">
+                    <div className="task-review-floating-main">
+                      <div className="task-review-floating-text">变更已完成，请确认是否采纳</div>
+                      <div className="task-review-floating-actions">
+                        {typeof onTaskRevertFile === 'function' ? (
+                          <button type="button" className="task-review-btn" onClick={() => onTaskRevertFile(activeFile)}>
+                            全部撤销
+                          </button>
+                        ) : null}
+                        {typeof onTaskKeepFile === 'function' ? (
+                          <button type="button" className="task-review-btn" onClick={() => onTaskKeepFile(activeFile)}>
+                            全部采纳
+                          </button>
+                        ) : null}
+                        {typeof onTaskResetFile === 'function' ? (
+                          <button type="button" className="task-review-btn" onClick={() => onTaskResetFile(activeFile)} title="还原所有变更到 Diff 状态">
+                            还原 Diff
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="task-review-floating-nav">
+                      <div className="task-review-floating-count">
+                        {currentPendingIndex !== -1 ? `${currentPendingIndex + 1}/${pendingBlocks.length}` : `-/${pendingBlocks.length}`}
+                      </div>
+                      <button
+                        type="button"
+                        className="task-review-btn"
+                        disabled={currentPendingIndex <= 0}
+                        onClick={() => {
+                          const target = pendingBlocks[currentPendingIndex - 1];
+                          if (target) {
+                            const realIdx = taskBlocks.findIndex(b => b.id === target.id);
+                            if (realIdx !== -1) setTaskCursor(realIdx);
+                          }
+                        }}
+                        title="上一处待处理变更"
+                      >
+                        <span className="codicon codicon-chevron-up" aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className="task-review-btn"
+                        disabled={currentPendingIndex === -1 || currentPendingIndex >= pendingBlocks.length - 1}
+                        onClick={() => {
+                          const target = pendingBlocks[currentPendingIndex + 1];
+                          if (target) {
+                            const realIdx = taskBlocks.findIndex(b => b.id === target.id);
+                            if (realIdx !== -1) setTaskCursor(realIdx);
+                          }
+                        }}
+                        title="下一处待处理变更"
+                      >
+                        <span className="codicon codicon-chevron-down" aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {renderEditorForGroup(group)}
+
+                {isActiveGroup && canUseEditorAi && inlineAi.visible ? (
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    style={{
+                      position: 'absolute',
+                      top: inlineAi.top,
+                      left: inlineAi.left,
+                      zIndex: 20,
+                      height: 26,
+                      padding: '0 8px',
+                      borderRadius: 999,
+                      fontSize: 12,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                    onClick={() => setAiPanel((prev) => ({ ...prev, open: true, title: 'AI', content: prev.content || '', error: prev.error || '' }))}
+                    title="AI Actions"
+                  >
+                    <span aria-hidden>✨</span>
+                    <span>AI</span>
+                  </button>
+                ) : null}
+
+                {isActiveGroup && canUseEditorAi && aiPanel.open ? (
+                  <>
+                    <div
+                      style={{ position: 'fixed', inset: 0, zIndex: 99990, background: 'rgba(0,0,0,0.28)' }}
+                      onClick={() => setAiPanel((prev) => ({ ...prev, open: false }))}
+                    />
+                    <div
+                      style={{
+                        position: 'fixed',
+                        zIndex: 99991,
+                        right: 16,
+                        top: 56,
+                        width: 'min(720px, calc(100vw - 32px))',
+                        maxHeight: 'min(70vh, 720px)',
+                        background: 'var(--panel)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 12,
+                        boxShadow: 'var(--shadow-strong)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
+                        <div style={{ fontWeight: 700, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {aiPanel.title || 'AI'}
+                        </div>
+                        <button type="button" className="ghost-btn" style={{ height: 28 }} onClick={() => triggerAiAction('explain')}>解释</button>
+                        <button type="button" className="ghost-btn" style={{ height: 28 }} onClick={() => triggerAiAction('optimize')}>优化</button>
+                        <button type="button" className="ghost-btn" style={{ height: 28 }} onClick={() => triggerAiAction('review')}>审阅</button>
+                        <button type="button" className="ghost-btn" style={{ height: 28 }} onClick={() => openPromptForAction('modify')}>修改</button>
+                        <button type="button" className="ghost-btn" style={{ height: 28 }} onClick={() => setAiPanel((prev) => ({ ...prev, open: false }))}>
+                          <span className="codicon codicon-close" aria-hidden />
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                        <button type="button" className="ghost-btn" style={{ height: 30 }} onClick={() => triggerAiAction('generateTests')}>单测</button>
+                        <button type="button" className="ghost-btn" style={{ height: 30 }} onClick={() => triggerAiAction('generateComments')}>注释</button>
+                        <button type="button" className="ghost-btn" style={{ height: 30 }} onClick={() => triggerAiAction('rewrite')}>重写</button>
+                        <button type="button" className="ghost-btn" style={{ height: 30 }} onClick={() => triggerAiAction('generateDocs')}>文档</button>
+                        {aiPanel.canApplySelection ? (
+                          <button type="button" className="primary-btn" style={{ height: 30 }} onClick={applyAiResultToSelection}>应用到选中</button>
+                        ) : null}
+                        {aiPanel.canApplyFile ? (
+                          <button type="button" className="primary-btn" style={{ height: 30 }} onClick={applyAiResultToFile}>替换文件</button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          style={{ height: 30 }}
+                          onClick={() => {
+                            const text = aiPanel.content || '';
+                            if (!text) return;
+                            navigator.clipboard?.writeText?.(text).catch(() => {});
+                          }}
+                        >
+                          复制
+                        </button>
+                      </div>
+
+                      <div style={{ padding: 12, overflow: 'auto', flex: 1 }}>
+                        {aiPanel.busy ? (
+                          <div style={{ color: 'var(--muted)', fontSize: 13 }}>生成中…</div>
+                        ) : aiPanel.error ? (
+                          <div style={{ color: 'var(--danger)', fontSize: 13 }}>{aiPanel.error}</div>
+                        ) : (
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.55, color: 'var(--text)' }}>
+                            {aiPanel.content || ''}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+
+                {isActiveGroup && canUseEditorAi && aiPrompt.open ? (
+                  <>
+                    <div
+                      style={{ position: 'fixed', inset: 0, zIndex: 99992, background: 'rgba(0,0,0,0.28)' }}
+                      onClick={() => setAiPrompt((prev) => ({ ...prev, open: false }))}
+                    />
+                    <div
+                      style={{
+                        position: 'fixed',
+                        zIndex: 99993,
+                        left: '50%',
+                        top: '20%',
+                        transform: 'translateX(-50%)',
+                        width: 'min(640px, calc(100vw - 32px))',
+                        background: 'var(--panel)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 12,
+                        boxShadow: 'var(--shadow-strong)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>{aiPrompt.title}</div>
+                      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <textarea
+                          className="ghost-input"
+                          value={aiPrompt.value}
+                          onChange={(e) => setAiPrompt((prev) => ({ ...prev, value: e.target.value }))}
+                          placeholder={aiPrompt.placeholder}
+                          style={{ width: '100%', minHeight: 96, resize: 'vertical', padding: 10, lineHeight: 1.5 }}
+                          autoFocus
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                          <button type="button" className="ghost-btn" style={{ height: 32 }} onClick={() => setAiPrompt((prev) => ({ ...prev, open: false }))}>取消</button>
+                          <button
+                            type="button"
+                            className="primary-btn"
+                            style={{ height: 32 }}
+                            disabled={!aiPrompt.value.trim()}
+                            onClick={() => {
+                              const instruction = aiPrompt.value;
+                              setAiPrompt((prev) => ({ ...prev, open: false }));
+                              runEditorAiAction({ action: aiPrompt.action, userInstruction: instruction }).catch(() => {});
+                            }}
+                          >
+                            运行
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {renderTabContextMenu()}
+      {renderEditorNavMenu()}
     </div>
   );
 

@@ -228,6 +228,16 @@ function ConfigPanel({
     }));
   };
 
+  const updateEditorConfig = (patch = {}) => {
+    setConfig((prev) => ({
+      ...prev,
+      editor: {
+        ...((prev.editor && typeof prev.editor === 'object') ? prev.editor : {}),
+        ...(patch && typeof patch === 'object' ? patch : {})
+      }
+    }));
+  };
+
   const baseUrlPlaceholder =
     currentProvider === 'openai'
       ? 'https://api.openai.com/v1'
@@ -306,6 +316,7 @@ function ConfigPanel({
     () => [
       { id: 'app', label: language === 'zh' ? '通用' : 'General', icon: GeneralIcon },
       { id: 'appearance', label: language === 'zh' ? '外观' : 'Appearance', icon: PaletteIcon },
+      { id: 'editor', label: language === 'zh' ? '编辑器' : 'Editor', icon: SlidersIcon },
       { id: 'general', label: language === 'zh' ? '模型与会话' : 'LLM & Session', icon: SlidersIcon },
       { id: 'embeddings', label: language === 'zh' ? '向量' : 'Embeddings', icon: SlidersIcon },
       { id: 'shortcuts', label: language === 'zh' ? '快捷键' : 'Shortcuts', icon: MenuIcon },
@@ -457,6 +468,116 @@ function ConfigPanel({
               <option value="light">{language === 'zh' ? '浅色' : 'Light'}</option>
               <option value="dark">{language === 'zh' ? '深色' : 'Dark'}</option>
             </select>
+          </SettingRow>
+        </SectionCard>
+      </>
+    );
+  };
+
+  const renderEditorPage = () => {
+    const pageTitle = language === 'zh' ? '编辑器' : 'Editor';
+    const editorCfg = (config?.editor && typeof config.editor === 'object') ? config.editor : {};
+    const tabSizeRaw = Number(editorCfg.tabSize);
+    const tabSize = Number.isFinite(tabSizeRaw) ? clampNumber(Math.round(tabSizeRaw), 1, 8) : 4;
+    const fontSizeRaw = Number(editorCfg.fontSize);
+    const fontSize = Number.isFinite(fontSizeRaw) ? clampNumber(Math.round(fontSizeRaw), 10, 24) : 13;
+    const lineHeightRaw = Number(editorCfg.lineHeight);
+    const lineHeight = Number.isFinite(lineHeightRaw) ? clampNumber(Math.round(lineHeightRaw), 14, 36) : 21;
+    const wordWrap = editorCfg.wordWrap === true || editorCfg.wordWrap === 'on';
+    const minimap = editorCfg.minimap !== false;
+    const fontLigatures = editorCfg.fontLigatures !== false;
+    const renderWhitespace = typeof editorCfg.renderWhitespace === 'string' ? editorCfg.renderWhitespace : 'none';
+
+    return (
+      <>
+        <h1 className="settings-page-title">{pageTitle}</h1>
+        <p className="settings-page-intro">
+          {language === 'zh' ? '这些设置会影响代码编辑器（Monaco）的显示与行为。' : 'These settings affect the Monaco code editor.'}
+        </p>
+
+        <div className="settings-group-title">{language === 'zh' ? '显示' : 'Display'}</div>
+        <SectionCard>
+          <SettingRow title={language === 'zh' ? '字体大小' : 'Font size'} description={language === 'zh' ? '10–24，默认 13' : '10–24, default 13.'}>
+            <SliderControl
+              language={language}
+              value={fontSize}
+              min={10}
+              max={24}
+              step={1}
+              defaultValue={13}
+              unit="px"
+              onChange={(val) => updateEditorConfig({ fontSize: val })}
+            />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '行高' : 'Line height'} description={language === 'zh' ? '14–36，默认 21' : '14–36, default 21.'}>
+            <SliderControl
+              language={language}
+              value={lineHeight}
+              min={14}
+              max={36}
+              step={1}
+              defaultValue={21}
+              unit="px"
+              onChange={(val) => updateEditorConfig({ lineHeight: val })}
+            />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '自动换行' : 'Word wrap'} description={language === 'zh' ? '开启后会在视口内自动换行' : 'Wrap long lines to fit the viewport.'}>
+            <Switch
+              checked={!!wordWrap}
+              label={language === 'zh' ? '自动换行' : 'Word wrap'}
+              onChange={(next) => updateEditorConfig({ wordWrap: !!next })}
+            />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? 'Minimap' : 'Minimap'} description={language === 'zh' ? '在右侧显示代码缩略图' : 'Show code minimap on the right.'}>
+            <Switch
+              checked={!!minimap}
+              label="Minimap"
+              onChange={(next) => updateEditorConfig({ minimap: !!next })}
+            />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '字体连字' : 'Font ligatures'} description={language === 'zh' ? '启用编程字体连字（如 =>）' : 'Enable programming font ligatures (e.g. =>).'}>
+            <Switch
+              checked={!!fontLigatures}
+              label={language === 'zh' ? '字体连字' : 'Font ligatures'}
+              onChange={(next) => updateEditorConfig({ fontLigatures: !!next })}
+            />
+          </SettingRow>
+
+          <SettingRow title={language === 'zh' ? '空白字符显示' : 'Render whitespace'} description={language === 'zh' ? '控制空格/Tab 的可视化提示' : 'Controls rendering of spaces/tabs.'}>
+            <select
+              className="settings-control compact"
+              value={renderWhitespace}
+              onChange={(e) => updateEditorConfig({ renderWhitespace: e.target.value })}
+            >
+              <option value="none">{language === 'zh' ? '不显示' : 'None'}</option>
+              <option value="boundary">{language === 'zh' ? '边界' : 'Boundary'}</option>
+              <option value="all">{language === 'zh' ? '全部' : 'All'}</option>
+              <option value="selection">{language === 'zh' ? '仅选区' : 'Selection'}</option>
+            </select>
+          </SettingRow>
+        </SectionCard>
+
+        <div className="settings-group-title">{language === 'zh' ? '缩进' : 'Indentation'}</div>
+        <SectionCard>
+          <SettingRow title={language === 'zh' ? 'Tab 大小' : 'Tab size'} description={language === 'zh' ? '1–8，默认 4' : '1–8, default 4.'} htmlFor="settings-editor-tab-size">
+            <input
+              id="settings-editor-tab-size"
+              type="number"
+              className="settings-control compact"
+              min={1}
+              max={8}
+              step={1}
+              value={tabSize}
+              onChange={(e) => {
+                const raw = Number(e.target.value);
+                const next = Number.isFinite(raw) ? clampNumber(Math.round(raw), 1, 8) : 4;
+                updateEditorConfig({ tabSize: next });
+              }}
+            />
           </SettingRow>
         </SectionCard>
       </>
@@ -1013,6 +1134,12 @@ function ConfigPanel({
         placeholder: 'Ctrl+Shift+P',
       },
       {
+        id: 'editor.openEditors',
+        title: language === 'zh' ? '编辑器：打开编辑器导航 (edt)' : 'Editor: Open editor navigation (edt)',
+        description: language === 'zh' ? '在当前编辑器组打开“已打开的编辑器”列表（默认 Ctrl+E）' : 'Open “open editors” list for current group (default Ctrl+E).',
+        placeholder: 'Ctrl+E',
+      },
+      {
         id: 'editor.ai.explain',
         title: language === 'zh' ? 'AI：解释代码' : 'AI: Explain',
         description: language === 'zh' ? '编辑器动作快捷键（可留空使用默认值）' : 'Editor action shortcut (leave empty to use default).',
@@ -1040,7 +1167,7 @@ function ConfigPanel({
 
         <div className="settings-group-title">{language === 'zh' ? '全局' : 'Global'}</div>
         <SectionCard>
-          {rows.slice(0, 2).map((r) => (
+          {rows.slice(0, 3).map((r) => (
             <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
               <input
                 type="text"
@@ -1056,7 +1183,7 @@ function ConfigPanel({
 
         <div className="settings-group-title">{language === 'zh' ? '编辑器（AI）' : 'Editor (AI)'}</div>
         <SectionCard>
-          {rows.slice(2).map((r) => (
+          {rows.slice(3).map((r) => (
             <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
               <input
                 type="text"
@@ -1078,6 +1205,8 @@ function ConfigPanel({
       ? renderAppPage()
       : activeTab === 'appearance'
         ? renderAppearancePage()
+        : activeTab === 'editor'
+          ? renderEditorPage()
         : activeTab === 'general'
           ? renderModelPage()
           : activeTab === 'embeddings'
@@ -1201,4 +1330,3 @@ function ConfigPanel({
 }
 
 export default ConfigPanel;
-

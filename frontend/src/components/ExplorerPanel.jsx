@@ -100,10 +100,11 @@ const flattenTree = (nodes, collapsed) => {
 };
 
 const TreeRow = React.memo(({ index, style, data }) => {
-  const { rows, activeFile, updatedPaths, onToggle, onOpen, onContext, collapsed, gitStatusMap } = data;
+  const { rows, activeFile, revealPath, updatedPaths, onToggle, onOpen, onContext, collapsed, gitStatusMap } = data;
   const node = rows[index];
   const isDir = node.type === 'dir';
   const isActive = activeFile === node.path;
+  const isRevealed = revealPath === node.path;
   const isUpdated = updatedPaths.has(node.path);
   
   const gitState = gitStatusMap?.get(node.path);
@@ -122,8 +123,12 @@ const TreeRow = React.memo(({ index, style, data }) => {
         ...style,
         paddingLeft: 12 + node.depth * 12,
       }}
-      className={`tree-item-virtual explorer-row ${isActive ? 'active' : ''} ${isUpdated ? 'updated' : ''}`}
+      className={`tree-item-virtual explorer-row ${isActive ? 'active' : ''} ${isRevealed ? 'revealed' : ''} ${isUpdated ? 'updated' : ''}`}
       onClick={() => (isDir ? onToggle(node.path) : onOpen(node.path))}
+      onDoubleClick={() => {
+        if (isDir) return;
+        onOpen(node.path, { mode: 'persistent' });
+      }}
       onContextMenu={(e) => onContext(e, node)}
     >
       <span className="tree-disclosure">
@@ -145,8 +150,8 @@ const TreeRow = React.memo(({ index, style, data }) => {
     </div>
   );
 }, (prevProps, nextProps) => {
-  const { rows: prevRows, activeFile: prevActive, updatedPaths: prevUpdated, collapsed: prevCollapsed, gitStatusMap: prevGit } = prevProps.data;
-  const { rows: nextRows, activeFile: nextActive, updatedPaths: nextUpdated, collapsed: nextCollapsed, gitStatusMap: nextGit } = nextProps.data;
+  const { rows: prevRows, activeFile: prevActive, revealPath: prevReveal, updatedPaths: prevUpdated, collapsed: prevCollapsed, gitStatusMap: prevGit } = prevProps.data;
+  const { rows: nextRows, activeFile: nextActive, revealPath: nextReveal, updatedPaths: nextUpdated, collapsed: nextCollapsed, gitStatusMap: nextGit } = nextProps.data;
   const prevNode = prevRows[prevProps.index];
   const nextNode = nextRows[nextProps.index];
   
@@ -155,19 +160,31 @@ const TreeRow = React.memo(({ index, style, data }) => {
     prevProps.style === nextProps.style &&
     prevNode?.path === nextNode?.path &&
     prevActive === nextActive &&
+    prevReveal === nextReveal &&
     (prevNode?.path ? prevUpdated.has(prevNode.path) === nextUpdated.has(nextNode.path) : true) &&
     (prevNode?.type === 'dir' ? prevCollapsed.has(prevNode.path) === nextCollapsed.has(nextNode.path) : true) &&
     (prevNode?.path ? prevGit?.get(prevNode.path) === nextGit?.get(nextNode.path) : true)
   );
 });
 
-const VirtualizedList = ({ height, itemSize, items, rowData, children }) => {
+const VirtualizedList = ({ height, itemSize, items, rowData, scrollToIndex = -1, children }) => {
   const containerRef = useRef(null);
   const [scrollTop, setScrollTop] = useState(0);
 
   const onScroll = useCallback((e) => {
     setScrollTop(e.currentTarget.scrollTop || 0);
   }, []);
+
+  useEffect(() => {
+    const idx = Number(scrollToIndex);
+    if (!Number.isFinite(idx) || idx < 0) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const containerHeight = Math.max(0, el.clientHeight || height || 0);
+    const targetTop = Math.max(0, idx * itemSize - Math.floor(containerHeight / 2) + Math.floor(itemSize / 2));
+    el.scrollTop = targetTop;
+    setScrollTop(targetTop);
+  }, [scrollToIndex, height, itemSize]);
 
   const totalHeight = items.length * itemSize;
   const startIndex = Math.max(0, Math.floor(scrollTop / itemSize));
@@ -199,6 +216,8 @@ function ExplorerPanel({
   projectLabel = '',
   loading = false,
   activeFile = '',
+  revealPath = '',
+  revealNonce = 0,
   onOpenFile,
   onAddFile,
   onAddFolder,
@@ -214,9 +233,11 @@ function ExplorerPanel({
   const [contextMenu, setContextMenu] = useState(null);
   const treeRef = useRef(null);
   const [treeHeight, setTreeHeight] = useState(380);
+  const [revealedPath, setRevealedPath] = useState('');
+  const revealTimerRef = useRef(null);
 
   const updatedPaths = useMemo(
-    () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
+    () => new Set(files.filter((f) => f.dirty).map((f) => f.path)),
     [files]
   );
   
@@ -232,6 +253,25 @@ function ExplorerPanel({
 
   const nodes = useMemo(() => buildTree(fileTree, workspaceRoots), [fileTree, workspaceRoots]);
   const virtualRows = useMemo(() => flattenTree(nodes, collapsed), [nodes, collapsed]);
+
+  const findAncestors = useCallback((nodeList, target) => {
+    const t = String(target || '').trim();
+    if (!t) return null;
+
+    const walk = (list, parents) => {
+      for (const node of list || []) {
+        if (!node?.path) continue;
+        if (node.path === t) return parents;
+        if (node.type === 'dir' && Array.isArray(node.children) && node.children.length > 0) {
+          const found = walk(node.children, [...parents, node.path]);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    return walk(nodeList, []) || [];
+  }, []);
 
   const headerLabel = useMemo(() => {
     if (Array.isArray(workspaceRoots) && workspaceRoots.length > 1) {
@@ -257,6 +297,61 @@ function ExplorerPanel({
     window.addEventListener('click', handler);
     return () => window.removeEventListener('click', handler);
   }, []);
+
+  useEffect(() => {
+    if (!activeFile) return;
+    const parts = String(activeFile || '').split('/').filter(Boolean);
+    if (parts.length < 2) return;
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      let prefix = '';
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        prefix = prefix ? `${prefix}/${parts[i]}` : parts[i];
+        next.delete(prefix);
+      }
+      return next;
+    });
+  }, [activeFile]);
+
+  useEffect(() => {
+    const target = String(revealPath || '').trim();
+    if (!target) return;
+    // Use nonce so revealing the same path twice still works.
+    if (!revealNonce) return;
+
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+
+    setRevealedPath(target);
+    const ancestors = findAncestors(nodes, target) || [];
+    if (!ancestors.length) return;
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      ancestors.forEach((p) => next.delete(p));
+      return next;
+    });
+  }, [revealNonce, revealPath, findAncestors, nodes]);
+
+  useEffect(() => {
+    if (!revealedPath) return;
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+    const current = revealedPath;
+    revealTimerRef.current = setTimeout(() => {
+      setRevealedPath((prev) => (prev === current ? '' : prev));
+      revealTimerRef.current = null;
+    }, 1500);
+    return () => {
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
+    };
+  }, [revealedPath]);
 
   const toggleCollapse = useCallback((path) => {
     setCollapsed((prev) => {
@@ -296,19 +391,42 @@ function ExplorerPanel({
 
   return (
     <div className="explorer-panel">
-      <div className="explorer-header" style={{ height: 'auto', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-            <div className="explorer-title">
-              <div className="explorer-label">EXPLORER</div>
-              <div className="explorer-sub" title={projectLabel || '未绑定项目'}>
-                {projectLabel || '未绑定项目'}
-              </div>
-            </div>
-            <div className="explorer-actions">
-              <button onClick={onAddFile} className="ghost-btn tiny" title="新建文件">＋</button>
-              <button onClick={onAddFolder} className="ghost-btn tiny" title="新建文件夹">📂</button>
-              <button onClick={onSyncStructure} className="ghost-btn tiny" title="刷新">⟳</button>
-            </div>
+      <div className="explorer-header">
+        <div className="explorer-title" title={headerLabel || '未绑定项目'}>
+          <div className="explorer-label">EXPLORER</div>
+          <div className="explorer-sub">
+            <i className="codicon codicon-folder-opened" aria-hidden />
+            <span className="explorer-sub-text">{headerLabel || '未绑定项目'}</span>
+          </div>
+        </div>
+        <div className="explorer-actions">
+          <button
+            type="button"
+            onClick={onAddFile}
+            className="explorer-action-btn"
+            title="新建文件"
+            aria-label="新建文件"
+          >
+            <i className="codicon codicon-new-file" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={onAddFolder}
+            className="explorer-action-btn"
+            title="新建文件夹"
+            aria-label="新建文件夹"
+          >
+            <i className="codicon codicon-new-folder" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={onSyncStructure}
+            className="explorer-action-btn"
+            title="刷新"
+            aria-label="刷新"
+          >
+            <i className={`codicon ${loading ? 'codicon-loading codicon-modifier-spin' : 'codicon-refresh'}`} aria-hidden />
+          </button>
         </div>
       </div>
       
@@ -317,18 +435,16 @@ function ExplorerPanel({
         ref={treeRef}
         onContextMenu={(e) => handleContextMenu(e, null)}
       >
-        <div className="tree-header">
-          <div>Files {headerLabel ? `· ${headerLabel}` : ''}</div>
-          {loading && <span className="tree-badge">同步中...</span>}
-        </div>
         {virtualRows.length > 0 ? (
           <VirtualizedList
             height={treeHeight}
             itemSize={28}
             items={virtualRows}
+            scrollToIndex={revealedPath ? virtualRows.findIndex((r) => r?.path === revealedPath) : -1}
             rowData={{
               rows: virtualRows,
               activeFile,
+              revealPath: revealedPath,
               updatedPaths,
               onToggle: toggleCollapse,
               onOpen: onOpenFile,
@@ -362,7 +478,7 @@ function ExplorerPanel({
             padding: 4,
           }}
         >
-          {renderContextItem('打开', () => onOpenFile?.(contextTargetPath), { disabled: !hasContextTarget })}
+          {renderContextItem('打开', () => onOpenFile?.(contextTargetPath, { mode: 'persistent' }), { disabled: !hasContextTarget })}
           {renderContextItem('新建文件', () => onAddFile?.())}
           {renderContextItem('新建文件夹', () => onAddFolder?.())}
           {renderContextItem('重命名 / 移动', () => onRenamePath?.(contextTargetPath), { disabled: !hasContextTarget })}
