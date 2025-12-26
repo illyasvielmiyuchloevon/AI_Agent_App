@@ -70,8 +70,10 @@ function ChatArea({
     onTaskKeepAll = () => {},
     onTaskRevertAll = () => {},
     onTaskKeepFile = () => {},
-    onTaskRevertFile = () => {}
-}) {
+     onTaskRevertFile = () => {},
+     onTaskResetFile = () => {},
+     onOpenFile
+ }) {
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
     const recognitionRef = useRef(null);
@@ -574,7 +576,6 @@ function ChatArea({
                                 className="task-review-toggle"
                                 onClick={onTaskToggle}
                                 title="展开/收起本次任务的改动列表"
-                                disabled={reviewBusy}
                             >
                                 <span className="codicon codicon-versions" aria-hidden />
                                 <span className="task-review-pill">{reviewSummary}</span>
@@ -606,14 +607,25 @@ function ChatArea({
                                     <div key={file.path} className="task-review-row">
                                         <div className="task-review-file">
                                             <span className={`task-review-dot ${file.changeType}`} aria-hidden />
-                                            <div className="task-review-path" title={file.path}>{file.path}</div>
+                                            <div 
+                                                 className="task-review-path" 
+                                                 title={file.path}
+                                                 onClick={() => onOpenFile?.(file.path)}
+                                                 style={{ cursor: 'pointer' }}
+                                             >
+                                                {file.path}
+                                            </div>
                                             <div className="task-review-stat">
                                                 <span className="add">+{file.stat?.added ?? 0}</span>
                                                 <span className="del">-{file.stat?.removed ?? 0}</span>
                                             </div>
-                                            {file.action !== 'pending' && (
+                                             {file.action !== 'pending' ? (
                                                 <span className={`task-review-state ${file.action === 'reverted' ? 'danger' : 'muted'}`}>
                                                     {file.action === 'reverted' ? '已撤销' : (file.action === 'mixed' ? '部分处理' : '已保留')}
+                                                </span>
+                                            ) : (
+                                                <span className="task-review-state running">
+                                                    进行中
                                                 </span>
                                             )}
                                         </div>
@@ -627,14 +639,25 @@ function ChatArea({
                                                 撤销
                                             </button>
                                             <button
-                                                type="button"
-                                                className="task-review-btn primary"
-                                                onClick={() => onTaskKeepFile(file.path)}
-                                                disabled={reviewBusy || file.action === 'kept'}
-                                            >
-                                                保留
-                                            </button>
-                                        </div>
+                                                 type="button"
+                                                 className="task-review-btn primary"
+                                                 onClick={() => onTaskKeepFile(file.path)}
+                                                 disabled={reviewBusy || file.action === 'kept'}
+                                             >
+                                                 保留
+                                             </button>
+                                             {typeof onTaskResetFile === 'function' && (
+                                                 <button
+                                                     type="button"
+                                                     className="task-review-btn subtle"
+                                                     onClick={() => onTaskResetFile(file.path)}
+                                                     title="还原到 Diff 状态"
+                                                     disabled={reviewBusy || file.action === 'pending'}
+                                                 >
+                                                     还原
+                                                 </button>
+                                             )}
+                                         </div>
                                     </div>
                                 ))}
                             </div>

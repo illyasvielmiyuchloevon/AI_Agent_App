@@ -841,6 +841,8 @@ input:focus, select:focus, textarea:focus {
   border-radius: 10px;
   box-shadow: var(--shadow-strong);
   max-width: min(980px, calc(100% - 24px));
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .task-review-floating-main {
@@ -849,6 +851,7 @@ input:focus, select:focus, textarea:focus {
   gap: 10px;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .task-review-floating-text {
@@ -861,7 +864,7 @@ input:focus, select:focus, textarea:focus {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .task-review-floating-nav {
@@ -887,7 +890,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 .monaco-editor .task-review-hunk.task-review-modified {
-  background: rgba(56, 139, 253, 0.12);
+  background: rgba(46, 160, 67, 0.16);
 }
 
 .monaco-editor .task-review-hunk.task-review-reverted {
@@ -899,84 +902,81 @@ input:focus, select:focus, textarea:focus {
 }
 
 .monaco-editor .task-review-hunk.task-review-active {
-  outline: 1px solid rgba(56, 139, 253, 0.65);
-  outline-offset: -1px;
+  /* Remove active outline as requested */
 }
 
-.monaco-editor .task-review-glyph.task-review-added {
-  border-left: 3px solid #2ea043;
-}
-
-.monaco-editor .task-review-glyph.task-review-deleted {
-  border-left: 3px solid #f85149;
-}
-
+.monaco-editor .task-review-glyph.task-review-added,
+.monaco-editor .task-review-glyph.task-review-deleted,
 .monaco-editor .task-review-glyph.task-review-modified {
-  border-left: 3px solid #388bfd;
+  border-left: none; /* Remove gutter borders as requested */
 }
 
-.task-review-inline {
-  width: min(720px, calc(100vw - 40px));
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: var(--shadow-strong);
+.task-review-hunk-actions {
+  position: absolute;
+  top: 2px;
+  right: 70px; /* Offset by 70px to avoid minimap/preview area */
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: auto;
+}
+
+/* Show buttons when the overlay is active (triggered by JS on hover) or directly hovered */
+.task-review-hunk-overlay.active .task-review-hunk-actions,
+.task-review-hunk-overlay:hover .task-review-hunk-actions {
+  opacity: 1;
+}
+
+.task-review-hunk-overlay {
+  pointer-events: none;
+  z-index: 100; /* Ensure it's high enough to be above editor content */
+  width: 100%;
+}
+
+.task-review-hunk-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
+  white-space: nowrap;
+  max-width: 50px; /* Initially only show Alt+N/Y */
 }
 
-.task-review-inline.active {
-  border-color: var(--accent-border);
+.task-review-hunk-btn .label {
+  opacity: 0;
+  width: 0;
+  display: inline-block;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-left: 0;
 }
 
-.task-review-inline-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-sub);
+.task-review-hunk-btn:hover {
+  max-width: 120px; /* Expand on hover */
+  padding-right: 10px;
 }
 
-.task-review-inline-title {
-  font-weight: 800;
-  font-size: 0.8rem;
-  color: var(--text);
+.task-review-hunk-btn:hover .label {
+  opacity: 1;
+  width: auto;
+  margin-left: 4px;
 }
 
-.task-review-inline-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.task-review-hunk-btn.revert {
+  background: #f85149; /* Red */
 }
 
-.task-review-inline-body {
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.task-review-inline-diff {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-family: var(--monospace, 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: pre;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-}
-
-.task-review-inline-diff.deleted {
-  background: rgba(248, 81, 73, 0.12);
-  border-color: rgba(248, 81, 73, 0.3);
-}
-
-.task-review-inline-diff.added {
-  background: rgba(46, 160, 67, 0.12);
-  border-color: rgba(46, 160, 67, 0.3);
+.task-review-hunk-btn.keep {
+  background: #2ea043; /* Green */
 }
 
 .task-review-list {
@@ -1050,6 +1050,11 @@ input:focus, select:focus, textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 0.85rem;
+  transition: color 0.2s;
+}
+
+.task-review-path:hover {
+  color: var(--accent);
 }
 
 .task-review-stat {
@@ -1076,6 +1081,12 @@ input:focus, select:focus, textarea:focus {
 .task-review-state.danger {
   color: #d73a49;
   background: rgba(215, 58, 73, 0.1);
+}
+
+.task-review-state.running {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 0, 122, 255), 0.1);
+  font-weight: 600;
 }
 
 .task-review-buttons {

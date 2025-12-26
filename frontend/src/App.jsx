@@ -1423,13 +1423,13 @@ function App() {
           const after = await captureWorkspaceSnapshot();
           const afterFiles = after?.files || [];
           const diffs = buildTaskDiffs(taskSnapshotRef.current.files || [], afterFiles);
-          setTaskReview({
+          setTaskReview((prev) => ({
               taskId,
               files: diffs,
-              expanded: diffs.length > 0,
+              expanded: prev?.expanded || diffs.length > 0,
               status: diffs.length ? 'ready' : 'clean',
-              cursorByPath: {}
-          });
+              cursorByPath: prev?.cursorByPath || {}
+          }));
           if (after?.raw) {
               await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true, snapshot: after.raw });
           } else {
@@ -1442,6 +1442,44 @@ function App() {
           taskSnapshotRef.current = null;
       }
   }, [buildTaskDiffs, captureWorkspaceSnapshot, syncWorkspaceFromDisk]);
+
+  const updateTaskReviewIncrementally = useCallback(async (taskId) => {
+      if (!taskSnapshotRef.current || taskSnapshotRef.current.id !== taskId) return;
+      try {
+          const after = await captureWorkspaceSnapshot();
+          if (!after) return;
+          const afterFiles = after.files || [];
+          const diffs = buildTaskDiffs(taskSnapshotRef.current.files || [], afterFiles);
+          
+          setTaskReview((prev) => {
+              if (!prev || prev.taskId !== taskId) return prev;
+              const nextStatus = prev.status === 'running' ? 'running' : prev.status;
+              return {
+                  ...prev,
+                  files: diffs,
+                  status: nextStatus,
+                  expanded: prev.expanded || diffs.length > 0,
+              };
+          });
+
+          // Also update workspace files so the editor stays in sync with what's on disk
+          setWorkspaceState((prev) => {
+              let changed = false;
+              const nextFiles = prev.files.map((f) => {
+                  const snap = afterFiles.find((s) => s.path === f.path);
+                  if (snap && snap.content !== f.content) {
+                      changed = true;
+                      return { ...f, content: snap.content, updated: true };
+                  }
+                  return f;
+              });
+              if (!changed) return prev;
+              return { ...prev, files: nextFiles };
+          });
+      } catch (err) {
+          console.error('Incremental task review update failed', err);
+      }
+  }, [buildTaskDiffs, captureWorkspaceSnapshot]);
 
   const hydrateProject = useCallback(async (driver, preferredRoot = '') => {
       if (!driver) return;
@@ -2537,16 +2575,6 @@ function App() {
         return;
     }
     const enabledTools = getEnabledTools(currentMode);
-    if (!configured || apiStatus !== 'ok') {
-        alert('请先完成设置并确保后端已连接（点击左侧齿轮进入设置）。');
-        if (uiDisplayPreferences.settings === 'editor') {
-            handleOpenConfigInEditor();
-        } else {
-            setConfigFullscreen(false);
-            setShowConfig(true);
-        }
-        return;
-    }
     if ((!cleanedText.trim()) && safeAttachments.length === 0) return;
 
     const trackTaskChanges = ['canva', 'agent'].includes(currentMode);
@@ -2603,6 +2631,7 @@ function App() {
       const controller = new AbortController();
       abortControllerRef.current = controller;
       streamBufferRef.current = '';
+      let incrementalTimer = null;
 
       try {
       const llmConfig = getBackendConfig();
@@ -2630,6 +2659,12 @@ function App() {
       let currentAssistantCid = null;
       let shouldStartNewAssistant = false;
       let hasReceivedContent = false;
+
+      if (trackTaskChanges && taskId) {
+          incrementalTimer = setInterval(() => {
+              updateTaskReviewIncrementally(taskId);
+          }, 1500); // 1.5 seconds refresh rate
+      }
 
       const ensureAssistantMessage = () => {
           if (currentAssistantCid && !shouldStartNewAssistant) return currentAssistantCid;
@@ -2734,6 +2769,9 @@ function App() {
           setMessages((prev) => [...prev, { role: 'error', content: 'Error getting response' }]);
       }
     } finally {
+      if (typeof incrementalTimer !== 'undefined' && incrementalTimer) {
+          clearInterval(incrementalTimer);
+      }
       abortControllerRef.current = null;
       streamBufferRef.current = '';
       if (snapshotReady && taskId) {
@@ -2911,6 +2949,38 @@ function App() {
           setTaskReview((prev) => (prev ? { ...prev, status: prev.status === 'applying' ? 'ready' : prev.status } : prev));
       }
   }, [syncWorkspaceFromDisk, taskReview, workspaceDriver]);
+
+  const resetTaskFile = useCallback((path) => {
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((f) => {
+              if (f.path !== path) return f;
+              const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => ({ ...b, action: 'pending' })) : f.blocks;
+              return { ...f, action: 'pending', blocks };
+          });
+          const status = computeTaskStatus(files, 'ready');
+          return { ...prev, files, status };
+      });
+  }, [computeTaskStatus]);
+
+  const resetTaskBlock = useCallback((path, blockId) => {
+      setTaskReview((prev) => {
+          if (!prev) return prev;
+          const files = prev.files.map((f) => {
+              if (f.path !== path) return f;
+              const blocks = Array.isArray(f.blocks) ? f.blocks.map((b) => {
+                  if (b.id !== blockId) return b;
+                  return { ...b, action: 'pending' };
+              }) : f.blocks;
+              // If any block is pending, the file is mixed or pending
+              const hasPending = blocks.some(b => b.action === 'pending');
+              const action = hasPending ? (blocks.every(b => b.action === 'pending') ? 'pending' : 'mixed') : f.action;
+              return { ...f, action, blocks };
+          });
+          const status = computeTaskStatus(files, 'ready');
+          return { ...prev, files, status };
+      });
+  }, [computeTaskStatus]);
 
   const openFile = (path) => {
       if (!workspaceDriver) {
@@ -3924,6 +3994,7 @@ function App() {
                  loading={loadingSessions.has(currentSessionId)}
                  onSend={handleSend}
                  onStop={handleStop}
+                 onOpenFile={openFile}
                  onToggleLogs={() => setShowLogs(!showLogs)}
                  currentSession={currentSession}
                  logStatus={logStatus}
@@ -3938,6 +4009,7 @@ function App() {
                  onTaskRevertAll={revertAllTaskFiles}
                  onTaskKeepFile={keepTaskFile}
                  onTaskRevertFile={revertTaskFile}
+                 onTaskResetFile={resetTaskFile}
               />
             )}
             {!sidebarCollapsed && activeSidebarPanel === 'explorer' && (
@@ -4123,6 +4195,8 @@ function App() {
                   onTaskRevertFile={revertTaskFile}
                   onTaskKeepBlock={keepTaskBlock}
                   onTaskRevertBlock={revertTaskBlock}
+                  onTaskResetBlock={resetTaskBlock}
+                  onTaskResetFile={resetTaskFile}
                   onTaskSetCursor={setTaskReviewCursor}
                   diffTabPrefix={DIFF_TAB_PREFIX}
                   diffTabs={diffTabs}

@@ -408,6 +408,8 @@ function Workspace({
   onTaskRevertFile,
   onTaskKeepBlock,
   onTaskRevertBlock,
+  onTaskResetBlock,
+  onTaskResetFile,
   onTaskSetCursor,
   diffTabPrefix,
   diffTabs,
@@ -505,6 +507,7 @@ function Workspace({
   const taskReviewDecorationsRef = useRef(null);
   const taskReviewWidgetsRef = useRef(new Map());
   const taskReviewKeyDisposableRef = useRef(null);
+  const shouldRevealTaskBlockRef = useRef(true);
   const [inlineAi, setInlineAi] = useState({ visible: false, top: 0, left: 0 });
   const [aiPanel, setAiPanel] = useState({
     open: false,
@@ -519,6 +522,7 @@ function Workspace({
     canApplyFile: false,
   });
   const [aiPrompt, setAiPrompt] = useState({ open: false, action: '', title: '', placeholder: '', value: '' });
+  const [editorVersion, setEditorVersion] = useState(0);
   const applyActions = useMemo(() => new Set(['optimize', 'generateComments', 'rewrite', 'modify']), []);
 
   const taskReviewFile = useMemo(() => {
@@ -543,12 +547,24 @@ function Workspace({
     return Math.min(taskCursorIndex, taskBlocks.length - 1);
   }, [taskBlocks.length, taskCursorIndex]);
 
-  const canUseTaskReview = !!activeFile
+  const pendingBlocks = useMemo(() => (
+    taskBlocks.filter(b => b.action === 'pending')
+  ), [taskBlocks]);
+
+  const currentPendingIndex = useMemo(() => {
+    if (!pendingBlocks.length) return -1;
+    const activeBlockId = taskBlocks[taskActiveIndex]?.id;
+    return pendingBlocks.findIndex(b => b.id === activeBlockId);
+  }, [pendingBlocks, taskBlocks, taskActiveIndex]);
+
+  const hasTaskReview = !!activeFile
     && !(settingsTabPath && activeFile === settingsTabPath)
     && !(welcomeTabPath && activeFile === welcomeTabPath)
     && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix))
     && !!taskReviewFile
     && taskBlocks.length > 0;
+
+  const shouldShowTaskReviewUI = hasTaskReview && taskBlocks.some(b => b.action === 'pending');
 
   const toLines = useCallback((text) => {
     const s = typeof text === 'string' ? text : String(text || '');
@@ -788,7 +804,7 @@ function Workspace({
   }, []);
 
   const applyTaskBlockToModel = useCallback((block, nextAction) => {
-    if (!canUseTaskReview) return false;
+    if (!hasTaskReview) return false;
     if (!block || !activeFile) return false;
     if (nextAction !== 'kept' && nextAction !== 'reverted') return false;
     const editor = editorRef.current;
@@ -807,10 +823,20 @@ function Workspace({
 
     const currentState = block.action === 'reverted' ? 'before' : 'after';
     if (nextAction === 'reverted' && currentState === 'before') return true;
-    if (nextAction === 'kept' && currentState === 'after') return true;
-
-    const fromLines = nextAction === 'reverted' ? afterLines : beforeLines;
-    const toReplaceText = nextAction === 'reverted' ? beforeLines.join('\n') : afterLines.join('\n');
+    
+    // For 'kept' action, if it's already in 'after' state (pending), 
+    // we still want to push an edit so it's undoable.
+    // Monaco might ignore identical text edits, so we use pushEditOperations.
+    
+    let fromLines, toReplaceText;
+    if (nextAction === 'reverted') {
+      fromLines = afterLines;
+      toReplaceText = beforeLines.join('\n');
+    } else {
+      // nextAction === 'kept'
+      fromLines = currentState === 'before' ? beforeLines : afterLines;
+      toReplaceText = afterLines.join('\n');
+    }
 
     const pos = resolveBlockPosition(currentLines, {
       needleLines: fromLines,
@@ -828,10 +854,15 @@ function Workspace({
       const endCol = model.getLineMaxColumn?.(endLineNumber) || 1;
       return new monaco.Range(startLineNumber, 1, endLineNumber, endCol);
     })();
+
+    // Use pushEditOperations to ensure it's in the undo stack
+    model.pushStackElement();
     editor.executeEdits('task-review', [{ range, text: toReplaceText, forceMoveMarkers: true }]);
+    model.pushStackElement();
+    
     editor.focus?.();
     return true;
-  }, [activeFile, canUseTaskReview, resolveBlockPosition, toLines]);
+  }, [activeFile, hasTaskReview, resolveBlockPosition, toLines]);
 
   const keepActiveTaskBlock = useCallback(() => {
     if (!taskActiveBlock || typeof onTaskKeepBlock !== 'function') return;
@@ -847,6 +878,7 @@ function Workspace({
 
   const setTaskCursor = useCallback((nextIndex) => {
     if (!activeFile || typeof onTaskSetCursor !== 'function') return;
+    shouldRevealTaskBlockRef.current = true;
     onTaskSetCursor(activeFile, nextIndex);
   }, [activeFile, onTaskSetCursor]);
 
@@ -868,14 +900,45 @@ function Workspace({
   }, [resolveBlockPosition, toLines]);
 
   useEffect(() => {
-    if (!canUseTaskReview) return undefined;
+    shouldRevealTaskBlockRef.current = true;
+  }, [activeFile]);
+
+  // Auto-correct cursor to nearest pending block if current one is processed
+  useEffect(() => {
+    if (!hasTaskReview || pendingBlocks.length === 0) return;
+    const currentBlock = taskBlocks[taskActiveIndex];
+    if (currentBlock && currentBlock.action !== 'pending') {
+      // Find the next pending block
+      let nextIdx = taskBlocks.findIndex((b, i) => i >= taskActiveIndex && b.action === 'pending');
+      // If no next, find the previous pending block
+      if (nextIdx === -1) {
+        const revIdx = [...taskBlocks].reverse().findIndex((b, i) => (taskBlocks.length - 1 - i) < taskActiveIndex && b.action === 'pending');
+        if (revIdx !== -1) nextIdx = taskBlocks.length - 1 - revIdx;
+      }
+      
+      if (nextIdx !== -1 && nextIdx !== taskActiveIndex) {
+        // Disable reveal for auto-correction to avoid jumps on undo/keep
+        shouldRevealTaskBlockRef.current = false;
+        onTaskSetCursor?.(activeFile, nextIdx);
+      }
+    }
+  }, [hasTaskReview, taskBlocks, taskActiveIndex, pendingBlocks.length, activeFile, onTaskSetCursor]);
+
+  useEffect(() => {
+    if (viewMode !== 'code' && viewMode !== 'diff') {
+      setEditorVersion(0);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (!hasTaskReview || !editorVersion) return undefined;
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco) return undefined;
 
     const disposables = [];
-    const keepShortcut = getKeybinding('taskReview.keepBlock', 'Ctrl+Enter');
-    const revertShortcut = getKeybinding('taskReview.revertBlock', 'Ctrl+Backspace');
+    const keepShortcut = getKeybinding('taskReview.keepBlock', 'Alt+Y');
+    const revertShortcut = getKeybinding('taskReview.revertBlock', 'Alt+N');
     const keepKb = parseMonacoKeybinding(keepShortcut, monaco);
     const revertKb = parseMonacoKeybinding(revertShortcut, monaco);
 
@@ -899,20 +962,24 @@ function Workspace({
       disposables.forEach((d) => d?.dispose?.());
       if (taskReviewKeyDisposableRef.current) taskReviewKeyDisposableRef.current = null;
     };
-  }, [canUseTaskReview, getKeybinding, keepActiveTaskBlock, parseMonacoKeybinding, revertActiveTaskBlock]);
+  }, [hasTaskReview, getKeybinding, keepActiveTaskBlock, parseMonacoKeybinding, revertActiveTaskBlock, editorVersion]);
 
   useEffect(() => {
-    if (!canUseTaskReview) return undefined;
+    if (!hasTaskReview || !editorVersion) return undefined;
     if (!taskActiveBlock) return undefined;
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco) return undefined;
 
-    revealTaskBlock(taskActiveBlock);
+    if (shouldRevealTaskBlockRef.current) {
+        revealTaskBlock(taskActiveBlock);
+        shouldRevealTaskBlockRef.current = false;
+    }
     return undefined;
-  }, [canUseTaskReview, revealTaskBlock, taskActiveBlock, taskActiveIndex]);
+  }, [hasTaskReview, revealTaskBlock, taskActiveBlock, taskActiveIndex, editorVersion]);
 
   useEffect(() => {
+    if (!editorVersion) return undefined;
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     if (!editor || !monaco) return undefined;
@@ -934,13 +1001,18 @@ function Workspace({
     }
     taskReviewDecorationsRef.current = null;
 
-    if (!canUseTaskReview) return undefined;
+    if (!hasTaskReview) {
+        editor.layout?.();
+        return undefined;
+    }
     const model = editor.getModel?.();
     if (!model) return undefined;
     const lines = (model.getValue?.() || '').split('\n');
 
     const decorations = [];
-    taskBlocks.forEach((block, idx) => {
+    // Only show pending blocks in the editor
+    pendingBlocks.forEach((block) => {
+      const idx = taskBlocks.findIndex(b => b.id === block.id);
       const needleLines = block.action === 'reverted' ? toLines(block.beforeText || '') : toLines(block.afterText || '');
       const fromLen = needleLines.length || 1;
       const pos = resolveBlockPosition(lines, {
@@ -955,30 +1027,28 @@ function Workspace({
         range: new monaco.Range(startLineNumber, 1, endLineNumber, 1),
         options: {
           isWholeLine: true,
-          className: `task-review-hunk task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}${idx === taskActiveIndex ? ' task-review-active' : ''}`,
-          linesDecorationsClassName: `task-review-glyph task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}${idx === taskActiveIndex ? ' task-review-active' : ''}`,
+          className: `task-review-hunk task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}`,
+          linesDecorationsClassName: `task-review-glyph task-review-${block.changeType || 'modified'} task-review-${block.action || 'pending'}`,
         }
       });
 
       const widgetId = `task-review-widget:${activeFile}:${block.id}`;
       const dom = document.createElement('div');
-      dom.className = `task-review-inline ${idx === taskActiveIndex ? 'active' : ''}`;
-
-      const header = document.createElement('div');
-      header.className = 'task-review-inline-header';
-
-      const left = document.createElement('div');
-      left.className = 'task-review-inline-title';
-      left.textContent = `变更 ${idx + 1}/${taskBlocks.length}`;
+      dom.className = `task-review-hunk-overlay ${idx === taskActiveIndex ? 'active' : ''}`;
+      // Set width to ensure right-alignment works relative to editor width
+      const layoutInfo = editor.getLayoutInfo?.();
+      if (layoutInfo) {
+          dom.style.width = `${layoutInfo.contentWidth}px`;
+      }
 
       const actions = document.createElement('div');
-      actions.className = 'task-review-inline-actions';
+      actions.className = 'task-review-hunk-actions';
 
       const btnRevert = document.createElement('button');
       btnRevert.type = 'button';
-      btnRevert.className = 'task-review-btn subtle';
-      btnRevert.textContent = '撤销';
-      btnRevert.disabled = block.action === 'reverted';
+      btnRevert.className = 'task-review-hunk-btn revert';
+      btnRevert.title = '撤销 (Alt+N)';
+      btnRevert.innerHTML = '<span class="kb">Alt+N</span><span class="label"> 撤销</span>';
       btnRevert.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -989,9 +1059,9 @@ function Workspace({
 
       const btnKeep = document.createElement('button');
       btnKeep.type = 'button';
-      btnKeep.className = 'task-review-btn primary';
-      btnKeep.textContent = '保留';
-      btnKeep.disabled = block.action === 'kept';
+      btnKeep.className = 'task-review-hunk-btn keep';
+      btnKeep.title = '保留 (Alt+Y)';
+      btnKeep.innerHTML = '<span class="kb">Alt+Y</span><span class="label"> 保留</span>';
       btnKeep.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1002,36 +1072,14 @@ function Workspace({
 
       actions.appendChild(btnRevert);
       actions.appendChild(btnKeep);
-      header.appendChild(left);
-      header.appendChild(actions);
-      dom.appendChild(header);
-
-      const body = document.createElement('div');
-      body.className = 'task-review-inline-body';
-
-      const beforeText = String(block.beforeText || '');
-      const afterText = String(block.afterText || '');
-      if (beforeText) {
-        const del = document.createElement('pre');
-        del.className = 'task-review-inline-diff deleted';
-        del.textContent = beforeText.split('\n').map((l) => `- ${l}`).join('\n');
-        body.appendChild(del);
-      }
-      if (afterText) {
-        const add = document.createElement('pre');
-        add.className = 'task-review-inline-diff added';
-        add.textContent = afterText.split('\n').map((l) => `+ ${l}`).join('\n');
-        body.appendChild(add);
-      }
-
-      dom.appendChild(body);
+      dom.appendChild(actions);
 
       const widget = {
         getId: () => widgetId,
         getDomNode: () => dom,
         getPosition: () => ({
           position: { lineNumber: startLineNumber, column: 1 },
-          preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE, monaco.editor.ContentWidgetPositionPreference.EXACT],
+          preference: [monaco.editor.ContentWidgetPositionPreference.EXACT],
         }),
       };
       widgets.set(widgetId, widget);
@@ -1042,10 +1090,73 @@ function Workspace({
       }
     });
 
+    // Add content change listener to detect undo/redo that reverts text to pending state
+    const contentSub = model.onDidChangeContent((e) => {
+        if (!e.isFlush && (e.isUndoing || e.isRedoing)) {
+            const currentLines = (model.getValue() || '').split('\n');
+            taskBlocks.forEach((block, idx) => {
+                if (block.action === 'kept') {
+                    // If it was kept but now it matches beforeText, it was likely undone
+                    const pos = resolveBlockPosition(currentLines, {
+                        needleLines: toLines(block.beforeText || ''),
+                        contextBefore: toLines(block.contextBefore || ''),
+                        contextAfter: toLines(block.contextAfter || ''),
+                        preferredIndex: block.afterStartIndex,
+                    });
+                    if (pos.anchorLineNumber > 0) {
+                        onTaskResetBlock?.(activeFile, block.id);
+                        onTaskSetCursor?.(activeFile, idx);
+                    }
+                } else if (block.action === 'reverted') {
+                    // If it was reverted but now it matches afterText, it was likely undone
+                    const pos = resolveBlockPosition(currentLines, {
+                        needleLines: toLines(block.afterText || ''),
+                        contextBefore: toLines(block.contextBefore || ''),
+                        contextAfter: toLines(block.contextAfter || ''),
+                        preferredIndex: block.afterStartIndex,
+                    });
+                    if (pos.anchorLineNumber > 0) {
+                        onTaskResetBlock?.(activeFile, block.id);
+                        onTaskSetCursor?.(activeFile, idx);
+                    }
+                }
+            });
+        }
+    });
+
+    // Track mouse move to update active task block based on hover
+    const mouseMoveSub = editor.onMouseMove((e) => {
+        if (!e.target || !e.target.position) return;
+        const lineNumber = e.target.position.lineNumber;
+        
+        // Find if this line is within any pending block
+        const hoveredBlockIdx = taskBlocks.findIndex(block => {
+            if (block.action !== 'pending') return false;
+            const needleLines = block.action === 'reverted' ? toLines(block.beforeText || '') : toLines(block.afterText || '');
+            const fromLen = needleLines.length || 1;
+            const pos = resolveBlockPosition(lines, {
+                needleLines,
+                contextBefore: toLines(block.contextBefore || ''),
+                contextAfter: toLines(block.contextAfter || ''),
+                preferredIndex: block.afterStartIndex,
+            });
+            const startLineNumber = Math.max(1, Math.min(model.getLineCount?.() || 1, pos.anchorLineNumber));
+            const endLineNumber = Math.max(startLineNumber, Math.min(model.getLineCount?.() || 1, startLineNumber + fromLen - 1));
+            return lineNumber >= startLineNumber && lineNumber <= endLineNumber;
+        });
+
+        if (hoveredBlockIdx !== -1 && hoveredBlockIdx !== taskActiveIndex) {
+            shouldRevealTaskBlockRef.current = false;
+            onTaskSetCursor?.(activeFile, hoveredBlockIdx);
+        }
+    });
+
     taskReviewDecorationsRef.current = editor.createDecorationsCollection(decorations);
     editor.layout?.();
 
     return () => {
+      contentSub.dispose();
+      mouseMoveSub.dispose();
       try {
         taskReviewDecorationsRef.current?.clear?.();
       } catch {
@@ -1061,7 +1172,7 @@ function Workspace({
       }
       widgets.clear();
     };
-  }, [activeFile, applyTaskBlockToModel, canUseTaskReview, onTaskKeepBlock, onTaskRevertBlock, resolveBlockPosition, taskActiveIndex, taskBlocks, toLines]);
+  }, [activeFile, applyTaskBlockToModel, hasTaskReview, onTaskKeepBlock, onTaskRevertBlock, onTaskResetBlock, onTaskSetCursor, resolveBlockPosition, taskActiveIndex, taskBlocks, pendingBlocks, toLines, editorVersion]);
 
   const buildInstruction = useCallback((action, { hasSelection, userInstruction }) => {
     if (action === 'explain') {
@@ -1237,8 +1348,6 @@ function Workspace({
     editor.focus?.();
   }, [aiPanel.content, extractFirstCodeBlock]);
 
-  const [isEditorReady, setIsEditorReady] = useState(false);
-
   useEffect(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -1314,7 +1423,7 @@ function Workspace({
     return () => {
       aiDisposables.forEach((d) => d?.dispose?.());
     };
-  }, [canUseEditorAi, getKeybinding, parseMonacoKeybinding, triggerAiAction, isEditorReady]);
+  }, [canUseEditorAi, getKeybinding, parseMonacoKeybinding, triggerAiAction, editorVersion]);
 
   const handleEditorMount = useCallback((editor, monaco) => {
     disposablesRef.current.forEach((d) => d?.dispose?.());
@@ -1322,7 +1431,13 @@ function Workspace({
     editorRef.current = editor;
     monacoRef.current = monaco;
     globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
-    setIsEditorReady(true);
+    setEditorVersion(v => v + 1);
+
+    // Force a secondary refresh after 500ms to ensure decorations/widgets are rendered
+    // after the editor has fully settled from page switching
+    setTimeout(() => {
+      setEditorVersion(v => v + 1);
+    }, 500);
   }, [normalizedUndoRedoLimit]);
 
   useEffect(() => {
@@ -1404,17 +1519,11 @@ function Workspace({
             ))}
           </div>
           <div className="monaco-shell" style={{ position: 'relative' }}>
-            {canUseTaskReview ? (
+            {shouldShowTaskReviewUI ? (
               <div className="task-review-floating" role="region" aria-label="Task Review">
                 <div className="task-review-floating-main">
                   <div className="task-review-floating-text">变更已完成，请确认是否采纳</div>
                   <div className="task-review-floating-actions">
-                    <button type="button" className="task-review-btn subtle" onClick={revertActiveTaskBlock}>
-                      撤销（Ctrl+Backspace）
-                    </button>
-                    <button type="button" className="task-review-btn primary" onClick={keepActiveTaskBlock}>
-                      保留（Ctrl+Enter）
-                    </button>
                     {typeof onTaskRevertFile === 'function' ? (
                       <button type="button" className="task-review-btn" onClick={() => onTaskRevertFile(activeFile)}>
                         全部撤销
@@ -1425,25 +1534,44 @@ function Workspace({
                         全部采纳
                       </button>
                     ) : null}
+                    {typeof onTaskResetFile === 'function' ? (
+                      <button type="button" className="task-review-btn" onClick={() => onTaskResetFile(activeFile)} title="还原所有变更到 Diff 状态">
+                        还原 Diff
+                      </button>
+                    ) : null}
                   </div>
                 </div>
                 <div className="task-review-floating-nav">
-                  <div className="task-review-floating-count">{taskActiveIndex + 1}/{taskBlocks.length}</div>
+                  <div className="task-review-floating-count">
+                    {currentPendingIndex !== -1 ? `${currentPendingIndex + 1}/${pendingBlocks.length}` : `-/${pendingBlocks.length}`}
+                  </div>
                   <button
                     type="button"
                     className="task-review-btn"
-                    disabled={taskActiveIndex <= 0}
-                    onClick={() => setTaskCursor(taskActiveIndex - 1)}
-                    title="上一处变更"
+                    disabled={currentPendingIndex <= 0}
+                    onClick={() => {
+                      const target = pendingBlocks[currentPendingIndex - 1];
+                      if (target) {
+                        const realIdx = taskBlocks.findIndex(b => b.id === target.id);
+                        if (realIdx !== -1) setTaskCursor(realIdx);
+                      }
+                    }}
+                    title="上一处待处理变更"
                   >
                     <span className="codicon codicon-chevron-up" aria-hidden />
                   </button>
                   <button
                     type="button"
                     className="task-review-btn"
-                    disabled={taskActiveIndex >= taskBlocks.length - 1}
-                    onClick={() => setTaskCursor(taskActiveIndex + 1)}
-                    title="下一处变更"
+                    disabled={currentPendingIndex === -1 || currentPendingIndex >= pendingBlocks.length - 1}
+                    onClick={() => {
+                      const target = pendingBlocks[currentPendingIndex + 1];
+                      if (target) {
+                        const realIdx = taskBlocks.findIndex(b => b.id === target.id);
+                        if (realIdx !== -1) setTaskCursor(realIdx);
+                      }
+                    }}
+                    title="下一处待处理变更"
                   >
                     <span className="codicon codicon-chevron-down" aria-hidden />
                   </button>
