@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import ErrorBoundary from '../_shared/ErrorBoundary';
 
 export default function PanelViewHost({ views, activeId, viewPropsById, viewRefsById }) {
   const active = useMemo(() => views.find((v) => v.id === activeId) || views[0] || null, [views, activeId]);
@@ -24,7 +25,9 @@ export default function PanelViewHost({ views, activeId, viewPropsById, viewRefs
               ...(visible ? {} : { display: 'none' }),
             }}
           >
-            {ref ? <Comp ref={ref} {...props} /> : <Comp {...props} />}
+            <ErrorBoundary title={`${v.label || v.id} 视图崩溃`}>
+              {ref ? <Comp ref={ref} {...props} /> : <Comp {...props} />}
+            </ErrorBoundary>
           </div>
         );
       })}

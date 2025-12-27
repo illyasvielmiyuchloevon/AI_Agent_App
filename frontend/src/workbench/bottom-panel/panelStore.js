@@ -52,7 +52,7 @@ let state = {
   collapsed: typeof window === 'undefined' ? false : readBool(STORAGE.collapsed, false),
   hidden: typeof window === 'undefined' ? false : readBool(STORAGE.hidden, false),
   maximized: typeof window === 'undefined' ? false : readBool(STORAGE.maximized, false),
-  height: typeof window === 'undefined' ? 240 : clamp(readNumber(STORAGE.height, 240), 160, 520),
+  height: typeof window === 'undefined' ? 240 : clamp(readNumber(STORAGE.height, 240), 160, 9999),
 };
 
 const emit = () => {

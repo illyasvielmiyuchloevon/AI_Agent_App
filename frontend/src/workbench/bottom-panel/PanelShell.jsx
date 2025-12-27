@@ -35,7 +35,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
   const terminalAutoCreateInFlightRef = useRef(false);
   const terminalCloseOnEmptyRef = useRef(false);
   const terminalPrevCountRef = useRef(0);
-  const [terminalUi, setTerminalUi] = useState({ connected: false, terminals: [], activeId: '', scrollLock: false, profile: 'cmd' });
+  const [terminalUi, setTerminalUi] = useState({ connected: false, listed: false, terminals: [], activeId: '', scrollLock: false, profile: 'cmd' });
 
   const [problemsFilter, setProblemsFilter] = useState('');
   const [outputChannelId, setOutputChannelId] = useState('Workbench');
@@ -89,7 +89,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
   const toggleMaximize = useCallback(() => {
     const parentRect = panelRef.current?.parentElement?.getBoundingClientRect?.();
     const minHeight = 160;
-    const max = parentRect ? Math.max(minHeight, Math.floor(parentRect.height - 120)) : 520;
+    const max = parentRect ? Math.max(minHeight, Math.floor(parentRect.height - 6)) : 520;
     const prev = panelStore.getSnapshot();
     const next = !prev.maximized;
     ensureVisible();
@@ -109,7 +109,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
 
     const minHeight = 160;
     const parentRect = panelRef.current?.parentElement?.getBoundingClientRect?.();
-    const maxHeight = parentRect ? Math.max(minHeight, Math.floor(parentRect.height - 120)) : 520;
+    const maxHeight = parentRect ? Math.max(minHeight, Math.floor(parentRect.height - 6)) : 520;
     const startY = e.clientY;
     const startHeight = collapsed ? (lastHeightRef.current || height) : height;
     let pending = startHeight;
@@ -141,7 +141,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       }
       lastApplied = pending;
       const el = panelRef.current;
-      if (el) el.style.height = `${pending}px`;
+      if (el) el.style.height = '';
       setIsResizing(false);
       panelStore.setState({ height: lastApplied, collapsed: false });
     };
@@ -162,6 +162,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       onStateChange: onTerminalStateChange,
       terminalRef,
       autoConnect: activeViewId === 'terminal' && !hidden && !collapsed,
+      isResizing,
     },
     ports: {},
     gitlens: { workspacePath, onOpenFile, isResizing },
@@ -226,7 +227,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       terminalAutoCreateInFlightRef.current = false;
       return;
     }
-    if (!ui.connected) {
+    if (!ui.connected || !ui.listed) {
       terminalAutoCreateInFlightRef.current = false;
       return;
     }

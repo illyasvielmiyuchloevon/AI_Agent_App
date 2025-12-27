@@ -1380,16 +1380,10 @@ input:focus, select:focus, textarea:focus {
 .bottom-panel.resizing {
   user-select: none;
   will-change: height;
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
 }
 
 .bottom-panel.resizing .bottom-panel-content {
   pointer-events: none;
-  visibility: hidden;
 }
 
 .bottom-panel.hidden {
@@ -1841,11 +1835,223 @@ input:focus, select:focus, textarea:focus {
   min-height: 0;
   position: relative;
   background: var(--panel);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .vscode-terminal-instance {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+
+.vscode-terminal-instance.active {
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.vscode-terminal-main.split.split-v {
+  grid-template-columns:
+    minmax(0, var(--terminal-split, 50%))
+    6px
+    minmax(0, calc(100% - var(--terminal-split, 50%) - 6px));
+}
+
+.vscode-terminal-main.split.split-h {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows:
+    minmax(0, var(--terminal-split, 50%))
+    6px
+    minmax(0, calc(100% - var(--terminal-split, 50%) - 6px));
+}
+
+.vscode-terminal-splitter {
+  background: var(--border);
+  opacity: 0.65;
+  pointer-events: auto;
+}
+
+.vscode-terminal-splitter.v {
+  grid-column: 2;
+  grid-row: 1;
+  cursor: col-resize;
+}
+
+.vscode-terminal-splitter.h {
+  grid-column: 1;
+  grid-row: 2;
+  cursor: row-resize;
+}
+
+.vscode-terminal-splitter:hover {
+  opacity: 0.9;
+}
+
+.vscode-terminal-instance .xterm,
+.vscode-terminal-instance .xterm-viewport,
+.vscode-terminal-instance .xterm-screen {
+  height: 100%;
+}
+
+.vscode-terminal-find {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-sub);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.vscode-terminal-find-input {
+  width: 220px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.vscode-terminal-find-count {
+  min-width: 56px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.vscode-terminal-context {
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-sub);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vscode-terminal-context-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.vscode-terminal-context-item:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.vscode-terminal-context-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.vscode-terminal-context-item.danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.vscode-terminal-context-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+.vscode-terminal-modal-backdrop {
   position: absolute;
   inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.vscode-terminal-modal {
+  width: min(640px, 92vw);
+  max-height: min(520px, 80vh);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-sub);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.vscode-terminal-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.vscode-terminal-modal-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: var(--text);
+}
+
+.vscode-terminal-modal-row {
+  padding: 10px 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vscode-terminal-modal-label {
+  width: 64px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vscode-terminal-modal-hint {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.9;
+}
+
+.vscode-terminal-modal-textarea {
+  margin: 10px 12px;
+  flex: 1;
+  min-height: 140px;
+  resize: none;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.vscode-terminal-modal-actions {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .vscode-terminal-overlay {

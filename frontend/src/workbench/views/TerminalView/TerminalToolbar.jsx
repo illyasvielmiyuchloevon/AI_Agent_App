@@ -6,14 +6,58 @@ export default function TerminalToolbar({ terminal }) {
   const activeId = ui.activeId || '';
   const scrollLock = !!ui.scrollLock;
   const profile = ui.profile || 'cmd';
+  const split = ui.split || {};
+  const splitEnabled = !!split.enabled;
+  const splitCount = splitEnabled ? (Array.isArray(split.ids) ? split.ids.length : 2) : 1;
 
   const activeLabel = useMemo(() => {
     const t = terminals.find((x) => x.id === activeId);
-    return t?.label || t?.title || t?.profile || '';
+    return t?.title || t?.label || t?.profile || '';
   }, [terminals, activeId]);
 
   return (
     <>
+      <button
+        type="button"
+        className={`bottom-panel-icon-btn ${splitEnabled ? 'active' : ''}`}
+        onClick={() => terminal?.terminalRef?.current?.splitAddVertical?.()}
+        title="向右分屏（新终端）"
+      >
+        <span className="codicon codicon-split-vertical" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.splitAddHorizontal?.()}
+        title="向下分屏（新终端）"
+      >
+        <span className="codicon codicon-split-horizontal" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.closeActivePane?.()}
+        title={splitCount > 1 ? '关闭当前分屏' : '无分屏可关闭'}
+        disabled={splitCount <= 1}
+      >
+        <span className="codicon codicon-close" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.openFind?.()}
+        title="查找 (Ctrl+F)"
+      >
+        <span className="codicon codicon-search" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.renameActive?.()}
+        title="重命名终端"
+      >
+        <span className="codicon codicon-edit" aria-hidden />
+      </button>
       <button
         type="button"
         className="bottom-panel-icon-btn"
@@ -32,6 +76,14 @@ export default function TerminalToolbar({ terminal }) {
         <option value="powershell">powershell</option>
         <option value="bash">bash</option>
       </select>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.openProfileSettings?.(profile)}
+        title="Profile 配置（环境变量）"
+      >
+        <span className="codicon codicon-gear" aria-hidden />
+      </button>
       <select
         className="ghost-input bottom-panel-select"
         value={activeId}
@@ -39,9 +91,33 @@ export default function TerminalToolbar({ terminal }) {
         title={activeLabel || '终端实例'}
       >
         {terminals.map((t, idx) => (
-          <option key={t.id} value={t.id}>{t.label || t.title || t.profile || `terminal-${idx + 1}`}</option>
+          <option key={t.id} value={t.id}>{t.title || t.label || t.profile || `terminal-${idx + 1}`}</option>
         ))}
       </select>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.copySelection?.()}
+        title="复制选中"
+      >
+        <span className="codicon codicon-copy" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.pasteFromClipboard?.()}
+        title="粘贴"
+      >
+        <span className="codicon codicon-paste" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="bottom-panel-icon-btn"
+        onClick={() => terminal?.terminalRef?.current?.clearActive?.()}
+        title="清空终端"
+      >
+        <span className="codicon codicon-clear-all" aria-hidden />
+      </button>
       <button
         type="button"
         className={`bottom-panel-icon-btn ${scrollLock ? 'active' : ''}`}
@@ -65,4 +141,3 @@ export default function TerminalToolbar({ terminal }) {
     </>
   );
 }
-

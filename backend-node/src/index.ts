@@ -487,6 +487,41 @@ app.post("/workspace/rename", async (req, res) => {
   }
 });
 
+app.get("/terminal/state", async (_req, res) => {
+  try {
+    const root = getWorkspaceRoot();
+    const statePath = path.join(root, ".ai-agent", "terminal-state.json");
+    const raw = await fs.readFile(statePath, "utf8").catch(() => "");
+    if (!raw) {
+      res.json({});
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    res.json(parsed && typeof parsed === "object" ? parsed : {});
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || "Failed to load terminal state" });
+  }
+});
+
+app.put("/terminal/state", async (req, res) => {
+  try {
+    const root = getWorkspaceRoot();
+    const dir = path.join(root, ".ai-agent");
+    const statePath = path.join(dir, "terminal-state.json");
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const raw = JSON.stringify(body);
+    if (raw.length > 200_000) {
+      res.status(413).json({ detail: "Terminal state payload too large" });
+      return;
+    }
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(statePath, raw, "utf8");
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || "Failed to save terminal state" });
+  }
+});
+
 function parsePort(value: unknown, fallback: number) {
   const n = typeof value === 'string' ? Number.parseInt(value, 10) : (typeof value === 'number' ? value : NaN);
   if (!Number.isFinite(n)) return fallback;

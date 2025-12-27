@@ -4,6 +4,7 @@ import * as pty from 'node-pty';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import type WebSocket from 'ws';
 
 type CreateProfile = 'cmd' | 'powershell' | 'bash';
 
@@ -29,7 +30,13 @@ type TerminalSession = {
   cwd: string;
   title: string;
   pty: pty.IPty;
+  createdAt: number;
+  lastActiveAt: number;
 };
+
+const sessions = new Map<string, TerminalSession>();
+const clients = new Set<WebSocket>();
+const SESSION_TTL_MS = 2 * 60 * 1000;
 
 function safeNumber(value: unknown, fallback: number) {
   const n = typeof value === 'number' ? value : Number.parseInt(String(value || ''), 10);
@@ -81,26 +88,30 @@ function parseClientMessage(raw: string): ClientMessage | null {
 export function registerTerminalWs(server: HttpServer) {
   const wss = new WebSocketServer({ server, path: '/terminal/ws' });
 
-  wss.on('connection', (ws) => {
-    const sessions = new Map<string, TerminalSession>();
-
-    const send = (msg: ServerMessage) => {
-      if (ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify(msg));
-    };
-
-    const dispose = (id: string) => {
-      const sess = sessions.get(id);
-      if (!sess) return;
-      sessions.delete(id);
+  const broadcast = (msg: ServerMessage) => {
+    const payload = JSON.stringify(msg);
+    for (const ws of Array.from(clients)) {
       try {
-        sess.pty.kill();
+        if ((ws as any).readyState !== (ws as any).OPEN) continue;
+        ws.send(payload);
       } catch {}
-      send({ type: 'disposed', id });
-    };
+    }
+  };
 
-    const sendList = (requestId?: string) => {
-      send({
+  const dispose = (id: string) => {
+    const sess = sessions.get(id);
+    if (!sess) return;
+    sessions.delete(id);
+    try {
+      sess.pty.kill();
+    } catch {}
+    broadcast({ type: 'disposed', id });
+  };
+
+  const sendListTo = (ws: WebSocket, requestId?: string) => {
+    try {
+      if ((ws as any).readyState !== (ws as any).OPEN) return;
+      ws.send(JSON.stringify({
         type: 'list',
         requestId,
         terminals: Array.from(sessions.values()).map((s) => ({
@@ -110,21 +121,51 @@ export function registerTerminalWs(server: HttpServer) {
           cwd: s.cwd,
           title: s.title,
         })),
-      });
-    };
+      } satisfies ServerMessage));
+    } catch {}
+  };
 
-    send({ type: 'hello', version: 1 });
+  const markActive = (id: string) => {
+    const sess = sessions.get(id);
+    if (!sess) return;
+    sess.lastActiveAt = Date.now();
+  };
+
+  const maybeStartGc = (() => {
+    let started = false;
+    return () => {
+      if (started) return;
+      started = true;
+      setInterval(() => {
+        if (clients.size > 0) return;
+        const now = Date.now();
+        for (const s of Array.from(sessions.values())) {
+          if (now - s.lastActiveAt > SESSION_TTL_MS) dispose(s.id);
+        }
+      }, 15 * 1000).unref?.();
+    };
+  })();
+
+  wss.on('connection', (ws) => {
+    clients.add(ws);
+    maybeStartGc();
+    try {
+      if ((ws as any).readyState === (ws as any).OPEN) ws.send(JSON.stringify({ type: 'hello', version: 2 } satisfies ServerMessage));
+    } catch {}
+    sendListTo(ws, 'boot');
 
     ws.on('message', (data) => {
       const raw = typeof data === 'string' ? data : data.toString('utf8');
       const msg = parseClientMessage(raw);
       if (!msg) {
-        send({ type: 'error', message: 'Invalid message' });
+        try {
+          if ((ws as any).readyState === (ws as any).OPEN) ws.send(JSON.stringify({ type: 'error', message: 'Invalid message' } satisfies ServerMessage));
+        } catch {}
         return;
       }
 
       if (msg.type === 'list') {
-        sendList(msg.requestId);
+        sendListTo(ws, msg.requestId);
         return;
       }
 
@@ -151,20 +192,29 @@ export function registerTerminalWs(server: HttpServer) {
             ...(process.platform === 'win32' ? { useConpty: process.env.AI_AGENT_TERMINAL_USE_CONPTY === '1' } : {}),
           } as any);
         } catch (e: any) {
-          send({ type: 'error', requestId: msg.requestId, message: e?.message || 'Failed to spawn PTY' });
+          try {
+            if ((ws as any).readyState === (ws as any).OPEN) {
+              ws.send(JSON.stringify({ type: 'error', requestId: msg.requestId, message: e?.message || 'Failed to spawn PTY' } satisfies ServerMessage));
+            }
+          } catch {}
           return;
         }
 
-        const session: TerminalSession = { id, profile, cwd, title, pty: child };
+        const now = Date.now();
+        const session: TerminalSession = { id, profile, cwd, title, pty: child, createdAt: now, lastActiveAt: now };
         sessions.set(id, session);
 
-        child.onData((chunk) => send({ type: 'data', id, data: chunk }));
+        child.onData((chunk) => {
+          markActive(id);
+          broadcast({ type: 'data', id, data: chunk });
+        });
         child.onExit((ev) => {
-          send({ type: 'exit', id, exitCode: safeNumber((ev as any)?.exitCode, 0), signal: (ev as any)?.signal });
           sessions.delete(id);
+          broadcast({ type: 'exit', id, exitCode: safeNumber((ev as any)?.exitCode, 0), signal: (ev as any)?.signal });
+          broadcast({ type: 'disposed', id });
         });
 
-        send({ type: 'created', requestId: msg.requestId, id, pid: child.pid, profile, cwd, title });
+        broadcast({ type: 'created', requestId: msg.requestId, id, pid: child.pid, profile, cwd, title });
         return;
       }
 
@@ -174,6 +224,7 @@ export function registerTerminalWs(server: HttpServer) {
         const data = typeof msg.data === 'string' ? msg.data : String(msg.data || '');
         try {
           sess.pty.write(data);
+          markActive(sess.id);
         } catch {}
         return;
       }
@@ -185,6 +236,7 @@ export function registerTerminalWs(server: HttpServer) {
         const rows = safeNumber(msg.rows, 24);
         try {
           sess.pty.resize(cols, rows);
+          markActive(sess.id);
         } catch {}
         return;
       }
@@ -196,7 +248,7 @@ export function registerTerminalWs(server: HttpServer) {
     });
 
     ws.on('close', () => {
-      for (const id of Array.from(sessions.keys())) dispose(id);
+      clients.delete(ws);
     });
   });
 }
