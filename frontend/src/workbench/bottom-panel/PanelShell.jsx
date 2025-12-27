@@ -7,6 +7,7 @@ import { viewRegistry } from './viewRegistry';
 import { outputService } from '../services/outputService';
 import { portsService } from '../services/portsService';
 import { gitService } from '../services/gitService';
+import { debugService } from '../services/debugService';
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const shallowEqual = (a, b) => {
@@ -180,7 +181,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       onClear: () => outputService.clear(outputChannelId),
     },
     debugConsole: {
-      onClear: () => outputService.clear('DebugConsole'),
+      onClear: () => debugService.clear(),
     },
     terminal: {
       terminal: {

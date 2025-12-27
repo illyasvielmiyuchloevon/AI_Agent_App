@@ -1718,7 +1718,9 @@ input:focus, select:focus, textarea:focus {
 .debug-console-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .debug-console-input {
@@ -1735,6 +1737,52 @@ input:focus, select:focus, textarea:focus {
   min-width: 0;
   height: 28px;
   font-size: 13px;
+}
+
+.debug-console-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.debug-console-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text);
+}
+
+.debug-console-gutter {
+  width: 10px;
+  flex: 0 0 10px;
+  opacity: 0.8;
+}
+
+.debug-console-text {
+  white-space: pre;
+}
+
+.debug-console-line.input .debug-console-gutter {
+  background: rgba(88, 166, 255, 0.35);
+}
+
+.debug-console-line.error {
+  color: rgba(248, 81, 73, 0.95);
+}
+
+.debug-console-line.stderr {
+  color: rgba(248, 81, 73, 0.9);
+}
+
+.debug-console-line.system {
+  color: var(--muted);
+}
+
+.debug-console-line.result {
+  color: rgba(46, 160, 67, 0.95);
 }
 
 .terminal-view {
