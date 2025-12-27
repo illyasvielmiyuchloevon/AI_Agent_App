@@ -16,6 +16,18 @@ function registerIpcHandlers() {
     }
   };
 
+  ipcMain.handle('app:getInfo', async () => {
+    return {
+      ok: true,
+      name: app.getName(),
+      version: app.getVersion(),
+      platform: process.platform,
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+    };
+  });
+
   ipcMain.handle('recent:list', async () => {
     return { ok: true, items: recentStore.list() };
   });

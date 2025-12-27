@@ -204,6 +204,8 @@ const TitleBar = ({
     projectMeta,
     onSelectProject,
     onOpenWelcome,
+    onOpenDocumentation,
+    onOpenAbout,
     onCloseWorkspace,
     onBindBackend,
     onToggleTheme,
@@ -355,8 +357,8 @@ const TitleBar = ({
         ],
         [t('help')]: [
             { label: t('welcome'), action: onOpenWelcome },
-            { label: t('documentation'), action: () => console.log('Docs') },
-            { label: t('about'), action: () => console.log('About') }
+            { label: t('documentation'), action: onOpenDocumentation },
+            { label: t('about'), action: onOpenAbout }
         ]
     };
 

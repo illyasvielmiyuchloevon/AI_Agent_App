@@ -22,6 +22,7 @@ import ConnectRemoteModal from './components/ConnectRemoteModal';
 import CloneRepositoryModal from './components/CloneRepositoryModal';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
+import Modal from './components/Modal';
 import { getTranslation } from './utils/i18n';
 import { createAiEngineClient, readTextResponseBody } from './utils/aiEngineClient';
 
@@ -219,6 +220,7 @@ const DEFAULT_PROJECT_CONFIG = {
     lineHeight: 21,
     fontLigatures: true,
     renderWhitespace: 'none',
+    navigationMode: 'breadcrumbs', // breadcrumbs | stickyScroll
   },
   theme: detectSystemTheme(),
   sidebarWidth: 260,
@@ -459,42 +461,81 @@ const mapFlatConfigToState = (snapshot = {}, fallback = {}) => {
   return out;
 };
 
-const InputModal = ({ isOpen, title, label, defaultValue, onConfirm, onClose }) => {
+const InputModal = ({
+    isOpen,
+    title,
+    label,
+    defaultValue,
+    placeholder,
+    confirmText = '确定',
+    icon = 'codicon-edit',
+    onConfirm,
+    onClose,
+}) => {
     const [value, setValue] = useState(defaultValue);
+    const [touched, setTouched] = useState(false);
+
     useEffect(() => {
-        if (isOpen) setValue(defaultValue);
+        if (!isOpen) return;
+        setValue(defaultValue);
+        setTouched(false);
     }, [isOpen, defaultValue]);
 
-    if (!isOpen) return null;
+    const trimmed = String(value || '').trim();
+    const canSubmit = trimmed.length > 0;
+    const showError = touched && !canSubmit;
 
     return (
-        <div className="config-modal-backdrop" onClick={onClose}>
-            <div className="config-modal" style={{ width: '400px' }} onClick={e => e.stopPropagation()}>
-                <div className="config-header">
-                    <h3 className="config-title">{title}</h3>
-                    <button className="config-close" onClick={onClose}>×</button>
+        <Modal
+            isOpen={!!isOpen}
+            onClose={onClose}
+            title={title}
+            width="520px"
+        >
+            <div className="prompt-modal">
+                {label ? <div className="prompt-modal-desc">{label}</div> : null}
+                <div className={`prompt-modal-inputRow ${showError ? 'error' : ''}`}>
+                    <i className={`codicon ${icon}`} aria-hidden />
+                    <input
+                        className="prompt-modal-input"
+                        value={value}
+                        onChange={(e) => setValue(e.target.value)}
+                        placeholder={placeholder || ''}
+                        autoFocus
+                        onBlur={() => setTouched(true)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                onClose?.();
+                                return;
+                            }
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                setTouched(true);
+                                if (!canSubmit) return;
+                                onConfirm?.(trimmed);
+                            }
+                        }}
+                    />
                 </div>
-                <div className="config-form">
-                    <div className="config-field">
-                        <label className="config-label">{label}</label>
-                        <input 
-                            className="config-input" 
-                            value={value} 
-                            onChange={e => setValue(e.target.value)}
-                            autoFocus
-                            onKeyDown={e => {
-                                if (e.key === 'Enter') onConfirm(value);
-                                if (e.key === 'Escape') onClose();
-                            }}
-                        />
-                    </div>
-                    <div className="config-actions" style={{ justifyContent: 'flex-end' }}>
-                        <button className="ghost-btn" onClick={onClose}>取消</button>
-                        <button className="primary-btn" onClick={() => onConfirm(value)}>确定</button>
-                    </div>
+                {showError ? <div className="prompt-modal-error">请输入内容</div> : null}
+                <div className="prompt-modal-actions">
+                    <button type="button" className="ghost-btn" onClick={onClose}>取消</button>
+                    <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={!canSubmit}
+                        onClick={() => {
+                            setTouched(true);
+                            if (!canSubmit) return;
+                            onConfirm?.(trimmed);
+                        }}
+                    >
+                        {confirmText}
+                    </button>
                 </div>
             </div>
-        </div>
+        </Modal>
     );
 };
 
@@ -515,6 +556,7 @@ const initialWorkspaceState = {
   entryCandidates: [],
   previewEntry: '',
   workspaceRoots: [],
+  welcomeDismissed: false,
 };
 
 const SETTINGS_TAB_PATH = '__system__/settings';
@@ -672,10 +714,11 @@ function App() {
   const diffTabCounterRef = useRef(0);
 
   // --- Modal State ---
-  const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', onConfirm: () => {}, onClose: () => {} });
+  const [inputModal, setInputModal] = useState({ isOpen: false, title: '', label: '', defaultValue: '', placeholder: '', confirmText: '确定', icon: 'codicon-edit', onConfirm: () => {}, onClose: () => {} });
   const [diffModal, setDiffModal] = useState(null);
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
+  const [helpModal, setHelpModal] = useState({ isOpen: false, type: '', appInfo: null });
   const [configFullscreen, setConfigFullscreen] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandPaletteInitialQuery, setCommandPaletteInitialQuery] = useState('');
@@ -2280,6 +2323,9 @@ function App() {
           title: '打开 Workspace',
           label: '请输入 Workspace 的绝对路径（例如 H:\\04）',
           defaultValue: suggestion,
+          placeholder: 'H:\\04',
+          confirmText: '打开',
+          icon: 'codicon-folder-opened',
           onConfirm: (input) => {
               if (input) {
                   openBackendWorkspace(input, { silent: false });
@@ -3382,6 +3428,15 @@ function App() {
       });
   }, [syncLegacyTabsFromGroups]);
 
+  const changeEditorNavigationMode = useCallback((mode) => {
+      const nextMode = mode === 'stickyScroll' ? 'stickyScroll' : 'breadcrumbs';
+      setConfig((prev) => {
+          const editor = (prev?.editor && typeof prev.editor === 'object') ? prev.editor : {};
+          if (editor.navigationMode === nextMode) return prev;
+          return { ...prev, editor: { ...editor, navigationMode: nextMode } };
+      });
+  }, []);
+
   const toggleTabPinned = useCallback((groupId, tabPath) => {
       const gid = String(groupId || '').trim();
       const path = String(tabPath || '');
@@ -3686,6 +3741,7 @@ function App() {
 
       setWorkspaceState((prevRaw) => {
           const prev = syncLegacyTabsFromGroups(prevRaw);
+          const dismissWelcome = tabPath === WELCOME_TAB_PATH;
           const { groups, activeGroupId } = ensureEditorGroups(prev);
           const requestedGroupId = String(options?.groupId || '').trim();
 
@@ -3735,6 +3791,7 @@ function App() {
               editorLayout: nextLayout,
               tabMeta: nextTabMeta,
               previewEntry: nextPreviewEntry,
+              welcomeDismissed: dismissWelcome ? true : !!prev.welcomeDismissed,
           });
       });
 
@@ -3824,6 +3881,9 @@ function App() {
           title: '新建文件',
           label: '输入文件名 (例如: src/App.js)',
           defaultValue: '',
+          placeholder: 'src/App.js',
+          confirmText: '创建',
+          icon: 'codicon-new-file',
           onConfirm: async (name) => {
               if (!name) return;
               try {
@@ -3868,6 +3928,9 @@ function App() {
           title: '新建文件夹',
           label: '输入文件夹名 (例如: src/components)',
           defaultValue: '',
+          placeholder: 'src/components',
+          confirmText: '创建',
+          icon: 'codicon-new-folder',
           onConfirm: async (name) => {
               if (!name) return;
               try {
@@ -3952,6 +4015,9 @@ function App() {
           title: '重命名',
           label: '输入新的相对路径',
           defaultValue: oldPath,
+          placeholder: oldPath,
+          confirmText: '重命名',
+          icon: 'codicon-edit',
           onConfirm: async (nextPath) => {
               if (!nextPath || nextPath === oldPath) {
                   setInputModal(prev => ({ ...prev, isOpen: false }));
@@ -3988,6 +4054,36 @@ function App() {
       setShowConfig(false);
       openFile(SETTINGS_TAB_PATH, { mode: 'persistent' });
   }, [openFile]);
+
+  const openHelpModal = useCallback((type) => {
+      const nextType = type === 'about' ? 'about' : 'docs';
+      setHelpModal({ isOpen: true, type: nextType, appInfo: null });
+  }, []);
+
+  const closeHelpModal = useCallback(() => {
+      setHelpModal((prev) => ({ ...prev, isOpen: false }));
+  }, []);
+
+  useEffect(() => {
+      if (!helpModal.isOpen) return;
+      if (helpModal.type !== 'about') return;
+      let cancelled = false;
+      (async () => {
+          try {
+              const api = typeof window !== 'undefined' ? window.electronAPI?.app : null;
+              if (!api?.getInfo) return;
+              const res = await api.getInfo();
+              if (cancelled) return;
+              setHelpModal((prev) => {
+                  if (!prev.isOpen || prev.type !== 'about') return prev;
+                  return { ...prev, appInfo: res || null };
+              });
+          } catch {
+              // ignore
+          }
+      })();
+      return () => { cancelled = true; };
+  }, [helpModal.isOpen, helpModal.type]);
 
   const handleThemeModeChange = useCallback((mode) => {
       if (mode === 'system') {
@@ -4545,6 +4641,8 @@ function App() {
           projectMeta={projectMeta}
           onSelectProject={handleSelectWorkspace}
           onOpenWelcome={() => workspaceController.openWelcomeTab({ focus: true })}
+          onOpenDocumentation={() => openHelpModal('docs')}
+          onOpenAbout={() => openHelpModal('about')}
           onCloseWorkspace={closeWorkspaceToWelcome}
           onBindBackend={promptOpenWorkspace}
           onToggleTheme={handleToggleTheme}
@@ -4818,6 +4916,7 @@ function App() {
                     backendWorkspaceId={backendWorkspaceId}
                     onRegisterEditorAiInvoker={setEditorAiInvoker}
                     undoRedoLimit={config?.editorUndoRedoLimit}
+                    onChangeEditorNavigationMode={changeEditorNavigationMode}
                     welcomeTabPath={WELCOME_TAB_PATH}
                     onOpenWelcomeTab={() => workspaceController.openWelcomeTab({ focus: true })}
                     renderWelcomeTab={() => (
@@ -4967,9 +5066,57 @@ function App() {
           title={inputModal.title}
           label={inputModal.label}
           defaultValue={inputModal.defaultValue}
+          placeholder={inputModal.placeholder}
+          confirmText={inputModal.confirmText}
+          icon={inputModal.icon}
           onConfirm={inputModal.onConfirm}
           onClose={inputModal.onClose}
       />
+      <Modal
+          isOpen={helpModal.isOpen}
+          onClose={closeHelpModal}
+          title={helpModal.type === 'about' ? '关于' : '文档'}
+          width="640px"
+      >
+          {helpModal.type === 'about' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span className="codicon codicon-info" aria-hidden style={{ fontSize: 18 }} />
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>AI Agent IDE</div>
+                  </div>
+                  <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6 }}>
+                      <div>Version: {helpModal.appInfo?.version || helpModal.appInfo?.appVersion || '—'}</div>
+                      <div>Platform: {helpModal.appInfo?.platform || (typeof navigator !== 'undefined' ? navigator.platform : '—')}</div>
+                      <div>Electron: {helpModal.appInfo?.electron || '—'}</div>
+                      <div>Chrome: {helpModal.appInfo?.chrome || '—'}</div>
+                      <div>Node: {helpModal.appInfo?.node || '—'}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button type="button" className="ghost-btn" onClick={() => openHelpModal('docs')}>打开文档</button>
+                      <button type="button" className="primary-btn" onClick={closeHelpModal}>关闭</button>
+                  </div>
+              </div>
+          ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>快捷入口</div>
+                      <div>Command Palette：{config?.keybindings?.['app.commandPalette'] || 'Ctrl+Shift+P'}</div>
+                      <div>快速打开：{config?.keybindings?.['app.quickOpen'] || 'Ctrl+P'}</div>
+                      <div>编辑器导航：{config?.keybindings?.['editor.openEditors'] || 'Ctrl+E'}（按组生效）</div>
+                  </div>
+                  <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>编辑器操作</div>
+                      <div>标签页右键：关闭/批量关闭/拆分/在资源管理器高亮/复制路径等。</div>
+                      <div>编辑器导航菜单：组锁定/预览编辑器/导航模式（Breadcrumb vs Sticky Scroll）/Settings。</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button type="button" className="ghost-btn" onClick={() => workspaceController.openWelcomeTab({ focus: true })}>打开 Welcome</button>
+                      <button type="button" className="ghost-btn" onClick={() => openFile(SETTINGS_TAB_PATH, { mode: 'persistent' })}>打开 Settings</button>
+                      <button type="button" className="primary-btn" onClick={closeHelpModal}>关闭</button>
+                  </div>
+              </div>
+          )}
+      </Modal>
     </WorkbenchShell>
   );
 }

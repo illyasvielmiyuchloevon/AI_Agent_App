@@ -124,7 +124,7 @@ export function createWorkspaceController(deps) {
       const nextActive = focus ? welcomeTabPath : (group.activeFile || (exists ? group.activeFile : welcomeTabPath));
 
       const nextGroups = groups.map((g) => g.id === group.id ? { ...g, openTabs: nextTabs, activeFile: nextActive } : g);
-      return { ...prev, editorGroups: nextGroups, activeGroupId: group.id, openTabs: nextTabs, activeFile: nextActive, view: 'code' };
+      return { ...prev, editorGroups: nextGroups, activeGroupId: group.id, openTabs: nextTabs, activeFile: nextActive, view: 'code', welcomeDismissed: false };
     });
   };
 
@@ -195,6 +195,7 @@ export function createWorkspaceController(deps) {
   const effectEnsureWelcomeTabWhenNoWorkspace = ({ workspaceDriver } = {}) => {
     if (workspaceDriver) return;
     setWorkspaceState((prev) => {
+      if (prev?.welcomeDismissed) return prev;
       const fallbackGroup = { id: 'group-1', openTabs: Array.isArray(prev.openTabs) ? prev.openTabs : [], activeFile: String(prev.activeFile || ''), locked: false, previewTab: '' };
       const groups = Array.isArray(prev.editorGroups) && prev.editorGroups.length > 0 ? prev.editorGroups : [fallbackGroup];
       const activeGroupId = String(prev.activeGroupId || groups[0].id);

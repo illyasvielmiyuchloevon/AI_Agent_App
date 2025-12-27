@@ -390,6 +390,7 @@ function Workspace({
   backendRoot,
   keybindings,
   editorSettings,
+  onChangeEditorNavigationMode,
   welcomeTabPath,
   renderWelcomeTab,
   onOpenWelcomeTab,
@@ -465,6 +466,11 @@ function Workspace({
     };
   }, [editorSettings]);
 
+  const editorNavigationMode = useMemo(() => {
+    const raw = editorSettings && typeof editorSettings === 'object' ? String(editorSettings.navigationMode || '') : '';
+    return raw === 'stickyScroll' ? 'stickyScroll' : 'breadcrumbs';
+  }, [editorSettings]);
+
   const monacoOptions = useMemo(
     () => ({
       minimap: { enabled: normalizedEditorSettings.minimapEnabled, renderCharacters: false },
@@ -488,8 +494,9 @@ function Workspace({
       guides: { indentation: true, highlightActiveIndentation: true },
       quickSuggestions: true,
       cursorBlinking: 'blink',
+      stickyScroll: { enabled: editorNavigationMode === 'stickyScroll' },
     }),
-    [normalizedEditorSettings]
+    [editorNavigationMode, normalizedEditorSettings]
   );
   const compactDiff = diffViewMode === 'compact';
 
@@ -1616,19 +1623,17 @@ function Workspace({
               </div>
             );})}
           </div>
-          <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
-            {activeFile && projectLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
-              <span className="breadcrumb-root">
-                {projectLabel}
-              </span>
-            )}
-            {activeFile && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && breadcrumbParts.map((part, idx) => (
-              <span key={`${part}-${idx}`} className="breadcrumb-part">
-                <i className="codicon codicon-chevron-right" aria-hidden />
-                <span>{part}</span>
-              </span>
-            ))}
-          </div>
+          {editorNavigationMode === 'breadcrumbs' ? (
+            <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
+              {activeFile && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && breadcrumbParts.map((part, idx) => (
+                <span key={`${part}-${idx}`} className="breadcrumb-part">
+                  {idx > 0 ? <i className="codicon codicon-chevron-right" aria-hidden /> : null}
+                  {idx === breadcrumbParts.length - 1 ? <i className={`codicon ${getIconClass(activeFile)} breadcrumb-file-icon`} aria-hidden /> : null}
+                  <span>{part}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="monaco-shell" style={{ position: 'relative' }}>
             {shouldShowTaskReviewUI ? (
               <div className="task-review-floating" role="region" aria-label="Task Review">
@@ -2096,6 +2101,13 @@ function Workspace({
           {(group.openTabs || []).map((path, idx) => {
             const flags = getTabFlags(group.id, path);
             const isPreviewTab = previewEnabled && !group.locked && flags.preview && group.previewTab === path;
+            const tabIconClass = (() => {
+              const p = String(path || '');
+              if (settingsTabPath && p === settingsTabPath) return 'codicon-settings-gear';
+              if (welcomeTabPath && p === welcomeTabPath) return 'codicon-home';
+              if (diffTabPrefix && p.startsWith(diffTabPrefix)) return 'codicon-diff';
+              return getIconClass(p);
+            })();
             const tabClass = [
               'tab',
               (group.activeFile === path ? 'active' : ''),
@@ -2127,9 +2139,9 @@ function Workspace({
                   title={path}
                   type="button"
                 >
+                  <i className={`codicon ${tabIconClass} tab-file-icon`} aria-hidden />
                   {flags.pinned ? <i className="codicon codicon-pin tab-flag" aria-hidden /> : null}
                   {flags.keptOpen && !flags.pinned ? <i className="codicon codicon-lock tab-flag" aria-hidden /> : null}
-                  {isPreviewTab ? <i className="codicon codicon-eye tab-flag" aria-hidden /> : null}
                   <span className="tab-text">{getTabTitle(path)}</span>
                   {updatedPaths.has(path) ? <span className="tab-dirty codicon codicon-circle-filled" aria-label="未保存更改" /> : null}
                 </button>
@@ -2170,15 +2182,17 @@ function Workspace({
   };
 
   const renderBreadcrumbsForGroup = (group) => {
+    if (editorNavigationMode !== 'breadcrumbs') return null;
     const f = String(group.activeFile || '');
     if (!f || isSpecialTabPath(f)) return <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs" />;
     const parts = f.split('/').filter(Boolean);
+    const fileIcon = getIconClass(f);
     return (
       <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
-        {projectLabel ? <span className="breadcrumb-root">{projectLabel}</span> : null}
         {parts.map((part, idx) => (
           <span key={`${group.id}:${part}-${idx}`} className="breadcrumb-part">
-            <i className="codicon codicon-chevron-right" aria-hidden />
+            {idx > 0 ? <i className="codicon codicon-chevron-right" aria-hidden /> : null}
+            {idx === parts.length - 1 ? <i className={`codicon ${fileIcon} breadcrumb-file-icon`} aria-hidden /> : null}
             <span>{part}</span>
           </span>
         ))}
@@ -2379,6 +2393,11 @@ function Workspace({
     const group = groups.find((g) => g.id === groupId);
     if (!group) return null;
 
+    const navModeLabel = editorNavigationMode === 'stickyScroll'
+      ? 'Sticky Scroll（粘性滚动）'
+      : 'Breadcrumb Navigation（面包屑）';
+    const nextNavMode = editorNavigationMode === 'stickyScroll' ? 'breadcrumbs' : 'stickyScroll';
+
     return (
       <div
         className="context-menu"
@@ -2400,6 +2419,11 @@ function Workspace({
       >
         {renderContextItem(group.locked ? '解锁当前编辑器组' : '锁定当前编辑器组', () => onToggleGroupLocked?.(groupId))}
         {renderContextItem(previewEnabled ? '关闭预览编辑器模式' : '启用预览编辑器模式', () => onTogglePreviewEditorEnabled?.())}
+        {renderSeparator()}
+        <div style={{ padding: '6px 12px', color: 'var(--muted)', fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase' }}>
+          Navigation
+        </div>
+        {renderContextItem(navModeLabel, () => onChangeEditorNavigationMode?.(nextNavMode))}
         {renderSeparator()}
         {renderContextItem('打开编辑器导航（Command Palette）', () => onOpenEditorNavigation?.(groupId))}
         {renderSeparator()}

@@ -362,7 +362,7 @@ function ChatArea({
                 justifyContent: 'space-between', 
                 alignItems: 'center', 
                 background: 'transparent',
-                height: '50px',
+                height: '40px',
                 boxSizing: 'border-box'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>

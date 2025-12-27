@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  app: {
+    getInfo: () => ipcRenderer.invoke('app:getInfo'),
+  },
   openFolder: () => ipcRenderer.invoke('open-folder'),
   recent: {
     list: () => ipcRenderer.invoke('recent:list'),
