@@ -4802,6 +4802,11 @@ function App() {
                   workspaceRoots={workspaceProps.workspaceRoots}
                   loading={workspaceLoading}
                   activeFile={workspaceState.activeFile}
+                  backendRoot={backendWorkspaceRoot}
+                  editorGroups={workspaceState.editorGroups}
+                  activeGroupId={workspaceState.activeGroupId}
+                  tabMeta={workspaceState.tabMeta}
+                  previewEditorEnabled={workspaceState.previewEditorEnabled}
                   revealPath={explorerReveal.path}
                   revealNonce={explorerReveal.nonce}
                   onOpenFile={openFile}

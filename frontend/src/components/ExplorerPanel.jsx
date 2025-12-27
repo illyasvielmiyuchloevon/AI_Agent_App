@@ -1,5 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GitDriver } from '../utils/gitDriver';
 
 const EXT_ICONS = {
   js: 'codicon-file-code',
@@ -216,6 +217,11 @@ function ExplorerPanel({
   projectLabel = '',
   loading = false,
   activeFile = '',
+  backendRoot = '',
+  editorGroups = [],
+  activeGroupId = '',
+  tabMeta = {},
+  previewEditorEnabled = true,
   revealPath = '',
   revealNonce = 0,
   onOpenFile,
@@ -235,6 +241,13 @@ function ExplorerPanel({
   const [treeHeight, setTreeHeight] = useState(380);
   const [revealedPath, setRevealedPath] = useState('');
   const revealTimerRef = useRef(null);
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  const [outlineMode, setOutlineMode] = useState('code'); // code | runtime
+  const [timelineCollapsed, setTimelineCollapsed] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineItems, setTimelineItems] = useState([]);
+  const [timelineError, setTimelineError] = useState('');
+  const timelineReqRef = useRef(0);
 
   const updatedPaths = useMemo(
     () => new Set(files.filter((f) => f.dirty).map((f) => f.path)),
@@ -280,6 +293,178 @@ function ExplorerPanel({
     }
     return projectLabel;
   }, [projectLabel, workspaceRoots]);
+
+  const activeFileEntry = useMemo(() => {
+    const p = String(activeFile || '');
+    if (!p) return null;
+    return (files || []).find((f) => f?.path === p) || null;
+  }, [activeFile, files]);
+
+  const activeFileContent = String(activeFileEntry?.content || '');
+  const activeFileExt = useMemo(() => {
+    const p = String(activeFile || '');
+    const ext = p.toLowerCase().split('.').pop();
+    return ext || '';
+  }, [activeFile]);
+
+  const revealInActiveEditor = useCallback((line, column = 1) => {
+    const lineNumber = Number(line);
+    const col = Number(column);
+    if (!Number.isFinite(lineNumber) || lineNumber <= 0) return;
+    try {
+      window.dispatchEvent(new CustomEvent('workbench:revealInActiveEditor', { detail: { line: lineNumber, column: Number.isFinite(col) && col > 0 ? col : 1 } }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const formatRelativeTime = (dateInput) => {
+    const t = new Date(dateInput || 0).getTime();
+    if (!Number.isFinite(t) || t <= 0) return '';
+    const diff = Date.now() - t;
+    if (diff < 60 * 1000) return '刚刚';
+    if (diff < 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / (60 * 1000)))} 分钟`;
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / (60 * 60 * 1000)))} 小时`;
+    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.max(1, Math.floor(diff / (24 * 60 * 60 * 1000)))} 天`;
+    return `${Math.max(1, Math.floor(diff / (7 * 24 * 60 * 60 * 1000)))} 周`;
+  };
+
+  const buildCodeOutline = useCallback((path, content) => {
+    const p = String(path || '');
+    if (!p) return [];
+    const text = String(content || '');
+    if (!text) return [];
+    const ext = p.toLowerCase().split('.').pop() || '';
+    const supported = ['js', 'jsx', 'ts', 'tsx', 'css', 'md', 'json'].includes(ext);
+    if (!supported) return [];
+
+    const lines = text.split('\n');
+    const items = [];
+    let depth = 0;
+    const push = (item) => {
+      if (items.length >= 240) return;
+      items.push(item);
+    };
+
+    const rx = {
+      funcDecl: /^\s*(?:export\s+)?(?:default\s+)?function\s+([A-Za-z0-9_$]+)\s*\(/,
+      classDecl: /^\s*(?:export\s+)?class\s+([A-Za-z0-9_$]+)/,
+      ifaceDecl: /^\s*(?:export\s+)?interface\s+([A-Za-z0-9_$]+)/,
+      enumDecl: /^\s*(?:export\s+)?enum\s+([A-Za-z0-9_$]+)/,
+      typeDecl: /^\s*(?:export\s+)?type\s+([A-Za-z0-9_$]+)/,
+      arrowDecl: /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)?\s*=>/,
+      funcExpr: /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?function\b/,
+      cssSelector: /^\s*([.#][A-Za-z0-9_-]+)\s*(?:\{|,)/,
+      cssKeyframes: /^\s*@keyframes\s+([A-Za-z0-9_-]+)/,
+      jsonKey: /^\s*\"([^\"]+)\"\s*:\s*/,
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const raw = lines[i];
+      const lineNo = i + 1;
+      const line = String(raw || '');
+      const beforeDepth = depth;
+
+      if (ext === 'css') {
+        const m1 = line.match(rx.cssSelector);
+        const m2 = line.match(rx.cssKeyframes);
+        if (m2) push({ kind: 'event', icon: 'codicon-symbol-event', name: m2[1], line: lineNo, depth: beforeDepth });
+        else if (m1) push({ kind: 'class', icon: 'codicon-symbol-class', name: m1[1], line: lineNo, depth: beforeDepth });
+      } else if (ext === 'json') {
+        const m = line.match(rx.jsonKey);
+        if (m) push({ kind: 'property', icon: 'codicon-symbol-property', name: m[1], line: lineNo, depth: Math.max(0, beforeDepth) });
+      } else if (['js', 'jsx', 'ts', 'tsx'].includes(ext)) {
+        const mFunc = line.match(rx.funcDecl);
+        const mClass = line.match(rx.classDecl);
+        const mIface = line.match(rx.ifaceDecl);
+        const mEnum = line.match(rx.enumDecl);
+        const mType = line.match(rx.typeDecl);
+        const mArrow = line.match(rx.arrowDecl);
+        const mExpr = line.match(rx.funcExpr);
+        if (mFunc) push({ kind: 'function', icon: 'codicon-symbol-method', name: mFunc[1], line: lineNo, depth: beforeDepth });
+        else if (mClass) push({ kind: 'class', icon: 'codicon-symbol-class', name: mClass[1], line: lineNo, depth: beforeDepth });
+        else if (mIface) push({ kind: 'interface', icon: 'codicon-symbol-interface', name: mIface[1], line: lineNo, depth: beforeDepth });
+        else if (mEnum) push({ kind: 'enum', icon: 'codicon-symbol-enum', name: mEnum[1], line: lineNo, depth: beforeDepth });
+        else if (mType) push({ kind: 'type', icon: 'codicon-symbol-namespace', name: mType[1], line: lineNo, depth: beforeDepth });
+        else if (mExpr) push({ kind: 'function', icon: 'codicon-symbol-method', name: mExpr[1], line: lineNo, depth: beforeDepth });
+        else if (mArrow) push({ kind: 'function', icon: 'codicon-symbol-method', name: mArrow[1], line: lineNo, depth: beforeDepth });
+      } else if (ext === 'md') {
+        const h = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+        if (h) push({ kind: 'string', icon: 'codicon-symbol-string', name: h[2].trim(), line: lineNo, depth: Math.max(0, h[1].length - 1) });
+      }
+
+      // Update depth (very lightweight brace-based nesting).
+      if (!['json', 'md'].includes(ext)) {
+        const opens = (line.match(/{/g) || []).length;
+        const closes = (line.match(/}/g) || []).length;
+        depth = Math.max(0, depth + opens - closes);
+      }
+    }
+
+    return items;
+  }, []);
+
+  const buildRuntimeOutline = useCallback(() => {
+    const groups = Array.isArray(editorGroups) ? editorGroups : [];
+    const gid = String(activeGroupId || '').trim();
+    const active = groups.find((g) => String(g?.id || '') === gid) || groups[0] || null;
+    const activePath = String(active?.activeFile || activeFile || '');
+    const key = gid && activePath ? `${gid}::${activePath}` : '';
+    const meta = key && tabMeta && typeof tabMeta === 'object' ? tabMeta[key] : null;
+    const dirty = !!(files || []).find((f) => f?.path === activePath && f?.dirty);
+    const previewEnabled = previewEditorEnabled !== false;
+    const rows = [];
+    const push = (depth, icon, label, value = '') => rows.push({ depth, icon, label, value });
+    push(0, 'codicon-editor-layout', `Group: ${gid || 'group-1'}`);
+    push(1, 'codicon-lock', `Locked`, active?.locked ? 'true' : 'false');
+    push(1, 'codicon-eye', `Preview Enabled`, previewEnabled ? 'true' : 'false');
+    push(1, 'codicon-file', `Active File`, activePath || '—');
+    push(2, 'codicon-edit', `Dirty`, dirty ? 'true' : 'false');
+    push(2, 'codicon-pin', `Pinned`, meta?.pinned ? 'true' : 'false');
+    push(2, 'codicon-lock', `Kept Open`, meta?.keptOpen ? 'true' : 'false');
+    push(2, 'codicon-eye', `Preview`, meta?.preview ? 'true' : 'false');
+    push(1, 'codicon-list-unordered', `Open Tabs`, String((active?.openTabs || []).length || 0));
+    return rows;
+  }, [activeFile, activeGroupId, editorGroups, files, previewEditorEnabled, tabMeta]);
+
+  const codeOutlineItems = useMemo(() => buildCodeOutline(activeFile, activeFileContent), [activeFile, activeFileContent, buildCodeOutline]);
+  const runtimeOutlineItems = useMemo(() => buildRuntimeOutline(), [buildRuntimeOutline]);
+
+  const loadTimeline = useCallback(async () => {
+    const root = String(backendRoot || '').trim();
+    const file = String(activeFile || '').trim();
+    if (!root || !file || !hasWorkspace) {
+      setTimelineItems([]);
+      setTimelineError('');
+      return;
+    }
+    if (!GitDriver.isAvailable()) {
+      setTimelineItems([]);
+      setTimelineError('');
+      return;
+    }
+    const reqId = (timelineReqRef.current || 0) + 1;
+    timelineReqRef.current = reqId;
+    setTimelineLoading(true);
+    setTimelineError('');
+    try {
+      const log = await GitDriver.logFile(root, file);
+      if (timelineReqRef.current !== reqId) return;
+      const list = (log && log.all) ? log.all : (Array.isArray(log) ? log : []);
+      setTimelineItems(Array.isArray(list) ? list : []);
+    } catch (err) {
+      if (timelineReqRef.current !== reqId) return;
+      setTimelineItems([]);
+      setTimelineError(err?.message || String(err));
+    } finally {
+      if (timelineReqRef.current === reqId) setTimelineLoading(false);
+    }
+  }, [activeFile, backendRoot, hasWorkspace]);
+
+  useEffect(() => {
+    if (timelineCollapsed) return;
+    loadTimeline();
+  }, [loadTimeline, timelineCollapsed]);
 
   useEffect(() => {
     if (!treeRef.current) return;
@@ -429,37 +614,186 @@ function ExplorerPanel({
           </button>
         </div>
       </div>
-      
-      <div
-        className="workspace-tree explorer-tree"
-        ref={treeRef}
-        onContextMenu={(e) => handleContextMenu(e, null)}
-      >
-        {virtualRows.length > 0 ? (
-          <VirtualizedList
-            height={treeHeight}
-            itemSize={28}
-            items={virtualRows}
-            scrollToIndex={revealedPath ? virtualRows.findIndex((r) => r?.path === revealedPath) : -1}
-            rowData={{
-              rows: virtualRows,
-              activeFile,
-              revealPath: revealedPath,
-              updatedPaths,
-              onToggle: toggleCollapse,
-              onOpen: onOpenFile,
-              onContext: handleContextMenu,
-              collapsed,
-              gitStatusMap
+
+      <div className="explorer-body">
+        <div
+          className="workspace-tree explorer-tree"
+          ref={treeRef}
+          onContextMenu={(e) => handleContextMenu(e, null)}
+        >
+          {virtualRows.length > 0 ? (
+            <VirtualizedList
+              height={treeHeight}
+              itemSize={28}
+              items={virtualRows}
+              scrollToIndex={revealedPath ? virtualRows.findIndex((r) => r?.path === revealedPath) : -1}
+              rowData={{
+                rows: virtualRows,
+                activeFile,
+                revealPath: revealedPath,
+                updatedPaths,
+                onToggle: toggleCollapse,
+                onOpen: onOpenFile,
+                onContext: handleContextMenu,
+                collapsed,
+                gitStatusMap
+              }}
+            >
+              {({ index, style, data, key }) => (
+                <TreeRow key={`${virtualRows[index]?.path || index}`} index={index} style={style} data={data} />
+              )}
+            </VirtualizedList>
+          ) : (
+            <div className="tree-empty" onContextMenu={(e) => handleContextMenu(e, null)}>该项目暂无文件，开始创建吧。</div>
+          )}
+        </div>
+
+        <div className={`sidebar-section ${outlineCollapsed ? 'collapsed' : ''}`}>
+          <div
+            className="sidebar-section-header"
+            role="button"
+            tabIndex={0}
+            onClick={() => setOutlineCollapsed((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setOutlineCollapsed((v) => !v);
+              }
             }}
           >
-            {({ index, style, data, key }) => (
-              <TreeRow key={`${virtualRows[index]?.path || index}`} index={index} style={style} data={data} />
-            )}
-          </VirtualizedList>
-        ) : (
-          <div className="tree-empty" onContextMenu={(e) => handleContextMenu(e, null)}>该项目暂无文件，开始创建吧。</div>
-        )}
+            <div className="sidebar-section-title">
+              <i className={`codicon ${outlineCollapsed ? 'codicon-chevron-right' : 'codicon-chevron-down'}`} aria-hidden />
+              <span>大纲</span>
+              {activeFile ? <span className="sidebar-section-sub">{activeFile.split('/').pop()}</span> : null}
+            </div>
+            <div className="sidebar-section-actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className={`sidebar-chip ${outlineMode === 'code' ? 'active' : ''}`}
+                onClick={() => setOutlineMode('code')}
+                title="代码大纲"
+              >
+                <i className="codicon codicon-symbol-field" aria-hidden />
+                <span>代码</span>
+              </button>
+              <button
+                type="button"
+                className={`sidebar-chip ${outlineMode === 'runtime' ? 'active' : ''}`}
+                onClick={() => setOutlineMode('runtime')}
+                title="运行时对象大纲"
+              >
+                <i className="codicon codicon-debug" aria-hidden />
+                <span>运行时</span>
+              </button>
+            </div>
+          </div>
+          {!outlineCollapsed ? (
+            <div className="sidebar-section-body outline-body">
+              {outlineMode === 'code' ? (
+                codeOutlineItems.length > 0 ? (
+                  <div className="outline-list" role="tree" aria-label="Code outline">
+                    {codeOutlineItems.map((it, idx) => (
+                      <div
+                        key={`${it.name}-${it.line}-${idx}`}
+                        className="outline-item"
+                        role="treeitem"
+                        style={{ paddingLeft: 10 + Math.min(8, Number(it.depth || 0)) * 12 }}
+                        onClick={() => revealInActiveEditor(it.line, 1)}
+                        title={`跳转到第 ${it.line} 行`}
+                      >
+                        <i className={`codicon ${it.icon || 'codicon-symbol-field'}`} aria-hidden />
+                        <span className="outline-label">{it.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="sidebar-empty">当前文件无可用大纲（支持 js/ts/css/md/json）。</div>
+                )
+              ) : (
+                runtimeOutlineItems.length > 0 ? (
+                  <div className="outline-list" role="tree" aria-label="Runtime outline">
+                    {runtimeOutlineItems.map((it, idx) => (
+                      <div
+                        key={`${it.label}-${idx}`}
+                        className="outline-item"
+                        role="treeitem"
+                        style={{ paddingLeft: 10 + Math.min(8, Number(it.depth || 0)) * 12 }}
+                        title={it.value ? `${it.label}: ${it.value}` : it.label}
+                      >
+                        <i className={`codicon ${it.icon || 'codicon-symbol-field'}`} aria-hidden />
+                        <span className="outline-label">{it.label}</span>
+                        {it.value ? <span className="outline-value">{it.value}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="sidebar-empty">暂无运行时信息。</div>
+                )
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        <div className={`sidebar-section ${timelineCollapsed ? 'collapsed' : ''}`}>
+          <div
+            className="sidebar-section-header"
+            role="button"
+            tabIndex={0}
+            onClick={() => setTimelineCollapsed((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setTimelineCollapsed((v) => !v);
+              }
+            }}
+          >
+            <div className="sidebar-section-title">
+              <i className={`codicon ${timelineCollapsed ? 'codicon-chevron-right' : 'codicon-chevron-down'}`} aria-hidden />
+              <span>时间线</span>
+              {activeFile ? <span className="sidebar-section-sub">{activeFile.split('/').pop()}</span> : null}
+            </div>
+            <div className="sidebar-section-actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="sidebar-icon-btn"
+                onClick={() => loadTimeline()}
+                title="刷新时间线"
+                aria-label="刷新时间线"
+                disabled={timelineLoading || !activeFile || !hasWorkspace}
+              >
+                <i className={`codicon ${timelineLoading ? 'codicon-loading codicon-modifier-spin' : 'codicon-refresh'}`} aria-hidden />
+              </button>
+            </div>
+          </div>
+          {!timelineCollapsed ? (
+            <div className="sidebar-section-body timeline-body">
+              {!activeFile ? (
+                <div className="sidebar-empty">未打开文件。</div>
+              ) : timelineError ? (
+                <div className="sidebar-empty">时间线加载失败：{timelineError}</div>
+              ) : timelineLoading && timelineItems.length === 0 ? (
+                <div className="sidebar-empty">加载中…</div>
+              ) : timelineItems.length > 0 ? (
+                <div className="timeline-list" role="list" aria-label="Timeline">
+                  {timelineItems.map((it, idx) => (
+                    <div key={`${it.hash || it.id || idx}`} className="timeline-item" role="listitem" title={it.hash || ''}>
+                      <div className="timeline-bullet" aria-hidden />
+                      <div className="timeline-main">
+                        <div className="timeline-message">{it.message || it.subject || ''}</div>
+                        <div className="timeline-meta">
+                          <span className="timeline-author">{it.author_name || it.author || ''}</span>
+                          <span className="timeline-time">{formatRelativeTime(it.date)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="sidebar-empty">暂无提交记录或非 Git 仓库。</div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {contextMenu && (

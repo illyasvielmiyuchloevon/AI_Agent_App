@@ -1579,6 +1579,32 @@ function Workspace({
     };
   }, []);
 
+  useEffect(() => {
+    const onReveal = (e) => {
+      const detail = e?.detail || {};
+      const line = Number(detail.line);
+      const column = Number(detail.column);
+      if (!Number.isFinite(line) || line <= 0) return;
+      const gid = String(activeGroupId || 'group-1');
+      const inst = editorInstancesRef.current.get(gid);
+      if (!inst?.editor) return;
+      const col = Number.isFinite(column) && column > 0 ? column : 1;
+      try {
+        inst.editor.focus?.();
+        inst.editor.revealLineInCenter?.(line);
+        inst.editor.setPosition?.({ lineNumber: line, column: col });
+        const Range = inst.monaco?.Range;
+        if (Range) {
+          inst.editor.setSelection?.(new Range(line, col, line, col));
+        }
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('workbench:revealInActiveEditor', onReveal);
+    return () => window.removeEventListener('workbench:revealInActiveEditor', onReveal);
+  }, [activeGroupId]);
+
   const renderEditorPaneLegacy = () => (
     <div className="workspace-editor">
           <div className="tab-row">

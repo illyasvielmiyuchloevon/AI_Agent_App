@@ -84,6 +84,8 @@ app.whenReady().then(() => {
     }
   };
 
+  const normalizeGitPath = (value) => String(value || '').replace(/\\/g, '/');
+
   const sanitizeFolderName = (name) => {
     const raw = String(name || '').trim();
     if (!raw) return '';
@@ -258,6 +260,48 @@ app.whenReady().then(() => {
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       if (/does not have any commits yet/i.test(message)) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+      throw err;
+    }
+  }));
+
+  ipcMain.handle('git:logFile', (e, { cwd, file }) => handleGit(cwd, async (git) => {
+    try {
+      const isRepo = await ensureRepo(git);
+      if (!isRepo) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+
+      const rawFile = String(file || '').trim();
+      if (!rawFile) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+
+      let target = rawFile;
+      if (path.isAbsolute(target)) {
+        target = path.relative(cwd, target);
+      }
+      target = normalizeGitPath(target);
+
+      const log = await git.log({ file: target, maxCount: 50 });
+      return { success: true, log: JSON.parse(JSON.stringify(log)) };
+    } catch (err) {
+      const message = err && err.message ? String(err.message) : String(err);
+      if (
+        /does not have any commits yet/i.test(message) ||
+        /unknown revision or path not in the working tree/i.test(message) ||
+        /pathspec/i.test(message)
+      ) {
         return {
           success: true,
           log: { all: [], latest: null, total: 0 },

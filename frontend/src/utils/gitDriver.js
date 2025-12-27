@@ -232,6 +232,22 @@ export const GitDriver = {
         }
     },
 
+    async logFile(cwd, file) {
+        const empty = { all: [], latest: null, total: 0 };
+        if (!this.isAvailable()) return empty;
+        if (typeof window.electronAPI.git.logFile !== 'function') {
+            console.error('Missing git.logFile in preload. Restart required.');
+            return empty;
+        }
+        try {
+            const res = await window.electronAPI.git.logFile(cwd, file);
+            return res.success ? (res.log || empty) : empty;
+        } catch (e) {
+            console.error('Git logFile failed', e);
+            return empty;
+        }
+    },
+
     async getCommitDetails(cwd, hash) {
         if (!this.isAvailable()) return [];
         try {
