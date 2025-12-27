@@ -28,6 +28,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
 
   const panelRef = useRef(null);
   const lastHeightRef = useRef(height);
+  const [isResizing, setIsResizing] = useState(false);
 
   const terminalRef = useRef(null);
   const terminalAutoCreateInFlightRef = useRef(false);
@@ -110,16 +111,38 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
     const maxHeight = parentRect ? Math.max(minHeight, Math.floor(parentRect.height - 120)) : 520;
     const startY = e.clientY;
     const startHeight = collapsed ? (lastHeightRef.current || height) : height;
+    let pending = startHeight;
+    let lastApplied = startHeight;
+    let rafId = 0;
 
     panelStore.setState({ collapsed: false });
+    setIsResizing(true);
+
+    const apply = () => {
+      rafId = 0;
+      const el = panelRef.current;
+      if (!el) return;
+      el.style.height = `${pending}px`;
+      lastApplied = pending;
+    };
 
     const onMove = (ev) => {
       const delta = startY - ev.clientY;
-      panelStore.setState({ height: clamp(startHeight + delta, minHeight, maxHeight) });
+      pending = clamp(startHeight + delta, minHeight, maxHeight);
+      if (!rafId) rafId = window.requestAnimationFrame(apply);
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      lastApplied = pending;
+      const el = panelRef.current;
+      if (el) el.style.height = `${pending}px`;
+      setIsResizing(false);
+      panelStore.setState({ height: lastApplied, collapsed: false });
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -140,8 +163,8 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       autoConnect: activeViewId === 'terminal' && !hidden && !collapsed,
     },
     ports: {},
-    gitlens: { workspacePath },
-  }), [activeViewId, collapsed, hidden, onOpenFile, onTerminalStateChange, outputChannelId, outputFilter, problemsFilter, workspacePath]);
+    gitlens: { workspacePath, onOpenFile, isResizing },
+  }), [activeViewId, collapsed, hidden, isResizing, onOpenFile, onTerminalStateChange, outputChannelId, outputFilter, problemsFilter, workspacePath]);
 
   const toolbarPropsById = useMemo(() => ({
     problems: {
@@ -224,7 +247,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
   return (
     <div
       ref={panelRef}
-      className={`bottom-panel ${collapsed ? 'collapsed' : ''} ${maximized ? 'maximized' : ''} ${hidden ? 'hidden' : ''}`}
+      className={`bottom-panel ${collapsed ? 'collapsed' : ''} ${maximized ? 'maximized' : ''} ${hidden ? 'hidden' : ''} ${isResizing ? 'resizing' : ''}`}
       style={{ height: appliedHeight }}
     >
       {!hidden ? <div className="bottom-panel-resizer" onPointerDown={onResizerPointerDown} title="拖动调整高度" /> : null}

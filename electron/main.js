@@ -292,7 +292,19 @@ app.whenReady().then(() => {
           log: { all: [], latest: null, total: 0 },
         };
       }
-      const log = await git.log({ maxCount: 50 });
+      const log = await git.log({
+        maxCount: 200,
+        format: {
+          hash: '%H',
+          date: '%ai',
+          message: '%s',
+          refs: '%D',
+          body: '%b',
+          author_name: '%an',
+          author_email: '%ae',
+          parents: '%P',
+        },
+      });
       return { success: true, log: JSON.parse(JSON.stringify(log)) };
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
@@ -330,7 +342,20 @@ app.whenReady().then(() => {
       }
       target = normalizeGitPath(target);
 
-      const log = await git.log({ file: target, maxCount: 50 });
+      const log = await git.log({
+        file: target,
+        maxCount: 200,
+        format: {
+          hash: '%H',
+          date: '%ai',
+          message: '%s',
+          refs: '%D',
+          body: '%b',
+          author_name: '%an',
+          author_email: '%ae',
+          parents: '%P',
+        },
+      });
       return { success: true, log: JSON.parse(JSON.stringify(log)) };
     } catch (err) {
       const message = err && err.message ? String(err.message) : String(err);

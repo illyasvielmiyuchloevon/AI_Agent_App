@@ -5,7 +5,7 @@ export default function PanelViewHost({ views, activeId, viewPropsById, viewRefs
   if (!active) return null;
 
   return (
-    <>
+    <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
       {views.map((v) => {
         const Comp = v.Component;
         const props = viewPropsById?.[v.id] || {};
@@ -14,12 +14,20 @@ export default function PanelViewHost({ views, activeId, viewPropsById, viewRefs
         const shouldRender = visible || !!v.keepAlive;
         if (!shouldRender) return null;
         return (
-          <div key={v.id} style={{ height: '100%', display: visible ? 'block' : 'none' }}>
+          <div
+            key={v.id}
+            className="bottom-panel-view"
+            role="tabpanel"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              ...(visible ? {} : { display: 'none' }),
+            }}
+          >
             {ref ? <Comp ref={ref} {...props} /> : <Comp {...props} />}
           </div>
         );
       })}
-    </>
+    </div>
   );
 }
-

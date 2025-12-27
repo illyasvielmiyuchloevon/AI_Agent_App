@@ -44,6 +44,8 @@ const writeValue = (key, value) => {
 };
 
 const listeners = new Set();
+let persistTimer = null;
+let pendingHeight = null;
 
 let state = {
   activeViewId: typeof window === 'undefined' ? 'terminal' : readString(STORAGE.active, 'terminal'),
@@ -59,6 +61,41 @@ const emit = () => {
   }
 };
 
+const persist = (next, prev) => {
+  if (typeof window === 'undefined') return;
+
+  const changed = {
+    activeViewId: !Object.is(prev.activeViewId, next.activeViewId),
+    collapsed: !Object.is(prev.collapsed, next.collapsed),
+    hidden: !Object.is(prev.hidden, next.hidden),
+    maximized: !Object.is(prev.maximized, next.maximized),
+    height: !Object.is(prev.height, next.height),
+  };
+
+  const nonHeightChanged = changed.activeViewId || changed.collapsed || changed.hidden || changed.maximized;
+
+  if (changed.activeViewId) writeValue(STORAGE.active, next.activeViewId);
+  if (changed.collapsed) writeValue(STORAGE.collapsed, next.collapsed ? '1' : '0');
+  if (changed.hidden) writeValue(STORAGE.hidden, next.hidden ? '1' : '0');
+  if (changed.maximized) writeValue(STORAGE.maximized, next.maximized ? '1' : '0');
+
+  if (!changed.height) return;
+
+  if (nonHeightChanged) {
+    writeValue(STORAGE.height, next.height);
+    return;
+  }
+
+  pendingHeight = next.height;
+  if (persistTimer) return;
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    const h = pendingHeight;
+    pendingHeight = null;
+    if (h != null) writeValue(STORAGE.height, h);
+  }, 120);
+};
+
 export const panelStore = {
   subscribe(fn) {
     listeners.add(fn);
@@ -68,16 +105,10 @@ export const panelStore = {
     return state;
   },
   setState(patch) {
-    const next = { ...state, ...(patch || {}) };
+    const prev = state;
+    const next = { ...prev, ...(patch || {}) };
     state = next;
-    if (typeof window !== 'undefined') {
-      writeValue(STORAGE.active, next.activeViewId);
-      writeValue(STORAGE.collapsed, next.collapsed ? '1' : '0');
-      writeValue(STORAGE.hidden, next.hidden ? '1' : '0');
-      writeValue(STORAGE.maximized, next.maximized ? '1' : '0');
-      writeValue(STORAGE.height, next.height);
-    }
+    persist(next, prev);
     emit();
   },
 };
-

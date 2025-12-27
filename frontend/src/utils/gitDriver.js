@@ -92,6 +92,21 @@ export const GitDriver = {
         }
     },
 
+    async fetch(cwd) {
+        if (!this.isAvailable()) return false;
+        if (typeof window.electronAPI.git.fetch !== 'function') {
+            console.error('Git fetch is not available');
+            return false;
+        }
+        try {
+            const res = await window.electronAPI.git.fetch(cwd);
+            return res.success;
+        } catch (e) {
+            console.error('Git fetch failed', e);
+            return false;
+        }
+    },
+
     async branch(cwd) {
         if (!this.isAvailable()) return null;
         try {

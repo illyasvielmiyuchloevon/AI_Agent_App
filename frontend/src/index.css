@@ -1267,6 +1267,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   height: calc(100% - 4px);
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1374,6 +1375,21 @@ input:focus, select:focus, textarea:focus {
   background: var(--panel);
   min-height: 30px;
   min-width: 0;
+}
+
+.bottom-panel.resizing {
+  user-select: none;
+  will-change: height;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+}
+
+.bottom-panel.resizing .bottom-panel-content {
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .bottom-panel.hidden {
@@ -1537,6 +1553,8 @@ input:focus, select:focus, textarea:focus {
   min-height: 0;
   overflow: hidden;
   background: var(--panel);
+  display: flex;
+  flex-direction: column;
 }
 
 .bottom-panel.collapsed .bottom-panel-content {
@@ -1555,7 +1573,14 @@ input:focus, select:focus, textarea:focus {
 .bottom-panel-view {
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.bottom-panel-view > :first-child {
+  flex: 1;
+  min-height: 0;
 }
 
 .bottom-panel-hidden {
@@ -1886,136 +1911,627 @@ input:focus, select:focus, textarea:focus {
 }
 
 .gitlens-shell {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.2fr);
+  --gitlens-col-branch: 160px;
+  --gitlens-col-graph: 120px;
+  --gitlens-col-author: 140px;
+  --gitlens-col-changes: 90px;
+  --gitlens-col-date: 150px;
+  --gitlens-col-sha: 90px;
+  --gitlens-graph-pad: 12px;
+  --gitlens-lane-gap: 12px;
   height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.gitlens-topbar {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-sub);
+  font-size: 12px;
+}
+
+.gitlens-title {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.gitlens-branch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 240px;
+}
+
+.gitlens-branch-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-searchbar {
+  height: 34px;
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  padding: 0 8px;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.gitlens-scope-btn {
+  height: 24px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--panel-sub);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: default;
+}
+
+.gitlens-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-sub);
+  border-radius: 4px;
+  padding: 0 8px;
+  height: 24px;
+  min-width: 0;
+}
+
+.gitlens-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.gitlens-search-meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gitlens-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+}
+
+.gitlens-main {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
-.gitlens-left {
-  border-right: 1px solid var(--border);
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.gitlens-right {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.gitlens-header {
-  height: 34px;
-  display: flex;
+.gitlens-table-header {
+  height: 26px;
+  display: grid;
   align-items: center;
-  padding: 0 12px;
+  grid-template-columns: var(--gitlens-col-branch) var(--gitlens-col-graph) 1fr var(--gitlens-col-author) var(--gitlens-col-changes) var(--gitlens-col-date) var(--gitlens-col-sha);
+  gap: 0;
+  padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel-sub);
-  font-weight: 700;
-  font-size: 12px;
-  letter-spacing: 0.2px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
 }
 
 .gitlens-list {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 6px;
+  overflow: hidden;
 }
 
 .gitlens-row {
   width: 100%;
-  display: flex;
+  display: grid;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
+  grid-template-columns: var(--gitlens-col-branch) var(--gitlens-col-graph) 1fr var(--gitlens-col-author) var(--gitlens-col-changes) var(--gitlens-col-date) var(--gitlens-col-sha);
+  padding: 0 8px;
+  border: none;
   background: transparent;
   cursor: pointer;
   color: var(--text);
   text-align: left;
+  font-size: 12px;
 }
 
 .gitlens-row:hover {
   background: var(--surface-hover);
-  border-color: var(--border);
 }
 
 .gitlens-row.active {
-  background: rgba(79, 70, 229, 0.12);
-  border-color: rgba(79, 70, 229, 0.35);
+  background: rgba(14, 99, 156, 0.18);
+  outline: 1px solid rgba(14, 99, 156, 0.35);
+  outline-offset: -1px;
 }
 
-.gitlens-dot {
+.gitlens-row.wip .gitlens-graph-dot {
+  background: #2ea043;
+}
+
+.gitlens-branch-cell,
+.gitlens-graph-cell,
+.gitlens-msg-cell,
+.gitlens-author-cell,
+.gitlens-changes-cell,
+.gitlens-date-cell,
+.gitlens-sha-cell {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-row .gitlens-branch-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gitlens-graph-cell {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+}
+
+.gitlens-graph-lanes {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    to right,
+    rgba(120, 120, 120, 0.35) 0 2px,
+    transparent 2px var(--gitlens-lane-gap)
+  );
+  background-position: var(--gitlens-graph-pad) 0;
+  opacity: 0.9;
+}
+
+.gitlens-graph-line {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(120, 120, 120, 0.35);
+}
+
+.gitlens-graph-dot {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--gitlens-graph-pad) + (var(--gitlens-lane, 0) * var(--gitlens-lane-gap)));
+  transform: translateY(-50%);
   width: 10px;
   height: 10px;
   border-radius: 999px;
   background: var(--accent);
-  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.18);
-  flex-shrink: 0;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  z-index: 1;
 }
 
-.gitlens-row-main {
-  flex: 1;
-  min-width: 0;
+.gitlens-graph-merge {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 0;
+  border-top: 2px solid rgba(120, 120, 120, 0.45);
+  opacity: 0.85;
 }
 
 .gitlens-msg {
-  font-size: 13px;
+  display: inline-block;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
 }
 
-.gitlens-meta {
-  font-size: 12px;
+.gitlens-wip-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: rgba(46, 160, 67, 0.18);
+  border: 1px solid rgba(46, 160, 67, 0.35);
+  color: var(--text);
+}
+
+.gitlens-refs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.gitlens-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-sub);
+  color: var(--text);
+  font-size: 11px;
+  gap: 6px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-ref-pill.current {
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.18) inset;
+}
+
+.gitlens-ref-pill.head {
+  background: rgba(14, 99, 156, 0.16);
+  border-color: rgba(14, 99, 156, 0.35);
+}
+
+.gitlens-ref-pill.branch {
+  background: rgba(46, 160, 67, 0.14);
+  border-color: rgba(46, 160, 67, 0.35);
+}
+
+.gitlens-ref-pill.remote {
+  background: rgba(88, 166, 255, 0.12);
+  border-color: rgba(88, 166, 255, 0.3);
+}
+
+.gitlens-ref-pill.tag {
+  background: rgba(255, 212, 0, 0.12);
+  border-color: rgba(255, 212, 0, 0.22);
+}
+
+.gitlens-ref-more {
+  font-size: 11px;
   color: var(--muted);
 }
 
-.gitlens-hash {
+.gitlens-change-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.gitlens-change-files {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 30px;
+  text-align: left;
+}
+
+.gitlens-change-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(120, 120, 120, 0.22);
+  display: flex;
+}
+
+.gitlens-change-ins {
+  height: 100%;
+  background: rgba(46, 160, 67, 0.75);
+}
+
+.gitlens-change-del {
+  height: 100%;
+  background: rgba(248, 81, 73, 0.7);
+}
+
+.gitlens-change-skel {
+  display: inline-block;
+  height: 6px;
+  width: 100%;
+  max-width: 80px;
+  border-radius: 999px;
+  background: rgba(120, 120, 120, 0.18);
+}
+
+.gitlens-wip-meta {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gitlens-wip-count {
+  margin-right: 8px;
+}
+
+.gitlens-wip-count.muted {
+  color: var(--muted);
+}
+
+.gitlens-sha-cell {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
   color: var(--muted);
-  flex-shrink: 0;
+}
+
+.gitlens-inspect {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+@media (max-width: 920px) {
+  .gitlens-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) 320px;
+  }
+
+  .gitlens-main {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.gitlens-inspect-header {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.gitlens-inspect-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-inspect-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .gitlens-details {
-  padding: 12px 14px;
-  overflow: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .gitlens-details-title {
-  font-weight: 800;
+  font-weight: 700;
   margin-bottom: 4px;
+  font-size: 12px;
 }
 
 .gitlens-details-meta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .gitlens-details-section-title {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   margin-bottom: 6px;
+  letter-spacing: 0.2px;
 }
 
 .gitlens-files {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 .gitlens-file {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+
+.gitlens-file:hover {
+  background: var(--surface-hover);
+}
+
+.gitlens-file-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-file-status {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+.gitlens-working {
+  padding: 10px 12px;
+}
+
+.gitlens-working-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.gitlens-working-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gitlens-compose-btn {
+  width: 100%;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid rgba(14, 99, 156, 0.45);
+  background: rgba(14, 99, 156, 0.18);
+  color: var(--text);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.gitlens-compose-btn:hover {
+  background: rgba(14, 99, 156, 0.24);
+}
+
+.gitlens-working-section {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.gitlens-working-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.gitlens-working-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.gitlens-change-group {
+  margin-bottom: 6px;
+}
+
+.gitlens-change-group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 2px 2px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.gitlens-change-group-header:hover {
+  background: var(--surface-hover);
+}
+
+.gitlens-change-group-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-change-group-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gitlens-change-group-body {
+  margin-left: 14px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gitlens-change-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  padding: 2px 2px;
+  cursor: pointer;
+}
+
+.gitlens-change-row:hover {
+  background: var(--surface-hover);
+}
+
+.gitlens-change-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gitlens-change-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gitlens-empty-small {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 2px;
 }
 
 .workspace-tree {
