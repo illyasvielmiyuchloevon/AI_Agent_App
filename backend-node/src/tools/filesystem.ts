@@ -66,35 +66,43 @@ function offsetToLineCol(offsets: number[], index: number) {
 }
 
 async function walkDir(dir: string, root: string, entries: any[], folderIndex = 0, folderName?: string) {
-    const list = await fs.readdir(dir, { withFileTypes: true });
-    for (const item of list) {
-        const fullPath = path.join(dir, item.name);
-        const relPath = path.relative(root, fullPath).replace(/\\/g, '/'); // ensure forward slashes
-        
-        // Basic ignore
-        if (item.name === 'node_modules' || item.name === '.git' || item.name === '__pycache__') continue;
-        // Keep common dotfiles visible (.gitignore/.vscode/.env etc), but hide internal agent data.
-        if (item.name === '.aichat') continue;
+    const stack: string[] = [dir];
+    while (stack.length > 0) {
+        const currentDir = stack.pop() as string;
+        let list: any[] = [];
+        try {
+            // Note: Avoid per-file stat() here. It dominates latency on large workspaces.
+            list = await fs.readdir(currentDir, { withFileTypes: true }) as any[];
+        } catch {
+            continue;
+        }
+        for (const item of list) {
+            const fullPath = path.join(currentDir, item.name);
+            const relPath = path.relative(root, fullPath).replace(/\\/g, '/'); // ensure forward slashes
 
-        if (item.isDirectory()) {
-            entries.push({
-                path: relPath,
-                type: 'dir',
-                workspace_root: root,
-                workspace_folder_index: folderIndex,
-                workspace_folder: folderName
-            });
-            await walkDir(fullPath, root, entries, folderIndex, folderName);
-        } else {
-            const stats = await fs.stat(fullPath);
-            entries.push({
-                path: relPath,
-                type: 'file',
-                size: stats.size,
-                workspace_root: root,
-                workspace_folder_index: folderIndex,
-                workspace_folder: folderName
-            });
+            // Basic ignore
+            if (item.name === 'node_modules' || item.name === '.git' || item.name === '__pycache__') continue;
+            // Keep common dotfiles visible (.gitignore/.vscode/.env etc), but hide internal agent data.
+            if (item.name === '.aichat') continue;
+
+            if (item.isDirectory()) {
+                entries.push({
+                    path: relPath,
+                    type: 'dir',
+                    workspace_root: root,
+                    workspace_folder_index: folderIndex,
+                    workspace_folder: folderName
+                });
+                stack.push(fullPath);
+            } else {
+                entries.push({
+                    path: relPath,
+                    type: 'file',
+                    workspace_root: root,
+                    workspace_folder_index: folderIndex,
+                    workspace_folder: folderName
+                });
+            }
         }
     }
 }

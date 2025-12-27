@@ -1355,7 +1355,8 @@ input:focus, select:focus, textarea:focus {
 
 .workspace-body {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   background: var(--panel);
   min-width: 0;
   overflow: hidden;
@@ -1363,6 +1364,658 @@ input:focus, select:focus, textarea:focus {
 
 .workspace-body.preview-only {
   flex-direction: column;
+}
+
+/* Bottom Panel */
+.bottom-panel {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 30px;
+  min-width: 0;
+}
+
+.bottom-panel.hidden {
+  min-height: 22px;
+}
+
+.bottom-panel-resizer {
+  height: 4px;
+  cursor: ns-resize;
+  background: transparent;
+}
+
+.bottom-panel-resizer:hover {
+  background: var(--border);
+  opacity: 0.55;
+}
+
+.bottom-panel-bar {
+  height: 30px;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  background: var(--panel-sub);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.bottom-panel-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.bottom-panel-tabs::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.bottom-panel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0.85;
+  position: relative;
+}
+
+.bottom-panel-tab:hover {
+  background: var(--surface-hover);
+  opacity: 1;
+}
+
+.bottom-panel-tab.active {
+  background: transparent;
+  opacity: 1;
+}
+
+.bottom-panel-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+
+.bottom-panel-tab-label {
+  opacity: 0.92;
+}
+
+.bottom-panel-tab-badge {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.bottom-panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.bottom-panel-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bottom-panel-filter {
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
+  min-width: 180px;
+}
+
+.bottom-panel-select {
+  height: 24px;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.bottom-panel-icon-btn {
+  height: 24px;
+  width: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  opacity: 0.9;
+}
+
+.bottom-panel-icon-btn:hover {
+  background: var(--surface-hover);
+  opacity: 1;
+}
+
+.bottom-panel-icon-btn.active {
+  background: var(--surface-hover-2);
+  opacity: 1;
+}
+
+.bottom-panel-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  opacity: 0.7;
+  margin: 0 2px;
+}
+
+.bottom-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.bottom-panel.collapsed .bottom-panel-content {
+  display: none;
+}
+
+.bottom-panel.hidden .bottom-panel-content {
+  display: none;
+}
+
+.bottom-panel-terminal-host {
+  height: 100%;
+  min-height: 0;
+}
+
+.bottom-panel-view {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.bottom-panel-hidden {
+  height: 22px;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.bottom-panel.hidden .bottom-panel-hidden {
+  height: 100%;
+  min-height: 0;
+  border-top: none;
+}
+
+.bottom-panel-hidden-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.bottom-panel-hidden-btn:hover {
+  background: var(--surface-hover);
+}
+
+.bottom-panel-hidden-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-empty {
+  padding: 16px 14px;
+  color: var(--muted);
+}
+
+.panel-empty-title {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.panel-empty-subtitle {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel-mono {
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.panel-list {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+}
+
+.panel-list-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.panel-list-row.static {
+  cursor: default;
+}
+
+.panel-list-row:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+.panel-list-row .codicon {
+  margin-top: 1px;
+  opacity: 0.9;
+}
+
+.panel-list-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-list-title {
+  font-size: 13px;
+  line-height: 1.35;
+  margin-bottom: 2px;
+}
+
+.panel-list-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.panel-list-source {
+  opacity: 0.9;
+}
+
+.debug-console {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.debug-console-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.debug-console-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.debug-console-input .ghost-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: 13px;
+}
+
+.terminal-view {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-buffer {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+}
+
+.terminal-buffer.paused {
+  opacity: 0.9;
+}
+
+.terminal-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-sub);
+}
+
+.terminal-prompt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.terminal-input-box {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: 13px;
+}
+
+.vscode-terminal-shell {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+}
+
+.vscode-terminal-shell.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.vscode-terminal-main {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--panel);
+}
+
+.vscode-terminal-instance {
+  position: absolute;
+  inset: 0;
+}
+
+.vscode-terminal-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 18px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.08), rgba(0,0,0,0.04));
+  color: var(--muted);
+  pointer-events: none;
+  text-align: center;
+}
+
+.vscode-terminal-side {
+  border-left: 1px solid var(--border);
+  background: var(--panel-sub);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vscode-terminal-side-header {
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.vscode-terminal-side-title {
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.vscode-terminal-side-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.vscode-terminal-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vscode-terminal-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+
+.vscode-terminal-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+.vscode-terminal-item.active {
+  background: rgba(79, 70, 229, 0.12);
+  border-color: rgba(79, 70, 229, 0.35);
+}
+
+.vscode-terminal-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vscode-terminal-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+/* xterm.js tweaks */
+.vscode-terminal-main .xterm {
+  height: 100%;
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+
+.vscode-terminal-main .xterm .xterm-viewport {
+  background: transparent !important;
+}
+
+.vscode-terminal-main .xterm .xterm-screen {
+  background: transparent !important;
+}
+
+.gitlens-shell {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.2fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.gitlens-left {
+  border-right: 1px solid var(--border);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gitlens-right {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gitlens-header {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-sub);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+.gitlens-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+.gitlens-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+}
+
+.gitlens-row:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+.gitlens-row.active {
+  background: rgba(79, 70, 229, 0.12);
+  border-color: rgba(79, 70, 229, 0.35);
+}
+
+.gitlens-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.18);
+  flex-shrink: 0;
+}
+
+.gitlens-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.gitlens-msg {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.gitlens-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.gitlens-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.gitlens-details {
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.gitlens-details-title {
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.gitlens-details-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.gitlens-details-section-title {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.gitlens-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gitlens-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
 }
 
 .workspace-tree {

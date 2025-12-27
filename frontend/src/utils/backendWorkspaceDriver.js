@@ -4,7 +4,12 @@ const isAbsolutePath = (p = '') => {
   return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\') || s.startsWith('/');
 };
 
-const normalizeRelPath = (p = '') => String(p || '').replace(/^[./\\]+/, '').replace(/\\/g, '/');
+const normalizeRelPath = (p = '') => {
+  const raw = String(p || '').replace(/\\/g, '/');
+  // Remove leading "./" segments but keep dotfolders like ".trae" or ".git"
+  const withoutDotSlash = raw.replace(/^(?:\.\/)+/, '');
+  return withoutDotSlash.replace(/^\/+/, '');
+};
 
 const denyEscapes = (p) => {
   const path = normalizeRelPath(p);
@@ -91,10 +96,19 @@ export class BackendWorkspaceDriver {
     return data;
   }
 
-  async readFile(path) {
+  async readFile(path, options = {}) {
     const safe = denyEscapes(path);
-    const data = await this._getJson(`/api/workspace/read?path=${encodeURIComponent(safe)}`);
-    return { path: safe, content: String(data?.content ?? ''), truncated: !!data?.truncated };
+    const allowMissing = !!options?.allowMissing;
+    const qs = new URLSearchParams();
+    qs.set('path', safe);
+    if (allowMissing) qs.set('allow_missing', '1');
+    const data = await this._getJson(`/api/workspace/read?${qs.toString()}`);
+    return {
+      path: safe,
+      content: String(data?.content ?? ''),
+      truncated: !!data?.truncated,
+      exists: data?.exists !== false,
+    };
   }
 
   async writeFile(path, content, { createDirectories = false } = {}) {
@@ -134,8 +148,13 @@ export class BackendWorkspaceDriver {
     if (includeContent) {
       const fileEntries = entries.filter((e) => e && e.type === 'file' && typeof e.path === 'string');
       for (const entry of fileEntries) {
-        const data = await this.readFile(entry.path);
-        files.push(data);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const data = await this.readFile(entry.path);
+          files.push(data);
+        } catch {
+          // Ignore missing/unreadable files (dotfolders, races, permissions, etc.)
+        }
       }
     }
     return {

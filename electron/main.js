@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const simpleGit = require('simple-git');
@@ -8,6 +8,42 @@ const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
 // Remove native application menu
 Menu.setApplicationMenu(null);
+
+const CSP = (
+  "default-src 'self'; base-uri 'self'; object-src 'none'; " +
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: http: https:; " +
+  "style-src 'self' 'unsafe-inline' http: https:; " +
+  "img-src 'self' data: blob: http: https:; " +
+  "font-src 'self' data: http: https:; " +
+  "connect-src 'self' ws: wss: http: https:; " +
+  "worker-src 'self' blob: data:; " +
+  "frame-src 'self' blob: data: http: https:;"
+);
+
+function installCspHeaders() {
+  try {
+    const ses = session && session.defaultSession ? session.defaultSession : null;
+    if (!ses || !ses.webRequest || typeof ses.webRequest.onHeadersReceived !== 'function') return;
+
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      try {
+        const type = details && details.resourceType ? String(details.resourceType) : '';
+        if (type !== 'mainFrame' && type !== 'subFrame') {
+          callback({ cancel: false, responseHeaders: details.responseHeaders });
+          return;
+        }
+
+        const headers = details.responseHeaders || {};
+        headers['Content-Security-Policy'] = [CSP];
+        callback({ cancel: false, responseHeaders: headers });
+      } catch {
+        callback({ cancel: false, responseHeaders: details.responseHeaders });
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
 
 function createWindow() {
   const initialTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
@@ -46,6 +82,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  installCspHeaders();
 
   ipcMain.handle('open-folder', async () => {
     const res = await dialog.showOpenDialog({

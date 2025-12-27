@@ -9,6 +9,8 @@ import { takeSnapshot, persistDiffSafely } from "./diffs";
 import { workspaceManager } from "./workspace/manager";
 import { createWorkspaceRpcEnvelope } from "./workspace/rpc";
 import { AiEngine, registerAiEngineRoutes } from "./ai-engine";
+import { registerTerminalWs } from "./terminal/ws";
+import { listListeningPorts } from "./ports/listening";
 
 const app = express();
 app.use(cors());
@@ -81,6 +83,15 @@ app.post("/config", async (req, res) => {
     res.json({ status: "configured", provider: config.provider, config });
   } catch (e: any) {
     res.status(500).json({ detail: e.message });
+  }
+});
+
+app.get("/ports/listening", async (_req, res) => {
+  try {
+    const ports = await listListeningPorts();
+    res.json({ ports });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || String(e) });
   }
 });
 
@@ -352,13 +363,23 @@ app.get("/workspace/read", async (req, res) => {
   try {
     const root = getWorkspaceRoot();
     const relativePath = req.query.path as string;
+    const allowMissingRaw = String((req.query as any)?.allow_missing ?? (req.query as any)?.allowMissing ?? '').trim().toLowerCase();
+    const allowMissing = allowMissingRaw === '1' || allowMissingRaw === 'true' || allowMissingRaw === 'yes';
     if (!relativePath) {
       res.status(400).json({ detail: "Path is required" });
       return;
     }
-    const { fullPath } = await resolveWorkspaceFilePath(root, relativePath, { mustExist: true });
-    const content = await fs.readFile(fullPath, "utf-8");
-    res.json({ path: relativePath, content, truncated: false });
+    const { fullPath } = await resolveWorkspaceFilePath(root, relativePath, { mustExist: !allowMissing });
+    try {
+      const content = await fs.readFile(fullPath, "utf-8");
+      res.json({ path: relativePath, content, truncated: false, exists: true });
+    } catch (readErr: any) {
+      if (allowMissing && (readErr?.code === 'ENOENT' || readErr?.code === 'ENOTDIR')) {
+        res.json({ path: relativePath, content: "", truncated: false, exists: false });
+        return;
+      }
+      throw readErr;
+    }
   } catch (e: any) {
     res.status(400).json({ detail: e.message });
   }
@@ -492,6 +513,7 @@ async function isExistingBackend(port: number): Promise<boolean> {
 
 const PORT = parsePort(process.env.AI_AGENT_BACKEND_PORT || process.env.PORT, 8000);
 const server = app.listen(PORT);
+registerTerminalWs(server);
 
 server.once('listening', () => {
   console.log(`Node.js Agent Backend running on http://localhost:${PORT}`);

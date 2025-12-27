@@ -1256,6 +1256,8 @@ function App() {
                       setGitRemotes(remotes);
                       const log = await GitDriver.log(applied);
                       setGitLog(log?.all || []);
+                  } catch (gitErr) {
+                      console.warn('Git status refresh failed', gitErr);
                   } finally {
                       setGitLoading(false);
                   }
@@ -1398,7 +1400,7 @@ function App() {
   const loadProjectConfigFromDisk = useCallback(async (driver) => {
       if (!driver) return normalizeProjectConfig(DEFAULT_PROJECT_CONFIG);
       try {
-          const raw = await driver.readFile('.aichat/config.json');
+          const raw = await driver.readFile('.aichat/config.json', { allowMissing: true });
           const parsed = JSON.parse(raw.content || '{}');
           const normalized = normalizeProjectConfig(parsed);
           if (!normalized.projectPath) {
@@ -1423,7 +1425,7 @@ function App() {
       }
   }, [normalizeProjectConfig]);
 
-  const syncWorkspaceFromDisk = useCallback(async ({ includeContent = true, highlight = true, driver: driverOverride = null, force = false, snapshot = null } = {}) => {
+  const syncWorkspaceFromDisk = useCallback(async ({ includeContent = false, highlight = true, driver: driverOverride = null, force = false, snapshot = null } = {}) => {
       const driver = driverOverride || workspaceDriver;
       if (!driver) {
           setWorkspaceBindingStatus((prev) => (prev === 'error' ? prev : 'idle'));
@@ -1461,7 +1463,11 @@ function App() {
                   return { ...file, updated: changed || isNew, dirty: false };
               }) : (prev.files || []);
 
-              const mergedPaths = new Set(merged.map((f) => f.path));
+              const existingFilePaths = new Set(
+                  (data.entries || [])
+                      .filter((entry) => entry && entry.type === 'file' && typeof entry.path === 'string' && !shouldHidePath(entry.path))
+                      .map((entry) => entry.path)
+              );
               const isSpecialTab = (p) => {
                   if (!p) return true;
                   if (p === WELCOME_TAB_PATH) return true;
@@ -1469,7 +1475,7 @@ function App() {
                   if (DIFF_TAB_PREFIX && p.startsWith(DIFF_TAB_PREFIX)) return true;
                   return false;
               };
-              const isValidTab = (p) => isSpecialTab(p) || mergedPaths.has(p);
+              const isValidTab = (p) => isSpecialTab(p) || existingFilePaths.has(p);
 
               const { groups, activeGroupId } = ensureEditorGroups(prev);
               const nextGroups = groups.map((g) => {
@@ -1488,7 +1494,7 @@ function App() {
 
               if (!userClosedAll) {
                   const entry = data.entry_candidates?.[0] || merged[0]?.path || '';
-                  if (entry && mergedPaths.has(entry)) {
+                  if (entry && existingFilePaths.has(entry)) {
                       nextGroups2 = nextGroups.map((g) => {
                           if (g.id !== nextActiveGroupId) return g;
                           const openTabs = g.openTabs.includes(entry) ? g.openTabs : [...g.openTabs, entry];
@@ -1703,7 +1709,7 @@ function App() {
           setWorkspaceRootLabel(candidateRoot);
       }
 
-      await syncWorkspaceFromDisk({ includeContent: true, highlight: false, driver });
+      await syncWorkspaceFromDisk({ includeContent: false, highlight: false, driver });
       return cfg;
   }, [applyConfigToState, openBackendWorkspace, loadProjectConfigFromDisk, refreshRecentProjects, syncWorkspaceFromDisk]);
 
@@ -2222,11 +2228,22 @@ function App() {
 
   useEffect(() => {
       try {
-          const params = new URLSearchParams(window.location.search || '');
-          const openFileParam = String(params.get('openFile') || '').trim();
-          const openModeParam = String(params.get('openMode') || '').trim();
-          const workspaceFsPathParam = String(params.get('workspaceFsPath') || '').trim();
+          const url = new URL(window.location.href);
+          const openFileParam = String(url.searchParams.get('openFile') || '').trim();
+          const openModeParam = String(url.searchParams.get('openMode') || '').trim();
+          const workspaceFsPathParam = String(url.searchParams.get('workspaceFsPath') || '').trim();
           if (!openFileParam && !workspaceFsPathParam) return;
+
+          // Consume deep-link params exactly once (also prevents "always reopen old workspace" bugs).
+          url.searchParams.delete('openFile');
+          url.searchParams.delete('openMode');
+          url.searchParams.delete('workspaceFsPath');
+          try {
+              window.history.replaceState({}, '', url.toString());
+          } catch {
+              // ignore
+          }
+
           pendingDeepLinkRef.current = { openFile: openFileParam, openMode: openModeParam, workspaceFsPath: workspaceFsPathParam };
           if (workspaceFsPathParam) {
               workspaceController.openWorkspace(workspaceFsPathParam, { preferredRoot: workspaceFsPathParam });

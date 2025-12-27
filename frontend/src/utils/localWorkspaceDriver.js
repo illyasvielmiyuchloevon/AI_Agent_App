@@ -257,11 +257,23 @@ export class LocalWorkspaceDriver {
     return fileHandle;
   }
 
-  async readFile(path) {
-    const fileHandle = await this.getFileHandle(path, { create: false });
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    return { path: denyEscapes(path), content: text, truncated: false };
+  async readFile(path, options = {}) {
+    const allowMissing = !!options?.allowMissing;
+    try {
+      const fileHandle = await this.getFileHandle(path, { create: false });
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      return { path: denyEscapes(path), content: text, truncated: false, exists: true };
+    } catch (err) {
+      if (allowMissing && err?.name === 'NotFoundError') {
+        return { path: denyEscapes(path), content: '', truncated: false, exists: false };
+      }
+      if (allowMissing) {
+        // Best-effort: treat missing/unreadable as absent.
+        return { path: denyEscapes(path), content: '', truncated: false, exists: false };
+      }
+      throw err;
+    }
   }
 
   async writeFile(path, content, { createDirectories = true } = {}) {

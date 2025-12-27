@@ -1,4 +1,6 @@
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
+import PanelShell from '../workbench/bottom-panel/PanelShell';
+import { diagnosticsService } from '../workbench/services/diagnosticsService';
 
 const MonacoEditor = React.lazy(() =>
   Promise.all([
@@ -1516,6 +1518,7 @@ function Workspace({
     disposablesRef.current = [];
     editorRef.current = editor;
     monacoRef.current = monaco;
+    diagnosticsService.attachMonaco(monaco);
     globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
     setEditorVersion(v => v + 1);
 
@@ -2749,6 +2752,10 @@ function Workspace({
           </div>
         )}
       </div>
+      <PanelShell
+        workspacePath={backendRoot || workspaceRoots?.[0]?.path || workspaceRoots?.[0] || ''}
+        onOpenFile={onOpenFile}
+      />
     </div>
   );
 }

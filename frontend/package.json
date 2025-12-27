@@ -16,7 +16,9 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^9.0.1",
-    "react-window": "^2.2.3"
+    "react-window": "^2.2.3",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.66",
