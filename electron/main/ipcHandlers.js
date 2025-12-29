@@ -2,8 +2,17 @@ const { ipcMain, dialog, BrowserWindow, screen, app, shell } = require('electron
 const path = require('path');
 const recentStore = require('./recentStore');
 const { createWorkspaceService } = require('./workspaceService');
+const { createLspBroadcaster, createLspMainService } = require('./lsp');
+const { LanguagePluginRegistry } = require('./lsp/plugins/LanguagePluginRegistry');
+const { PluginInstaller } = require('./lsp/plugins/PluginInstaller');
+const { LanguagePluginManager } = require('./lsp/plugins/LanguagePluginManager');
+const { OfficialCatalogProvider } = require('./lsp/plugins/providers/OfficialCatalogProvider');
+const { OpenVsxProvider } = require('./lsp/plugins/providers/OpenVsxProvider');
+const { GitHubReleasesProvider } = require('./lsp/plugins/providers/GitHubReleasesProvider');
+const { createPluginIpcService } = require('./lsp/plugins/PluginIpcService');
 
 const workspaceService = createWorkspaceService();
+const lspBroadcaster = createLspBroadcaster();
 
 function registerIpcHandlers() {
   const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
@@ -27,6 +36,65 @@ function registerIpcHandlers() {
       node: process.versions.node,
     };
   });
+
+  // LSP (JSON-RPC over stdio) - main process owns I/O and protocol work.
+  // Language plugins: marketplace + installer + registry (shared across windows).
+  const pluginsRootDir = path.join(app.getPath('userData'), 'language-plugins');
+  const registry = new LanguagePluginRegistry({ registryPath: path.join(pluginsRootDir, 'registry.json') });
+  const installer = new PluginInstaller({ pluginsRootDir, downloadsDir: path.join(pluginsRootDir, 'downloads') });
+
+  const githubProvider = new GitHubReleasesProvider({
+    known: [
+      {
+        id: 'rust-analyzer',
+        name: 'rust-analyzer',
+        description: 'rust-analyzer from GitHub releases (binary).',
+        repo: 'rust-lang/rust-analyzer',
+        trust: 'community',
+        languages: ['rust'],
+        selectAsset: (release) => {
+          const assets = Array.isArray(release?.assets) ? release.assets : [];
+          const platform = process.platform;
+          const arch = process.arch;
+          const wantArch = arch === 'arm64' ? 'aarch64' : 'x86_64';
+
+          const patterns = [];
+          if (platform === 'win32') patterns.push(`${wantArch}-pc-windows-msvc`);
+          else if (platform === 'darwin') patterns.push(`${wantArch}-apple-darwin`);
+          else patterns.push(`${wantArch}-unknown-linux-gnu`);
+
+          const pick = assets.find((a) => patterns.some((p) => String(a?.name || '').includes(p)) && String(a?.browser_download_url || '').startsWith('http'));
+          if (!pick) return null;
+          return { url: String(pick.browser_download_url), version: '' };
+        },
+        manifest: {
+          servers: [
+            {
+              id: 'rust-analyzer',
+              languageIds: ['rust'],
+              fileExtensions: ['.rs'],
+              transport: { kind: 'stdio', command: 'rust-analyzer${EXE}', args: [] },
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const pluginManager = new LanguagePluginManager({
+    registry,
+    installer,
+    providers: [
+      new OfficialCatalogProvider({ catalogPath: path.join(__dirname, 'lsp', 'plugins', 'officialCatalog.json') }),
+      githubProvider,
+      new OpenVsxProvider(),
+    ],
+  });
+
+  const pluginsReady = pluginManager.init().catch(() => {});
+  createPluginIpcService({ ipcMain, pluginManager, broadcast: lspBroadcaster.broadcast, ready: pluginsReady });
+
+  createLspMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, plugins: { manager: pluginManager, ready: pluginsReady } });
 
   ipcMain.handle('recent:list', async () => {
     return { ok: true, items: recentStore.list() };

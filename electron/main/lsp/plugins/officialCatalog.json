@@ -1,0 +1,67 @@
+{
+  "plugins": [
+    {
+      "id": "tsls",
+      "name": "TypeScript Language Server",
+      "description": "typescript-language-server via local npm install (runs via node).",
+      "version": "latest",
+      "trust": "official",
+      "languages": ["typescript", "javascript"],
+      "source": { "providerId": "official" },
+      "install": {
+        "kind": "npm",
+        "packages": [
+          { "name": "typescript-language-server", "version": "latest" },
+          { "name": "typescript", "version": "latest" }
+        ]
+      },
+      "manifest": {
+        "requires": { "node": true, "npm": true },
+        "servers": [
+          {
+            "id": "tsls",
+            "languageIds": ["typescript", "javascript"],
+            "fileExtensions": [".ts", ".tsx", ".js", ".jsx"],
+            "initializeTimeoutMs": 30000,
+            "transport": {
+              "kind": "stdio",
+              "command": "${NODE}",
+              "args": ["${PLUGIN_DIR}/node_modules/typescript-language-server/lib/cli.js", "--stdio"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "pyright",
+      "name": "Pyright Language Server",
+      "description": "pyright via local npm install (runs via node).",
+      "version": "latest",
+      "trust": "official",
+      "languages": ["python"],
+      "source": { "providerId": "official" },
+      "install": {
+        "kind": "npm",
+        "packages": [
+          { "name": "pyright", "version": "latest" }
+        ]
+      },
+      "manifest": {
+        "requires": { "node": true, "npm": true },
+        "servers": [
+          {
+            "id": "pyright",
+            "languageIds": ["python"],
+            "fileExtensions": [".py"],
+            "initializeTimeoutMs": 30000,
+            "transport": {
+              "kind": "stdio",
+              "command": "${NODE}",
+              "args": ["${PLUGIN_DIR}/node_modules/pyright/langserver.index.js", "--stdio"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

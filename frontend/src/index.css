@@ -284,12 +284,118 @@ input:focus, select:focus, textarea:focus {
   color: var(--statusbar-text);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 0 8px;
   font-size: 11px;
   cursor: default;
   user-select: none;
   z-index: 100;
   border-top: 1px solid var(--statusbar-border);
+  flex-shrink: 0;
+}
+
+.status-bar-left,
+.status-bar-center,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.status-bar-left {
+  gap: 6px;
+}
+
+.status-bar-right {
+  gap: 6px;
+}
+
+.status-bar-center {
+  flex: 1;
+}
+
+.status-item {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 22px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.status-item .codicon {
+  font-size: 13px;
+}
+
+.status-item:hover {
+  background: var(--surface-hover);
+}
+
+.status-item:active {
+  background: var(--surface-hover-2);
+}
+
+.status-item.status-item-noclick {
+  cursor: default;
+}
+
+.status-item.status-item-noclick:hover,
+.status-item.status-item-noclick:active {
+  background: transparent;
+}
+
+.status-item-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-item-muted {
+  opacity: 0.85;
+}
+
+.status-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--statusbar-border);
+  opacity: 0.85;
+}
+
+.status-pill {
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid var(--statusbar-border);
+  background: transparent;
+}
+
+.status-pill-danger {
+  border-color: var(--danger);
+  color: var(--statusbar-text);
+  background: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.status-tone-ok {
+  color: var(--success);
+}
+
+.status-tone-warning {
+  color: var(--warning);
+}
+
+.status-tone-danger {
+  color: var(--danger);
 }
 
 .monaco-editor .view-overlays .current-line {

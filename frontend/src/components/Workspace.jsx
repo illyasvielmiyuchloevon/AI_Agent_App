@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import PanelShell from '../workbench/bottom-panel/PanelShell';
 import { diagnosticsService } from '../workbench/services/diagnosticsService';
+import { lspService } from '../workbench/services/lspService';
 
 const MonacoEditor = React.lazy(() =>
   Promise.all([
@@ -591,6 +592,8 @@ function Workspace({
 
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
+  const filesRef = useRef(files);
+  const activeGroupIdRef = useRef(activeGroupId);
   const editorInstancesRef = useRef(new Map());
   const disposablesRef = useRef([]);
   const lastSelectionRef = useRef({ isEmpty: true, range: null });
@@ -616,6 +619,24 @@ function Workspace({
   const [aiPrompt, setAiPrompt] = useState({ open: false, action: '', title: '', placeholder: '', value: '' });
   const [editorVersion, setEditorVersion] = useState(0);
   const applyActions = useMemo(() => new Set(['optimize', 'generateComments', 'rewrite', 'modify']), []);
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    activeGroupIdRef.current = activeGroupId;
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    lspService.updateUiContext({
+      getFiles: () => filesRef.current,
+      onFileChange,
+      onOpenFile,
+      onSyncStructure,
+      getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
+    });
+  }, [activeGroupId, onFileChange, onOpenFile, onSyncStructure]);
 
   const taskReviewFile = useMemo(() => {
     const list = taskReview?.files;
@@ -730,7 +751,7 @@ function Workspace({
 
   useEffect(() => {
     globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
-  }, [normalizedUndoRedoLimit]);
+  }, [normalizedUndoRedoLimit, backendWorkspaceId, backendRoot]);
 
   const clipText = useCallback((text, maxChars) => {
     const s = typeof text === 'string' ? text : '';
@@ -1517,12 +1538,188 @@ function Workspace({
     };
   }, [canUseEditorAi, getKeybinding, parseMonacoKeybinding, triggerAiAction, editorVersion]);
 
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const disposables = [];
+
+    const lspRangeToMonaco = (r) => {
+      const s = r?.start;
+      const e = r?.end;
+      const sl = Number(s?.line);
+      const sc = Number(s?.character);
+      const el = Number(e?.line);
+      const ec = Number(e?.character);
+      if (!Number.isFinite(sl) || !Number.isFinite(sc) || !Number.isFinite(el) || !Number.isFinite(ec)) return null;
+      return new monaco.Range(sl + 1, sc + 1, el + 1, ec + 1);
+    };
+
+    const showLocationsAsReferences = (locations) => {
+      const model = editor.getModel?.();
+      const position = editor.getPosition?.();
+      if (!model || !position) return;
+      const refs = (Array.isArray(locations) ? locations : []).map((loc) => {
+        const uri = String(loc?.uri || '');
+        const range = loc?.range || null;
+        if (!uri || !range) return null;
+        const modelPath = lspService.lspUriToModelPath(uri);
+        const r = lspRangeToMonaco(range);
+        if (!modelPath || !r) return null;
+        return { uri: monaco.Uri.parse(modelPath), range: r };
+      }).filter(Boolean);
+      if (!refs.length) return;
+      try {
+        editor.trigger('lsp', 'editor.action.showReferences', {
+          resource: model.uri,
+          position,
+          references: refs,
+        });
+      } catch {
+        // ignore
+      }
+    };
+
+    const runCallHierarchy = async (direction) => {
+      const model = editor.getModel?.();
+      const position = editor.getPosition?.();
+      if (!model || !position) return;
+
+      const prepared = await lspService.prepareCallHierarchy(model, position).catch(() => ({ serverId: '', items: [] }));
+      const serverId = String(prepared?.serverId || '');
+      const items = Array.isArray(prepared?.items) ? prepared.items : [];
+      const item = items[0] || null;
+      if (!serverId || !item) return;
+
+      if (direction === 'incoming') {
+        const calls = await lspService.callHierarchyIncoming(serverId, item).catch(() => []);
+        const locs = calls.map((c) => ({
+          uri: c?.from?.uri,
+          range: c?.from?.selectionRange || c?.from?.range,
+        }));
+        showLocationsAsReferences(locs);
+        return;
+      }
+
+      const calls = await lspService.callHierarchyOutgoing(serverId, item).catch(() => []);
+      const locs = calls.map((c) => ({
+        uri: c?.to?.uri,
+        range: c?.to?.selectionRange || c?.to?.range,
+      }));
+      showLocationsAsReferences(locs);
+    };
+
+    disposables.push(editor.addAction({
+      id: 'lsp.callHierarchyIncoming',
+      label: 'LSP：Incoming Calls',
+      contextMenuGroupId: '8_lsp',
+      contextMenuOrder: 1.0,
+      run: () => runCallHierarchy('incoming'),
+    }));
+
+    disposables.push(editor.addAction({
+      id: 'lsp.callHierarchyOutgoing',
+      label: 'LSP：Outgoing Calls',
+      contextMenuGroupId: '8_lsp',
+      contextMenuOrder: 1.01,
+      run: () => runCallHierarchy('outgoing'),
+    }));
+
+    return () => disposables.forEach((d) => d?.dispose?.());
+  }, [editorVersion]);
+
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const disposables = [];
+    let rafId = 0;
+
+    const emit = () => {
+      rafId = 0;
+      const model = editor.getModel?.();
+      const pos = editor.getPosition?.();
+      const sel = editor.getSelection?.();
+
+      const languageId = model?.getLanguageId?.() || inferLanguage(activeFile || '');
+      const eol = model?.getEOL?.() === '\r\n' ? 'CRLF' : 'LF';
+      const options = model?.getOptions?.() || null;
+      const tabSize = Number(options?.tabSize) || 4;
+      const insertSpaces = options?.insertSpaces !== undefined ? !!options.insertSpaces : true;
+
+      let selectionLength = 0;
+      try {
+        const isEmpty = sel && typeof sel.isEmpty === 'function' ? sel.isEmpty() : true;
+        if (!isEmpty && model?.getValueInRange) selectionLength = String(model.getValueInRange(sel) || '').length;
+      } catch {
+        selectionLength = 0;
+      }
+
+      const detail = {
+        filePath: activeFile || '',
+        languageId,
+        line: pos?.lineNumber || 1,
+        column: pos?.column || 1,
+        selectionLength,
+        tabSize,
+        insertSpaces,
+        eol,
+        encoding: 'UTF-8',
+      };
+
+      try {
+        globalThis.window.dispatchEvent(new CustomEvent('workbench:statusBarEditorPatch', { detail }));
+      } catch {
+        // ignore
+      }
+    };
+
+    const schedule = () => {
+      if (rafId) return;
+      rafId = globalThis.window.requestAnimationFrame(emit);
+    };
+
+    try {
+      disposables.push(editor.onDidChangeCursorPosition(schedule));
+      disposables.push(editor.onDidChangeCursorSelection(schedule));
+      disposables.push(editor.onDidChangeModel(schedule));
+    } catch {
+      // ignore
+    }
+
+    schedule();
+
+    return () => {
+      disposables.forEach((d) => d?.dispose?.());
+      if (rafId) {
+        globalThis.window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+    };
+  }, [activeFile, editorVersion, inferLanguage]);
+
   const handleEditorMount = useCallback((editor, monaco) => {
     disposablesRef.current.forEach((d) => d?.dispose?.());
     disposablesRef.current = [];
     editorRef.current = editor;
     monacoRef.current = monaco;
     diagnosticsService.attachMonaco(monaco);
+    lspService.updateWorkspace({ nextWorkspaceId: backendWorkspaceId, nextRootFsPath: backendRoot, nextWorkspaceFolders: [backendRoot] });
+    lspService.attachMonaco(
+      monaco,
+      { nextWorkspaceId: backendWorkspaceId, nextRootFsPath: backendRoot, nextWorkspaceFolders: [backendRoot] },
+      {
+        getFiles: () => filesRef.current,
+        onFileChange,
+        onOpenFile,
+        onSyncStructure,
+        getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
+      },
+    );
     globalThis.__AI_CHAT_MONACO_UNDO_REDO_LIMIT = normalizedUndoRedoLimit;
     setEditorVersion(v => v + 1);
 
@@ -1531,7 +1728,7 @@ function Workspace({
     setTimeout(() => {
       setEditorVersion(v => v + 1);
     }, 500);
-  }, [normalizedUndoRedoLimit]);
+  }, [normalizedUndoRedoLimit, backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure]);
 
   const handleEditorMountForGroup = useCallback((groupId) => (editor, monaco) => {
     editorInstancesRef.current.set(String(groupId || 'group-1'), { editor, monaco });
@@ -1611,6 +1808,22 @@ function Workspace({
     window.addEventListener('workbench:revealInActiveEditor', onReveal);
     return () => window.removeEventListener('workbench:revealInActiveEditor', onReveal);
   }, [activeGroupId]);
+
+  useEffect(() => {
+    const onOpenFileEvent = (e) => {
+      const detail = e?.detail || {};
+      const relPath = String(detail.path || '').trim();
+      if (!relPath) return;
+      const gid = String(activeGroupId || 'group-1');
+      try {
+        onOpenFile?.(relPath, { groupId: gid, mode: 'persistent' });
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener('workbench:openFile', onOpenFileEvent);
+    return () => window.removeEventListener('workbench:openFile', onOpenFileEvent);
+  }, [activeGroupId, onOpenFile]);
 
   const renderEditorPaneLegacy = () => (
     <div className="workspace-editor">

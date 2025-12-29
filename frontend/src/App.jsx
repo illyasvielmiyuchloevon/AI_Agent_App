@@ -25,8 +25,10 @@ import CloneRepositoryModal from './components/CloneRepositoryModal';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
 import Modal from './components/Modal';
+import StatusBar from './components/StatusBar';
 import { getTranslation } from './utils/i18n';
 import { createAiEngineClient, readTextResponseBody } from './utils/aiEngineClient';
+import { lspService } from './workbench/services/lspService';
 
 const DEBUG_SEPARATORS = false;
 
@@ -224,6 +226,7 @@ const DEFAULT_PROJECT_CONFIG = {
     renderWhitespace: 'none',
     navigationMode: 'breadcrumbs', // breadcrumbs | stickyScroll
   },
+  lsp: {},
   theme: detectSystemTheme(),
   sidebarWidth: 260,
   chatPanelWidth: 420,
@@ -821,6 +824,14 @@ function App() {
       [backendWorkspaceRoot]
   );
 
+  useEffect(() => {
+      if (!backendBound) return;
+      const wid = String(backendWorkspaceId || '').trim();
+      if (!wid) return;
+      lspService.updateWorkspace({ nextWorkspaceId: wid, nextRootFsPath: backendWorkspaceRoot, nextWorkspaceFolders: [backendWorkspaceRoot] });
+      void lspService.didChangeConfiguration(projectConfig?.lsp || {}).catch(() => {});
+  }, [backendBound, backendWorkspaceId, backendWorkspaceRoot, projectConfig?.lsp]);
+
   const projectFetch = useCallback((url, options = {}) => {
       const headers = { ...(options.headers || {}), ...projectHeaders };
       return fetch(url, { ...options, headers });
@@ -841,6 +852,8 @@ function App() {
       else merged.keybindings = { ...DEFAULT_PROJECT_CONFIG.keybindings, ...merged.keybindings };
       if (!merged.editor || typeof merged.editor !== 'object') merged.editor = { ...DEFAULT_PROJECT_CONFIG.editor };
       else merged.editor = { ...DEFAULT_PROJECT_CONFIG.editor, ...merged.editor };
+      if (!merged.lsp || typeof merged.lsp !== 'object') merged.lsp = { ...DEFAULT_PROJECT_CONFIG.lsp };
+      else merged.lsp = { ...DEFAULT_PROJECT_CONFIG.lsp, ...merged.lsp };
 
       const providerIds = ['openai', 'anthropic', 'openrouter', 'xai', 'ollama', 'lmstudio', 'llamacpp'];
       providerIds.forEach((providerId) => {
@@ -2410,6 +2423,7 @@ function App() {
                       files: prev.files.map((f) => f.path === path ? { ...f, dirty: false } : f),
                   }));
               }
+              try { void lspService.didSavePath(path, content); } catch {}
               setWorkspaceState((prev) => ({ ...prev, livePreview: `${Date.now()}` }));
               setHotReloadToken(Date.now());
           } catch (err) {
@@ -3873,7 +3887,11 @@ function App() {
 
       setWorkspaceState((prevRaw) => {
           const prev = syncLegacyTabsFromGroups(prevRaw);
-          const nextFiles = (prev.files || []).map((f) => f.path === tabPath ? { ...f, content, dirty: true } : f);
+          const prevFiles = Array.isArray(prev.files) ? prev.files : [];
+          const hasEntry = prevFiles.some((f) => f && f.path === tabPath);
+          const nextFiles = hasEntry
+              ? prevFiles.map((f) => f.path === tabPath ? { ...f, content, dirty: true } : f)
+              : [...prevFiles, { path: tabPath, content, truncated: false, updated: false, dirty: true }];
           const { groups, activeGroupId } = ensureEditorGroups(prev);
 
           const requestedGroupId = String(options?.groupId || '').trim();
@@ -4767,6 +4785,11 @@ function App() {
           fullscreen={configFullscreen}
           onToggleFullscreen={() => setConfigFullscreen((prev) => !prev)}
           variant="modal"
+          lspConfig={projectConfig?.lsp || {}}
+          onChangeLspConfig={(next) => {
+            const v = next && typeof next === 'object' ? next : {};
+            setProjectConfig((prev) => ({ ...prev, lsp: v }));
+          }}
         />
       )}
 
@@ -4784,6 +4807,8 @@ function App() {
               setGlobalSearchQuery(text);
               handleSidebarTabChange('search');
           }}
+          onSearchWorkspaceSymbols={(q) => lspService.searchWorkspaceSymbols(q)}
+          onSearchDocumentSymbols={(modelPath) => lspService.searchDocumentSymbols(modelPath)}
           aiInvoker={editorAiInvoker}
       />
 
@@ -5054,6 +5079,11 @@ function App() {
                       fullscreen={false}
                       onToggleFullscreen={() => {}}
                       variant="inline"
+                      lspConfig={projectConfig?.lsp || {}}
+                      onChangeLspConfig={(next) => {
+                        const v = next && typeof next === 'object' ? next : {};
+                        setProjectConfig((prev) => ({ ...prev, lsp: v }));
+                      }}
                     />
                   )}
                   terminalSettingsTabPath={TERMINAL_SETTINGS_TAB_PATH}
@@ -5096,29 +5126,15 @@ function App() {
           </div>
       </div>
       
-      <div className="status-bar">
-          <div 
-            className="status-item" 
-            style={{ display: 'flex', gap: '4px', alignItems: 'center', cursor: 'pointer', marginRight: '10px' }}
-            onClick={() => {
-                if (sidebarCollapsed) setSidebarCollapsed(false);
-                setActiveSidebarPanel('git');
-            }}
-            title="Switch Branch"
-          >
-              <span className="codicon codicon-git-branch" aria-hidden style={{ fontSize: '13px' }} />
-              <span>{gitBranch || 'Git'}</span>
-              {gitStatus && (
-                  <span style={{ marginLeft: '4px' }}>
-                      {gitStatus.ahead > 0 && `↑${gitStatus.ahead} `}
-                      {gitStatus.behind > 0 && `↓${gitStatus.behind}`}
-                  </span>
-              )}
-          </div>
-          {workspaceBindingStatus === 'error' && (
-              <div style={{ background: 'var(--danger)', padding: '0 4px' }}>Connection Error</div>
-          )}
-      </div>
+      <StatusBar
+        gitBranch={gitBranch}
+        gitStatus={gitStatus}
+        workspaceBindingStatus={workspaceBindingStatus}
+        onClickGit={() => {
+          if (sidebarCollapsed) setSidebarCollapsed(false);
+          setActiveSidebarPanel('git');
+        }}
+      />
 
       <ConnectRemoteModal 
           isOpen={showRemoteModal} 

@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { pluginsService } from '../workbench/services/pluginsService';
+import { outputService } from '../workbench/services/outputService';
 
 const CommandPalette = ({
     isOpen,
@@ -13,13 +15,18 @@ const CommandPalette = ({
     onOpenFile,
     onCloseEditor,
     onSearchText,
+    onSearchWorkspaceSymbols,
+    onSearchDocumentSymbols,
     workspaceRoots = [],
     aiInvoker
 }) => {
     const [query, setQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const [symbolItems, setSymbolItems] = useState([]);
+    const [symbolLoading, setSymbolLoading] = useState(false);
     const inputRef = useRef(null);
     const listRef = useRef(null);
+    const symbolReqRef = useRef(0);
 
     useEffect(() => {
         if (isOpen && inputRef.current) {
@@ -28,6 +35,15 @@ const CommandPalette = ({
             setSelectedIndex(0);
         }
     }, [isOpen, initialQuery]);
+
+    const symbolState = useMemo(() => {
+        const raw = String(query || '');
+        const trimmedStart = raw.replace(/^\s+/, '');
+        const prefix = trimmedStart.slice(0, 1);
+        const mode = prefix === '@' ? 'document' : (prefix === '#' ? 'workspace' : '');
+        const text = mode ? trimmedStart.slice(1).trim() : '';
+        return { mode, text };
+    }, [query]);
 
     const editorNavState = useMemo(() => {
         const raw = String(query || '').trim();
@@ -52,6 +68,115 @@ const CommandPalette = ({
         };
     }, [activeGroupId, context, editorGroups, query]);
 
+    const symbolKindIcon = (kind) => {
+        const k = Number(kind || 0);
+        if (k === 5) return 'codicon-symbol-class';
+        if (k === 6) return 'codicon-symbol-method';
+        if (k === 7) return 'codicon-symbol-property';
+        if (k === 8) return 'codicon-symbol-field';
+        if (k === 9) return 'codicon-symbol-constructor';
+        if (k === 11) return 'codicon-symbol-interface';
+        if (k === 12) return 'codicon-symbol-function';
+        if (k === 13) return 'codicon-symbol-variable';
+        if (k === 14) return 'codicon-symbol-constant';
+        if (k === 22) return 'codicon-symbol-enum-member';
+        if (k === 23) return 'codicon-symbol-struct';
+        return 'codicon-symbol-misc';
+    };
+
+    useEffect(() => {
+        if (!isOpen) return;
+        if (!symbolState.mode) {
+            setSymbolItems([]);
+            setSymbolLoading(false);
+            return;
+        }
+
+        const requestId = (symbolReqRef.current += 1);
+        setSymbolLoading(true);
+        const timer = setTimeout(async () => {
+            try {
+                const group = editorNavState.group;
+                const groupId = editorNavState.groupId || String(activeGroupId || '');
+                const activeFile = group?.activeFile ? String(group.activeFile) : '';
+
+                let results = [];
+                if (symbolState.mode === 'workspace') {
+                    if (typeof onSearchWorkspaceSymbols === 'function') {
+                        results = await onSearchWorkspaceSymbols(symbolState.text);
+                    }
+                } else if (typeof onSearchDocumentSymbols === 'function' && activeFile) {
+                    results = await onSearchDocumentSymbols(activeFile);
+                }
+
+                if (requestId !== symbolReqRef.current) return;
+                const list = Array.isArray(results) ? results : [];
+
+                const q = String(symbolState.text || '').toLowerCase();
+                const filtered = (symbolState.mode === 'document' && q)
+                    ? list.filter((s) => {
+                        const name = String(s?.name || '').toLowerCase();
+                        const container = String(s?.containerName || '').toLowerCase();
+                        return name.includes(q) || container.includes(q);
+                    })
+                    : list;
+
+                const mapped = filtered.slice(0, 120).map((s, idx) => {
+                    const name = String(s?.name || '');
+                    const kind = Number(s?.kind || 0);
+                    const containerName = s?.containerName ? String(s.containerName) : '';
+                    const modelPath = String(s?.modelPath || activeFile || '');
+                    const range = s?.range || null;
+                    const line = Number(range?.start?.line);
+                    const ch = Number(range?.start?.character);
+                    const line1 = Number.isFinite(line) ? (line + 1) : 1;
+                    const col1 = Number.isFinite(ch) ? (ch + 1) : 1;
+
+                    const descLeft = containerName ? `${containerName}` : '';
+                    const descRight = modelPath ? `${modelPath}:${line1}` : `${line1}`;
+                    const description = [descLeft, descRight].filter(Boolean).join('  •  ');
+
+                    return {
+                        type: 'symbol',
+                        id: `symbol:${symbolState.mode}:${idx}:${modelPath}:${name}`,
+                        label: name || '(anonymous)',
+                        description,
+                        icon: symbolKindIcon(kind),
+                        action: () => {
+                            if (!modelPath) return;
+                            onOpenFile?.(modelPath, { groupId, mode: 'persistent' });
+                            setTimeout(() => {
+                                try {
+                                    window.dispatchEvent(new CustomEvent('workbench:revealInActiveEditor', { detail: { line: line1, column: col1 } }));
+                                } catch {
+                                    // ignore
+                                }
+                            }, 50);
+                        },
+                    };
+                });
+
+                setSymbolItems(mapped);
+            } catch {
+                if (requestId === symbolReqRef.current) setSymbolItems([]);
+            } finally {
+                if (requestId === symbolReqRef.current) setSymbolLoading(false);
+            }
+        }, 120);
+
+        return () => clearTimeout(timer);
+    }, [
+        activeGroupId,
+        editorNavState.group,
+        editorNavState.groupId,
+        isOpen,
+        onOpenFile,
+        onSearchDocumentSymbols,
+        onSearchWorkspaceSymbols,
+        symbolState.mode,
+        symbolState.text,
+    ]);
+
     const getFileIcon = (path) => {
         const ext = String(path || '').split('.').pop()?.toLowerCase();
         const map = {
@@ -70,6 +195,7 @@ const CommandPalette = ({
     };
 
     const filteredItems = useMemo(() => {
+        if (symbolState.mode) return symbolItems;
         const items = [];
         const q = query.toLowerCase();
 
@@ -107,8 +233,9 @@ const CommandPalette = ({
             return items;
         }
 
-        const inCommandMode = query.trim().startsWith('>');
-        const commandQuery = inCommandMode ? query.trim().slice(1).trim().toLowerCase() : '';
+        const trimmedQuery = query.trim();
+        const inCommandMode = trimmedQuery.startsWith('>') || trimmedQuery.startsWith('/');
+        const commandQuery = inCommandMode ? trimmedQuery.slice(1).trim().toLowerCase() : '';
         
         const pushIfMatch = (it) => {
             if (!inCommandMode) {
@@ -167,9 +294,18 @@ const CommandPalette = ({
                 id: 'go-to-symbol',
                 label: 'Go to Symbol in Editor @',
                 description: 'Jump to symbol',
-                action: () => {},
+                action: () => setQuery('@ '),
                 icon: 'codicon-symbol-class',
                 shortcut: 'Ctrl + Shift + O'
+            });
+             pushIfMatch({
+                type: 'action',
+                id: 'go-to-workspace-symbol',
+                label: 'Go to Symbol in Workspace #',
+                description: 'Search workspace symbols',
+                action: () => setQuery('# '),
+                icon: 'codicon-symbol-folder',
+                shortcut: 'Ctrl + T'
             });
 
             pushIfMatch({
@@ -191,6 +327,146 @@ const CommandPalette = ({
                 pushIfMatch({ type: 'action', id: 'ai-modify', label: 'AI: Modify with Instructions…', description: 'Edit using a custom instruction', action: () => aiInvoker.run('modify'), icon: 'codicon-edit', shortcut: 'Ctrl + Alt + M' });
                 pushIfMatch({ type: 'action', id: 'ai-docs', label: 'AI: Generate Docs', description: 'Generate Markdown docs', action: () => aiInvoker.run('generateDocs'), icon: 'codicon-book', shortcut: 'Ctrl + Alt + D' });
             }
+
+            // /plugin commands (install/uninstall/enable/disable/doctor)
+            const isPluginCmd = commandQuery === 'plugin' || commandQuery.startsWith('plugin ');
+            if (isPluginCmd) {
+                const parts = commandQuery.split(/\s+/).filter(Boolean);
+                const sub = parts[1] || '';
+                const arg = parts.slice(2).join(' ').trim();
+
+                const runInstall = async (q) => {
+                    const wanted = String(q || '').trim();
+                    if (!wanted) return;
+                    outputService.append('LSP', `[PLUGIN] search+install: ${wanted}`);
+                    const res = await pluginsService.search(wanted, ['official', 'github', 'openvsx']).catch((err) => ({ ok: false, items: [], error: err }));
+                    const items = Array.isArray(res?.items) ? res.items : [];
+                    const exact = items.find((it) => String(it?.id || '') === wanted) || (items.length === 1 ? items[0] : null);
+                    if (!exact) {
+                        outputService.append('LSP', `[PLUGIN] not found or ambiguous: ${wanted}`);
+                        return;
+                    }
+                    await pluginsService.install({ providerId: exact?.source?.providerId || '', id: exact.id, version: exact.version || '' });
+                    // Auto-enable official plugins for immediate LSP.
+                    if (String(exact?.trust || '') === 'official') {
+                        await pluginsService.enable(exact.id).catch(() => {});
+                    }
+                    outputService.append('LSP', `[PLUGIN] installed: ${exact.id}`);
+                };
+
+                const runEnable = async (q) => {
+                    const wanted = String(q || '').trim();
+                    if (!wanted) return;
+                    const installed = await pluginsService.listInstalled().catch(() => ({ ok: false, items: [] }));
+                    const it = (installed?.items || []).find((x) => String(x?.id || '') === wanted);
+                    if (!it) return outputService.append('LSP', `[PLUGIN] not installed: ${wanted}`);
+                    if (String(it?.trust || '') !== 'official') {
+                        const ok = globalThis.confirm?.(`Trust and enable ${it.trust} plugin: ${wanted}?`);
+                        if (!ok) return;
+                        await pluginsService.enable(wanted, it.trust);
+                    } else {
+                        await pluginsService.enable(wanted);
+                    }
+                    outputService.append('LSP', `[PLUGIN] enabled: ${wanted}`);
+                };
+
+                const runDisable = async (q) => {
+                    const wanted = String(q || '').trim();
+                    if (!wanted) return;
+                    await pluginsService.disable(wanted);
+                    outputService.append('LSP', `[PLUGIN] disabled: ${wanted}`);
+                };
+
+                const runUninstall = async (q) => {
+                    const wanted = String(q || '').trim();
+                    if (!wanted) return;
+                    const ok = globalThis.confirm?.(`Uninstall plugin: ${wanted}?`);
+                    if (!ok) return;
+                    await pluginsService.uninstall(wanted);
+                    outputService.append('LSP', `[PLUGIN] uninstalled: ${wanted}`);
+                };
+
+                const runDoctor = async (q) => {
+                    const wanted = String(q || '').trim();
+                    const res = await pluginsService.doctor(wanted || undefined).catch((err) => ({ ok: false, error: err }));
+                    outputService.append('LSP', `[PLUGIN] doctor: ${wanted || 'all'}`);
+                    outputService.append('LSP', JSON.stringify(res, null, 2));
+                };
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-help',
+                    label: 'Plugin: Commands',
+                    description: 'plugin install|uninstall|enable|disable|doctor <id>',
+                    action: () => {},
+                    icon: 'codicon-extensions',
+                });
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-install',
+                    label: `Plugin: Install ${arg || '<id>'}`,
+                    description: 'Search across providers and install',
+                    action: () => runInstall(arg),
+                    icon: 'codicon-cloud-download',
+                });
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-enable',
+                    label: `Plugin: Enable ${arg || '<id>'}`,
+                    description: 'Enable an installed plugin',
+                    action: () => runEnable(arg),
+                    icon: 'codicon-check',
+                });
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-disable',
+                    label: `Plugin: Disable ${arg || '<id>'}`,
+                    description: 'Disable an installed plugin',
+                    action: () => runDisable(arg),
+                    icon: 'codicon-circle-slash',
+                });
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-uninstall',
+                    label: `Plugin: Uninstall ${arg || '<id>'}`,
+                    description: 'Remove an installed plugin',
+                    action: () => runUninstall(arg),
+                    icon: 'codicon-trash',
+                });
+
+                pushIfMatch({
+                    type: 'action',
+                    id: 'plugin-doctor',
+                    label: `Plugin: Doctor ${arg || ''}`.trim(),
+                    description: 'Check plugin health/deps',
+                    action: () => runDoctor(arg),
+                    icon: 'codicon-heart',
+                });
+
+                if (!sub) {
+                    // convenience shortcuts
+                    pushIfMatch({
+                        type: 'action',
+                        id: 'plugin-install-tsls',
+                        label: 'Plugin: Install tsls (TypeScript)',
+                        description: 'Install typescript-language-server (official)',
+                        action: () => runInstall('tsls'),
+                        icon: 'codicon-file-code',
+                    });
+                    pushIfMatch({
+                        type: 'action',
+                        id: 'plugin-install-pyright',
+                        label: 'Plugin: Install pyright (Python)',
+                        description: 'Install pyright-langserver (official)',
+                        action: () => runInstall('pyright'),
+                        icon: 'codicon-symbol-keyword',
+                    });
+                }
+            }
         }
 
         if (!inCommandMode && query) {
@@ -210,7 +486,7 @@ const CommandPalette = ({
         }
 
         return items;
-    }, [aiInvoker, editorNavState, files, onCloseEditor, onOpenFile, onSearchText, query]);
+    }, [aiInvoker, editorNavState, files, onCloseEditor, onOpenFile, onSearchText, query, symbolItems, symbolState.mode]);
 
     useEffect(() => {
         setSelectedIndex(0);
@@ -228,7 +504,11 @@ const CommandPalette = ({
             if (filteredItems[selectedIndex]) {
                 filteredItems[selectedIndex].action();
                 // Only close if it's a real action, not just a hint
-                if (filteredItems[selectedIndex].id !== 'search-files' && filteredItems[selectedIndex].id !== 'show-commands' && filteredItems[selectedIndex].id !== 'editor-nav') {
+                if (filteredItems[selectedIndex].id !== 'search-files'
+                    && filteredItems[selectedIndex].id !== 'show-commands'
+                    && filteredItems[selectedIndex].id !== 'editor-nav'
+                    && filteredItems[selectedIndex].id !== 'go-to-symbol'
+                    && filteredItems[selectedIndex].id !== 'go-to-workspace-symbol') {
                      onClose();
                 }
             }
@@ -251,7 +531,9 @@ const CommandPalette = ({
 
     const palettePlaceholder = editorNavState.isEditorNav
         ? 'edt <filter> (Editor Navigation)'
-        : 'Search files by name (append :<line> to go to line)';
+        : (symbolState.mode === 'document'
+            ? 'Go to Symbol in Editor: @ <query>'
+            : (symbolState.mode === 'workspace' ? 'Go to Symbol in Workspace: # <query>' : 'Search files by name (append :<line> to go to line)'));
 
     const groupLabel = editorNavState.groupIndex >= 0
         ? `第 ${editorNavState.groupIndex + 1} 组`
@@ -348,7 +630,11 @@ const CommandPalette = ({
                             className={`command-item ${index === selectedIndex ? 'selected' : ''}`}
                             onClick={() => {
                                 item.action();
-                                if (item.id !== 'search-files' && item.id !== 'show-commands' && item.id !== 'editor-nav') {
+                                if (item.id !== 'search-files'
+                                    && item.id !== 'show-commands'
+                                    && item.id !== 'editor-nav'
+                                    && item.id !== 'go-to-symbol'
+                                    && item.id !== 'go-to-workspace-symbol') {
                                     onClose();
                                 }
                             }}
@@ -418,7 +704,7 @@ const CommandPalette = ({
                     ))}
                     {filteredItems.length === 0 && (
                         <div style={{ padding: '12px', color: 'var(--muted)', textAlign: 'center', fontSize: '13px' }}>
-                            No results found
+                            {symbolState.mode && symbolLoading ? 'Searching symbols…' : 'No results found'}
                         </div>
                     )}
                 </div>

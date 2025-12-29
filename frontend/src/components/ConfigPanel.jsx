@@ -6,6 +6,7 @@ import SectionCard from './settings/SectionCard';
 import SettingRow from './settings/SettingRow';
 import Switch from './settings/Switch';
 import { GeneralIcon, MenuIcon, PaletteIcon, SlidersIcon, ToolsIcon } from './settings/icons';
+import LspSettingsPage from './settings/LspSettingsPage';
 
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -103,7 +104,9 @@ function ConfigPanel({
   onOpenInEditor,
   fullscreen,
   onToggleFullscreen,
-  variant = 'modal'
+  variant = 'modal',
+  lspConfig,
+  onChangeLspConfig
 }) {
   const [activeTab, setActiveTab] = useState('app');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -317,6 +320,7 @@ function ConfigPanel({
       { id: 'app', label: language === 'zh' ? '通用' : 'General', icon: GeneralIcon },
       { id: 'appearance', label: language === 'zh' ? '外观' : 'Appearance', icon: PaletteIcon },
       { id: 'editor', label: language === 'zh' ? '编辑器' : 'Editor', icon: SlidersIcon },
+      { id: 'lsp', label: language === 'zh' ? 'LSP / 插件' : 'LSP / Plugins', icon: ToolsIcon },
       { id: 'general', label: language === 'zh' ? '模型与会话' : 'LLM & Session', icon: SlidersIcon },
       { id: 'embeddings', label: language === 'zh' ? '向量' : 'Embeddings', icon: SlidersIcon },
       { id: 'shortcuts', label: language === 'zh' ? '快捷键' : 'Shortcuts', icon: MenuIcon },
@@ -1200,6 +1204,14 @@ function ConfigPanel({
     );
   };
 
+  const renderLspPage = () => (
+    <LspSettingsPage
+      lspConfig={lspConfig}
+      onChangeLspConfig={onChangeLspConfig}
+      language={language}
+    />
+  );
+
   const page =
     activeTab === 'app'
       ? renderAppPage()
@@ -1207,6 +1219,8 @@ function ConfigPanel({
         ? renderAppearancePage()
         : activeTab === 'editor'
           ? renderEditorPage()
+        : activeTab === 'lsp'
+          ? renderLspPage()
         : activeTab === 'general'
           ? renderModelPage()
           : activeTab === 'embeddings'
