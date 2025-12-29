@@ -15,6 +15,17 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
 const DEFAULT_PROFILE = 'cmd';
+const USER_SETTINGS_KEY = 'terminal:settings:user';
+
+const DEFAULT_INTEGRATED_SETTINGS = {
+  fontFamily: 'Consolas, ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", "Courier New", monospace',
+  fontSize: 13,
+  lineHeight: 1.2,
+  cursorBlink: true,
+  cursorStyle: 'block',
+  scrollback: 4000,
+  convertEol: true,
+};
 
 const computeLabel = (base, existing) => {
   const name = String(base || DEFAULT_PROFILE) || DEFAULT_PROFILE;
@@ -60,6 +71,16 @@ const readCssVar = (name, fallback) => {
 };
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+const clampInt = (value, min, max) => {
+  const n = typeof value === 'string' ? Number.parseInt(value, 10) : (typeof value === 'number' ? value : NaN);
+  if (!Number.isFinite(n)) return min;
+  return clamp(Math.floor(n), min, max);
+};
+const clampNumber = (value, min, max) => {
+  const n = typeof value === 'string' ? Number(value) : (typeof value === 'number' ? value : NaN);
+  if (!Number.isFinite(n)) return min;
+  return clamp(n, min, max);
+};
 
 const readJson = (key, fallback) => {
   try {
@@ -77,7 +98,14 @@ const writeJson = (key, value) => {
   } catch {}
 };
 
-function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, isResizing = false }, ref) {
+function TerminalView({
+  workspacePath = '',
+  onStateChange,
+  terminalUi = null,
+  onTerminalUiChange,
+  autoConnect = true,
+  isResizing = false,
+}, ref) {
   const wsRef = useRef(null);
   const pendingCreateRef = useRef(new Map());
   const instanceRef = useRef(new Map()); // id -> { term, fit, search }
@@ -107,7 +135,10 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
   const [split, setSplit] = useState({ enabled: false, orientation: 'vertical', ids: [], size: 0.5 });
   const [dragTerminalId, setDragTerminalId] = useState('');
   const [ctxMenu, setCtxMenu] = useState(null);
-  const [profileSettingsOpen, setProfileSettingsOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTargetId, setRenameTargetId] = useState('');
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef(null);
   const [profileEditing, setProfileEditing] = useState(DEFAULT_PROFILE);
   const [profileEnvText, setProfileEnvText] = useState({ cmd: '', powershell: '', bash: '' });
   const [find, setFind] = useState({
@@ -127,6 +158,93 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
 
   const prefsKey = useMemo(() => `${storageBase}:prefs`, [storageBase]);
   const metaKey = useMemo(() => `${storageBase}:meta`, [storageBase]);
+  const settingsKey = useMemo(() => `${storageBase}:settings`, [storageBase]);
+
+  const normalizeIntegratedOverrides = useCallback((raw) => {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const next = {};
+    if (typeof src.fontFamily === 'string') next.fontFamily = String(src.fontFamily || '').trim();
+    if (src.fontSize != null) next.fontSize = clampInt(src.fontSize, 9, 24);
+    if (src.lineHeight != null) next.lineHeight = clampNumber(src.lineHeight, 1, 2);
+    if (typeof src.cursorBlink === 'boolean') next.cursorBlink = !!src.cursorBlink;
+    if (typeof src.cursorStyle === 'string') {
+      const v = String(src.cursorStyle || '').toLowerCase();
+      if (v === 'bar' || v === 'underline' || v === 'block') next.cursorStyle = v;
+    }
+    if (src.scrollback != null) next.scrollback = clampInt(src.scrollback, 100, 100000);
+    if (typeof src.convertEol === 'boolean') next.convertEol = !!src.convertEol;
+    if (typeof next.fontFamily === 'string' && !next.fontFamily) delete next.fontFamily;
+    return next;
+  }, []);
+
+  const normalizeIntegratedSettings = useCallback((raw) => {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const next = { ...DEFAULT_INTEGRATED_SETTINGS };
+    if (typeof src.fontFamily === 'string') next.fontFamily = String(src.fontFamily || '').trim() || next.fontFamily;
+    if (src.fontSize != null) next.fontSize = clampInt(src.fontSize, 9, 24);
+    if (src.lineHeight != null) next.lineHeight = clampNumber(src.lineHeight, 1, 2);
+    if (typeof src.cursorBlink === 'boolean') next.cursorBlink = !!src.cursorBlink;
+    if (typeof src.cursorStyle === 'string') {
+      const v = String(src.cursorStyle || '').toLowerCase();
+      next.cursorStyle = (v === 'bar' || v === 'underline' || v === 'block') ? v : next.cursorStyle;
+    }
+    if (src.scrollback != null) next.scrollback = clampInt(src.scrollback, 100, 100000);
+    if (typeof src.convertEol === 'boolean') next.convertEol = !!src.convertEol;
+    return next;
+  }, []);
+
+  const [userIntegratedSettings, setUserIntegratedSettings] = useState(() => normalizeIntegratedOverrides(readJson(USER_SETTINGS_KEY, null)));
+  const [workspaceIntegratedSettings, setWorkspaceIntegratedSettings] = useState(() => normalizeIntegratedOverrides(readJson(settingsKey, null)));
+
+  useEffect(() => {
+    setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(readJson(settingsKey, null)));
+  }, [normalizeIntegratedOverrides, settingsKey]);
+
+  useEffect(() => {
+    writeJson(USER_SETTINGS_KEY, userIntegratedSettings);
+  }, [userIntegratedSettings]);
+
+  useEffect(() => {
+    writeJson(settingsKey, workspaceIntegratedSettings);
+  }, [settingsKey, workspaceIntegratedSettings]);
+
+  const integratedSettings = useMemo(() => {
+    const user = userIntegratedSettings && typeof userIntegratedSettings === 'object' ? userIntegratedSettings : {};
+    const ws = workspaceIntegratedSettings && typeof workspaceIntegratedSettings === 'object' ? workspaceIntegratedSettings : {};
+    return normalizeIntegratedSettings({ ...DEFAULT_INTEGRATED_SETTINGS, ...user, ...ws });
+  }, [normalizeIntegratedSettings, userIntegratedSettings, workspaceIntegratedSettings]);
+
+  useEffect(() => {
+    const onSettingsChanged = (e) => {
+      const detail = e?.detail;
+      if (!detail || typeof detail !== 'object') return;
+
+      if (detail.userOverrides && typeof detail.userOverrides === 'object') {
+        setUserIntegratedSettings(normalizeIntegratedOverrides(detail.userOverrides));
+      }
+
+      if (detail.workspaceOverrides && typeof detail.workspaceOverrides === 'object') {
+        setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(detail.workspaceOverrides));
+      }
+
+      const prof = detail.profiles && typeof detail.profiles === 'object' ? detail.profiles : null;
+      const envText = prof?.envText && typeof prof.envText === 'object' ? prof.envText : null;
+      if (envText) {
+        setProfileEnvText((prev) => ({
+          ...(prev || { cmd: '', powershell: '', bash: '' }),
+          cmd: typeof envText.cmd === 'string' ? envText.cmd : (prev?.cmd || ''),
+          powershell: typeof envText.powershell === 'string' ? envText.powershell : (prev?.powershell || ''),
+          bash: typeof envText.bash === 'string' ? envText.bash : (prev?.bash || ''),
+        }));
+      }
+
+      const defaultProfile = typeof prof?.defaultProfile === 'string' ? String(prof.defaultProfile || '') : '';
+      if (defaultProfile) onTerminalUiChange?.({ profile: defaultProfile });
+    };
+
+    window.addEventListener('workbench:terminalSettingsChanged', onSettingsChanged);
+    return () => window.removeEventListener('workbench:terminalSettingsChanged', onSettingsChanged);
+  }, [normalizeIntegratedOverrides, onTerminalUiChange]);
 
   const writeClipboard = useCallback(async (text) => {
     const value = String(text || '');
@@ -299,6 +417,12 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
             bash: typeof envText.bash === 'string' ? envText.bash : (prev?.bash || ''),
           }));
         }
+        const defaultProfile = typeof prof?.defaultProfile === 'string' ? String(prof.defaultProfile || '') : '';
+        if (defaultProfile) onTerminalUiChange?.({ profile: defaultProfile });
+
+        const settings = data.settings && typeof data.settings === 'object' ? data.settings : null;
+        const integrated = settings?.integrated && typeof settings.integrated === 'object' ? settings.integrated : null;
+        if (integrated) setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(integrated));
       })
       .catch(() => {});
     return () => {
@@ -325,13 +449,17 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
           },
           profiles: {
             envText: profileEnvText,
+            defaultProfile: String(terminalUi?.profile || DEFAULT_PROFILE),
+          },
+          settings: {
+            integrated: workspaceIntegratedSettings,
           },
           updatedAt: Date.now(),
         }),
       }).catch(() => {});
     }, 500);
     return () => window.clearTimeout(t);
-  }, [profileEnvText, split.enabled, split.ids, split.orientation, split.size, workspacePath]);
+  }, [profileEnvText, split.enabled, split.ids, split.orientation, split.size, terminalUi?.profile, workspaceIntegratedSettings, workspacePath]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof MutationObserver === 'undefined') return undefined;
@@ -351,6 +479,27 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
       try { inst.term.refresh(0, Math.max(0, inst.term.rows - 1)); } catch {}
     });
   }, [theme]);
+
+  useEffect(() => {
+    instanceRef.current.forEach((inst) => {
+      try { inst.term.options.fontFamily = integratedSettings.fontFamily; } catch {}
+      try { inst.term.options.fontSize = integratedSettings.fontSize; } catch {}
+      try { inst.term.options.lineHeight = integratedSettings.lineHeight; } catch {}
+      try { inst.term.options.cursorBlink = integratedSettings.cursorBlink; } catch {}
+      try { inst.term.options.cursorStyle = integratedSettings.cursorStyle; } catch {}
+      try { inst.term.options.scrollback = integratedSettings.scrollback; } catch {}
+      try { inst.term.options.convertEol = integratedSettings.convertEol; } catch {}
+      try { inst.term.refresh(0, Math.max(0, inst.term.rows - 1)); } catch {}
+    });
+  }, [
+    integratedSettings.convertEol,
+    integratedSettings.cursorBlink,
+    integratedSettings.cursorStyle,
+    integratedSettings.fontFamily,
+    integratedSettings.fontSize,
+    integratedSettings.lineHeight,
+    integratedSettings.scrollback,
+  ]);
 
   const emitState = useCallback((next) => {
     onStateChange?.(next);
@@ -495,27 +644,34 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
   }, [ctxMenu]);
 
   useEffect(() => {
-    if (!profileSettingsOpen) return undefined;
+    if (!renameOpen) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') setProfileSettingsOpen(false);
+      if (e.key === 'Escape') setRenameOpen(false);
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [profileSettingsOpen]);
+    const t = window.setTimeout(() => {
+      try { renameInputRef.current?.focus?.(); } catch {}
+      try { renameInputRef.current?.select?.(); } catch {}
+    }, 0);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [renameOpen]);
 
   const ensureXterm = useCallback((meta) => {
     if (!meta?.id) return;
     if (instanceRef.current.has(meta.id)) return;
 
     const term = new Terminal({
-      fontFamily: 'Consolas, ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", "Courier New", monospace',
-      fontSize: 13,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      cursorStyle: 'block',
-      convertEol: true,
+      fontFamily: integratedSettings.fontFamily,
+      fontSize: integratedSettings.fontSize,
+      lineHeight: integratedSettings.lineHeight,
+      cursorBlink: integratedSettings.cursorBlink,
+      cursorStyle: integratedSettings.cursorStyle,
+      convertEol: integratedSettings.convertEol,
       theme,
-      scrollback: 4000,
+      scrollback: integratedSettings.scrollback,
       allowProposedApi: true,
     });
     const fit = new FitAddon();
@@ -601,7 +757,7 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
     });
 
     instanceRef.current.set(meta.id, { term, fit, search, resultsDispose });
-  }, [openExternal, openFind, persistMeta, readClipboard, send, theme, writeClipboard]);
+  }, [integratedSettings, openExternal, openFind, persistMeta, readClipboard, send, theme, writeClipboard]);
 
   const openToContainerIfReady = useCallback((id) => {
     const inst = instanceRef.current.get(id);
@@ -731,13 +887,27 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
     if (!id) return;
     const meta = terminals.find((t) => t.id === id);
     const current = meta?.title || meta?.label || meta?.profile || '';
-    const next = window.prompt('重命名终端', current);
-    if (next == null) return;
-    const value = String(next).trim();
-    if (!value) return;
+    setRenameTargetId(id);
+    setRenameDraft(String(current || ''));
+    setRenameOpen(true);
+  }, [activeId, terminals]);
+
+  const applyRename = useCallback(() => {
+    const id = String(renameTargetId || activeId || '');
+    if (!id) return;
+    const value = String(renameDraft || '').trim();
+    if (!value) {
+      setRenameOpen(false);
+      return;
+    }
     persistMeta(id, { title: value });
-    setTerminals((prev) => prev.map((t) => (t.id === id ? { ...t, title: value } : t)));
-  }, [activeId, persistMeta, terminals]);
+    setTerminals((prev) => {
+      const others = prev.filter((t) => t.id !== id);
+      const label = computeLabel(value, others);
+      return prev.map((t) => (t.id === id ? { ...t, title: value, label } : t));
+    });
+    setRenameOpen(false);
+  }, [activeId, persistMeta, renameDraft, renameTargetId]);
 
   const moveTerminalInList = useCallback((fromId, toId) => {
     const from = String(fromId || '');
@@ -834,10 +1004,6 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
     findNext: () => runFind('next'),
     findPrev: () => runFind('prev'),
     renameActive,
-    openProfileSettings: (profile) => {
-      setProfileEditing(String(profile || DEFAULT_PROFILE));
-      setProfileSettingsOpen(true);
-    },
     copySelection: copySelectionActive,
     pasteFromClipboard: pasteFromClipboardActive,
     focus: () => {
@@ -857,8 +1023,6 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
     killActive,
     openFind,
     pasteFromClipboardActive,
-    profileEditing,
-    profileSettingsOpen,
     renameActive,
     runFind,
     scrollLock,
@@ -1327,43 +1491,36 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
           </div>
         ) : null}
 
-        {profileSettingsOpen ? (
-          <div className="vscode-terminal-modal-backdrop" onMouseDown={() => setProfileSettingsOpen(false)}>
-            <div className="vscode-terminal-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Terminal Profile Settings">
+        {renameOpen ? (
+          <div className="vscode-terminal-modal-backdrop" onMouseDown={() => setRenameOpen(false)}>
+            <div className="vscode-terminal-modal vscode-terminal-modal-small" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Rename Terminal">
               <div className="vscode-terminal-modal-header">
-                <div className="vscode-terminal-modal-title">Terminal Profile 配置</div>
-                <button type="button" className="bottom-panel-icon-btn" onClick={() => setProfileSettingsOpen(false)} title="关闭">
+                <div className="vscode-terminal-modal-title">重命名终端</div>
+                <button type="button" className="bottom-panel-icon-btn" onClick={() => setRenameOpen(false)} title="关闭">
                   <span className="codicon codicon-close" aria-hidden />
                 </button>
               </div>
               <div className="vscode-terminal-modal-row">
-                <div className="vscode-terminal-modal-label">Profile</div>
-                <select
-                  className="ghost-input bottom-panel-select"
-                  value={profileEditing}
-                  onChange={(e) => setProfileEditing(e.target.value)}
-                >
-                  <option value="cmd">cmd</option>
-                  <option value="powershell">powershell</option>
-                  <option value="bash">bash</option>
-                </select>
+                <div className="vscode-terminal-modal-label">名称</div>
+                <input
+                  ref={renameInputRef}
+                  className="ghost-input vscode-terminal-modal-input"
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      applyRename();
+                    }
+                  }}
+                  placeholder="Terminal"
+                />
               </div>
-              <div className="vscode-terminal-modal-row">
-                <div className="vscode-terminal-modal-label">Env</div>
-                <div className="vscode-terminal-modal-hint">每行一个：`KEY=VALUE`（# 开头为注释）</div>
-              </div>
-              <textarea
-                className="vscode-terminal-modal-textarea"
-                value={profileEnvText?.[profileEditing] || ''}
-                onChange={(e) => setProfileEnvText((prev) => ({ ...(prev || {}), [profileEditing]: e.target.value }))}
-                placeholder={`例如：\nHTTP_PROXY=http://127.0.0.1:7890\nHTTPS_PROXY=http://127.0.0.1:7890`}
-                spellCheck="false"
-              />
               <div className="vscode-terminal-modal-actions">
-                <button type="button" className="ghost-btn" onClick={() => setProfileEnvText({ cmd: '', powershell: '', bash: '' })}>
-                  清空全部
+                <button type="button" className="ghost-btn" onClick={() => setRenameOpen(false)}>
+                  取消
                 </button>
-                <button type="button" className="primary-btn" onClick={() => setProfileSettingsOpen(false)}>
+                <button type="button" className="primary-btn" onClick={applyRename}>
                   保存
                 </button>
               </div>
@@ -1394,14 +1551,9 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
           <div className="vscode-terminal-list">
             {terminals.map((t, idx) => (
               // codicons: terminal, terminal-bash, terminal-powershell, terminal-cmd
-              <button
+              <div
                 key={t.id}
-                type="button"
                 className={`vscode-terminal-item ${t.id === activeId ? 'active' : ''}`}
-                onClick={() => setActiveId(t.id)}
-                draggable
-                onDragStart={() => setDragTerminalId(t.id)}
-                onDragEnd={() => setDragTerminalId('')}
                 onDragOver={(e) => {
                   if (!dragTerminalId || dragTerminalId === t.id) return;
                   e.preventDefault();
@@ -1412,18 +1564,40 @@ function TerminalView({ workspacePath = '', onStateChange, autoConnect = true, i
                   moveTerminalInList(dragTerminalId, t.id);
                   setDragTerminalId('');
                 }}
-                title={t.cwd || t.title}
               >
-                <span
-                  className={`codicon ${
-                    String(t.profile || '').toLowerCase().includes('powershell') ? 'codicon-terminal-powershell'
-                      : (String(t.profile || '').toLowerCase().includes('bash') ? 'codicon-terminal-bash'
-                        : (String(t.profile || '').toLowerCase().includes('cmd') ? 'codicon-terminal-cmd' : 'codicon-terminal'))
-                  }`}
-                  aria-hidden
-                />
-                <span className="vscode-terminal-item-title">{t.title || t.label || t.profile || `terminal-${idx + 1}`}</span>
-              </button>
+                <button
+                  type="button"
+                  className="vscode-terminal-item-main"
+                  onClick={() => setActiveId(t.id)}
+                  draggable
+                  onDragStart={() => setDragTerminalId(t.id)}
+                  onDragEnd={() => setDragTerminalId('')}
+                  title={t.cwd || t.title}
+                >
+                  <span
+                    className={`codicon ${
+                      String(t.profile || '').toLowerCase().includes('powershell') ? 'codicon-terminal-powershell'
+                        : (String(t.profile || '').toLowerCase().includes('bash') ? 'codicon-terminal-bash'
+                          : (String(t.profile || '').toLowerCase().includes('cmd') ? 'codicon-terminal-cmd' : 'codicon-terminal'))
+                    }`}
+                    aria-hidden
+                  />
+                  <span className="vscode-terminal-item-title">{t.title || t.label || t.profile || `terminal-${idx + 1}`}</span>
+                </button>
+                <button
+                  type="button"
+                  className="vscode-terminal-item-close"
+                  title="删除终端"
+                  aria-label="删除终端"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    disposeTerminal(t.id);
+                  }}
+                >
+                  <span className="codicon codicon-close" aria-hidden />
+                </button>
+              </div>
             ))}
           </div>
         </div>

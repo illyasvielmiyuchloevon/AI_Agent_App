@@ -5,6 +5,7 @@ import ExplorerPanel from './components/ExplorerPanel';
 import ChatArea from './components/ChatArea';
 import LogPanel from './components/LogPanel';
 import ConfigPanel from './components/ConfigPanel';
+import TerminalSettingsTab from './components/TerminalSettingsTab';
 import TitleBar from './components/TitleBar';
 import EditorArea from './workbench/layout/EditorArea';
 import WorkbenchShell from './workbench/WorkbenchShell';
@@ -560,6 +561,7 @@ const initialWorkspaceState = {
 };
 
 const SETTINGS_TAB_PATH = '__system__/settings';
+const TERMINAL_SETTINGS_TAB_PATH = '__system__/terminal-settings';
 const DIFF_TAB_PREFIX = '__diff__/';
 
 function App() {
@@ -1106,13 +1108,14 @@ function App() {
               const groupId = String(activeGroupIdRef.current || 'group-1');
               const groups = editorGroupsRef.current || [];
               const group = Array.isArray(groups) ? groups.find((g) => String(g?.id || '') === groupId) : null;
-              const openTabs = Array.isArray(group?.openTabs) ? group.openTabs : [];
-              const isSpecialTab = (p) =>
-                p === WELCOME_TAB_PATH
-                || p === SETTINGS_TAB_PATH
-                || (DIFF_TAB_PREFIX && String(p || '').startsWith(DIFF_TAB_PREFIX));
-              const hasRealEditor = openTabs.some((p) => p && !isSpecialTab(p));
-              if (!hasRealEditor) return;
+               const openTabs = Array.isArray(group?.openTabs) ? group.openTabs : [];
+               const isSpecialTab = (p) =>
+                 p === WELCOME_TAB_PATH
+                 || p === SETTINGS_TAB_PATH
+                 || p === TERMINAL_SETTINGS_TAB_PATH
+                 || (DIFF_TAB_PREFIX && String(p || '').startsWith(DIFF_TAB_PREFIX));
+               const hasRealEditor = openTabs.some((p) => p && !isSpecialTab(p));
+               if (!hasRealEditor) return;
 
               e.preventDefault();
               setCommandPaletteInitialQuery('edt ');
@@ -1472,6 +1475,7 @@ function App() {
                   if (!p) return true;
                   if (p === WELCOME_TAB_PATH) return true;
                   if (p === SETTINGS_TAB_PATH) return true;
+                  if (p === TERMINAL_SETTINGS_TAB_PATH) return true;
                   if (DIFF_TAB_PREFIX && p.startsWith(DIFF_TAB_PREFIX)) return true;
                   return false;
               };
@@ -3235,6 +3239,7 @@ function App() {
       if (!filePath) return;
       const isSpecialTab = filePath === WELCOME_TAB_PATH
         || filePath === SETTINGS_TAB_PATH
+        || filePath === TERMINAL_SETTINGS_TAB_PATH
         || (filePath && filePath.startsWith(DIFF_TAB_PREFIX));
 
       if (!isSpecialTab && !workspaceDriver) {
@@ -3346,6 +3351,7 @@ function App() {
 
           const isSpecialTab = tabPath === WELCOME_TAB_PATH
             || tabPath === SETTINGS_TAB_PATH
+            || tabPath === TERMINAL_SETTINGS_TAB_PATH
             || (tabPath && tabPath.startsWith(DIFF_TAB_PREFIX));
 
           const now = Date.now();
@@ -3549,7 +3555,7 @@ function App() {
           const { groups, activeGroupId } = ensureEditorGroups(prev);
           const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
 
-          const isSpecialTab = (p) => p === WELCOME_TAB_PATH || p === SETTINGS_TAB_PATH || (p && p.startsWith(DIFF_TAB_PREFIX));
+          const isSpecialTab = (p) => p === WELCOME_TAB_PATH || p === SETTINGS_TAB_PATH || p === TERMINAL_SETTINGS_TAB_PATH || (p && p.startsWith(DIFF_TAB_PREFIX));
           const isDirty = (p) => !!(prev.files || []).find((f) => f.path === p)?.dirty;
 
           const requestedGroupId = String(payload?.groupId || '').trim();
@@ -5009,6 +5015,13 @@ function App() {
                       fullscreen={false}
                       onToggleFullscreen={() => {}}
                       variant="inline"
+                    />
+                  )}
+                  terminalSettingsTabPath={TERMINAL_SETTINGS_TAB_PATH}
+                  renderTerminalSettingsTab={() => (
+                    <TerminalSettingsTab
+                      workspacePath={backendWorkspaceRoot}
+                      onClose={() => closeFile(TERMINAL_SETTINGS_TAB_PATH)}
                     />
                   )}
                   taskReview={taskReview}

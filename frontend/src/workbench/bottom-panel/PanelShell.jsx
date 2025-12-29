@@ -23,7 +23,7 @@ const shallowEqual = (a, b) => {
   return true;
 };
 
-export default function PanelShell({ workspacePath = '', onOpenFile }) {
+export default function PanelShell({ workspacePath = '', onOpenFile, terminalSettingsTabPath = '' }) {
   const state = useSyncExternalStore(panelStore.subscribe, panelStore.getSnapshot, panelStore.getSnapshot);
   const { activeViewId, collapsed, hidden, maximized, height } = state;
 
@@ -54,6 +54,16 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       return shallowEqual(prev, next) ? prev : next;
     });
   }, []);
+
+  useEffect(() => {
+    const onPatch = (e) => {
+      const detail = e?.detail;
+      if (!detail || typeof detail !== 'object') return;
+      mergeTerminalUi(detail);
+    };
+    window.addEventListener('workbench:terminalUiPatch', onPatch);
+    return () => window.removeEventListener('workbench:terminalUiPatch', onPatch);
+  }, [mergeTerminalUi]);
 
   const onTerminalStateChange = useCallback((next) => {
     mergeTerminalUi(next || {});
@@ -161,12 +171,14 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
       workspacePath,
       onStateChange: onTerminalStateChange,
       terminalRef,
+      terminalUi,
+      onTerminalUiChange: (patch) => mergeTerminalUi(patch || {}),
       autoConnect: activeViewId === 'terminal' && !hidden && !collapsed,
       isResizing,
     },
     ports: {},
     gitlens: { workspacePath, onOpenFile, isResizing },
-  }), [activeViewId, collapsed, hidden, isResizing, onOpenFile, onTerminalStateChange, outputChannelId, outputFilter, problemsFilter, workspacePath]);
+  }), [activeViewId, collapsed, hidden, isResizing, mergeTerminalUi, onOpenFile, onTerminalStateChange, outputChannelId, outputFilter, problemsFilter, terminalRef, terminalUi, workspacePath]);
 
   const toolbarPropsById = useMemo(() => ({
     problems: {
@@ -190,6 +202,8 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
         getTerminalUi: () => terminalUi,
         setTerminalUi: (patch) => mergeTerminalUi(patch || {}),
         onCloseOnEmpty: () => { terminalCloseOnEmptyRef.current = true; },
+        onOpenFile,
+        terminalSettingsTabPath,
       },
     },
     ports: {
@@ -202,7 +216,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
         refresh: () => gitService.refresh({ cwd: workspacePath }).catch(() => {}),
       },
     },
-  }), [mergeTerminalUi, outputChannelId, outputFilter, problemsFilter, terminalUi, workspacePath]);
+  }), [mergeTerminalUi, onOpenFile, outputChannelId, outputFilter, problemsFilter, terminalSettingsTabPath, terminalUi, workspacePath]);
 
   useEffect(() => {
     const ui = terminalUi || {};
@@ -250,6 +264,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile }) {
     <div
       ref={panelRef}
       className={`bottom-panel ${collapsed ? 'collapsed' : ''} ${maximized ? 'maximized' : ''} ${hidden ? 'hidden' : ''} ${isResizing ? 'resizing' : ''}`}
+      data-active-view={activeViewId}
       style={{ height: appliedHeight }}
     >
       {!hidden ? <div className="bottom-panel-resizer" onPointerDown={onResizerPointerDown} title="拖动调整高度" /> : null}

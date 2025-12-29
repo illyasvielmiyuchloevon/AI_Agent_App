@@ -1413,6 +1413,11 @@ input:focus, select:focus, textarea:focus {
   user-select: none;
 }
 
+.bottom-panel[data-active-view="terminal"] .bottom-panel-bar {
+  border-bottom: none;
+  background: var(--panel);
+}
+
 .bottom-panel-tabs {
   display: flex;
   align-items: stretch;
@@ -1532,6 +1537,47 @@ input:focus, select:focus, textarea:focus {
 .bottom-panel-icon-btn.active {
   background: var(--surface-hover-2);
   opacity: 1;
+}
+
+.terminal-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.terminal-toolbar-group .bottom-panel-icon-btn {
+  border-radius: 0;
+  width: 28px;
+}
+
+.terminal-toolbar-split {
+  width: 22px !important;
+  border-left: 1px solid var(--border);
+}
+
+.terminal-toolbar-select {
+  min-width: 170px;
+}
+
+.vscode-terminal-toolbar-menu {
+  min-width: 260px;
+}
+
+.vscode-terminal-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vscode-terminal-menu-kbd {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.9;
 }
 
 .bottom-panel-sep {
@@ -1824,6 +1870,7 @@ input:focus, select:focus, textarea:focus {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 190px;
+  position: relative;
 }
 
 .vscode-terminal-shell.single {
@@ -1985,6 +2032,114 @@ input:focus, select:focus, textarea:focus {
   padding: 18px;
 }
 
+.terminal-settings-tab {
+  height: 100%;
+  background: var(--settings-page-bg);
+  overflow: hidden;
+}
+
+.terminal-settings-tab .settings-page[data-variant="inline"] {
+  background: transparent;
+  padding: 16px;
+  height: 100%;
+}
+
+.terminal-settings-tab .settings-page[data-variant="inline"] .settings-sidebar,
+.terminal-settings-tab .settings-page[data-variant="inline"] .settings-main {
+  background: var(--settings-panel-bg);
+  border: 1px solid var(--settings-border);
+  border-radius: var(--settings-card-radius);
+  box-shadow: var(--settings-card-shadow);
+}
+
+.terminal-settings-tab .settings-sidebar {
+  max-height: 100%;
+}
+
+.terminal-settings-toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.terminal-settings-scope {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--settings-border);
+  border-radius: 8px;
+  overflow: hidden;
+  height: 32px;
+  background: var(--settings-panel-bg);
+}
+
+.terminal-settings-scope-tab {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--settings-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-settings-scope-tab.active {
+  background: var(--settings-row-hover);
+  color: var(--text);
+}
+
+.terminal-settings-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.terminal-settings-input {
+  width: min(420px, 52vw);
+  height: 34px;
+}
+
+.terminal-settings-select {
+  height: 34px;
+  min-width: 220px;
+}
+
+.terminal-settings-number {
+  height: 34px;
+  width: 140px;
+}
+
+.terminal-settings-reset {
+  height: 34px;
+  padding: 0 10px;
+  font-size: 0.86rem;
+}
+
+.terminal-settings-profiles-env {
+  width: min(560px, 58vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.terminal-settings-textarea {
+  min-height: 150px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--settings-border);
+  border-radius: 10px;
+  background: var(--settings-card-bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.terminal-settings-main {
+  padding-bottom: 8px;
+}
+
 .vscode-terminal-modal {
   width: min(640px, 92vw);
   max-height: min(520px, 80vh);
@@ -1995,6 +2150,17 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.vscode-terminal-modal.vscode-terminal-modal-small {
+  width: min(460px, 92vw);
+  max-height: 240px;
+}
+
+.vscode-terminal-modal-input {
+  height: 34px;
+  flex: 1;
+  min-width: 0;
 }
 
 .vscode-terminal-modal-header {
@@ -2123,6 +2289,53 @@ input:focus, select:focus, textarea:focus {
   cursor: pointer;
   text-align: left;
   font-size: 12px;
+}
+
+.vscode-terminal-item-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: inherit;
+}
+
+.vscode-terminal-item-close {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.vscode-terminal-item:hover .vscode-terminal-item-close,
+.vscode-terminal-item.active .vscode-terminal-item-close,
+.vscode-terminal-item:focus-within .vscode-terminal-item-close {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.vscode-terminal-item-close:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .vscode-terminal-item:hover {
