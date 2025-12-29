@@ -785,6 +785,68 @@ class LspManager {
     }
   }
 
+  async inlayHintResolve(serverId, hint, docUri, { timeoutMs = 4000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(docUri || '');
+    const serverUri = clientUri ? await this._mapClientUriToServerUri(s, clientUri) : '';
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = serverUri ? await this._getTextForServerUri(s, serverUri) : '';
+
+    const item = hint && typeof hint === 'object' ? hint : {};
+    const serverItem = { ...item };
+    if (serverItem.position) serverItem.position = convertPosition(text, serverItem.position, 'utf-16', serverEnc);
+    if (Array.isArray(serverItem.textEdits)) {
+      serverItem.textEdits = serverItem.textEdits.map((e) => this._convertTextEdit(text, e, 'utf-16', serverEnc));
+    }
+    if (Array.isArray(serverItem.label)) {
+      serverItem.label = await Promise.all(serverItem.label.map(async (p) => {
+        if (!p || typeof p !== 'object' || !p.location) return p;
+        const loc = p.location;
+        const locClientUri = String(loc.uri || '');
+        const locServerUri = await this._mapClientUriToServerUri(s, locClientUri);
+        const locText = locServerUri ? await this._getTextForServerUri(s, locServerUri) : '';
+        return {
+          ...p,
+          location: {
+            ...loc,
+            uri: locServerUri,
+            range: loc.range ? convertRange(locText, loc.range, 'utf-16', serverEnc) : loc.range,
+          },
+        };
+      }));
+    }
+
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('inlayHint/resolve', serverItem, { timeoutMs, cancelToken: cts?.token });
+      if (!result || typeof result !== 'object') return result;
+      const next = { ...result };
+      if (next.position) next.position = convertPosition(text, next.position, serverEnc, 'utf-16');
+      if (Array.isArray(next.textEdits)) next.textEdits = next.textEdits.map((e) => this._convertTextEdit(text, e, serverEnc, 'utf-16'));
+      if (Array.isArray(next.label)) {
+        next.label = await Promise.all(next.label.map(async (p) => {
+          if (!p || typeof p !== 'object' || !p.location) return p;
+          const loc = p.location;
+          const locServerUri = String(loc.uri || '');
+          const locText = locServerUri ? await this._getTextForServerUri(s, locServerUri) : '';
+          return {
+            ...p,
+            location: {
+              ...loc,
+              uri: this._mapServerUriToClientUri(s, locServerUri),
+              range: loc.range ? convertRange(locText, loc.range, serverEnc, 'utf-16') : loc.range,
+            },
+          };
+        }));
+      }
+      return next;
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
   async completionResolve(serverId, completionItem, docUri, { timeoutMs = 2000, cancelToken } = {}) {
     const s = this._getServer(serverId);
     await s.proc.startAndInitialize();
@@ -1440,6 +1502,76 @@ class LspManager {
     }
   }
 
+  _convertDocumentSymbol(text, symbol, fromEncoding, toEncoding) {
+    if (!symbol || typeof symbol !== 'object') return symbol;
+    const out = { ...symbol };
+    if (out.range) out.range = convertRange(text, out.range, fromEncoding, toEncoding);
+    if (out.selectionRange) out.selectionRange = convertRange(text, out.selectionRange, fromEncoding, toEncoding);
+    if (Array.isArray(out.children)) {
+      out.children = out.children.map((child) => this._convertDocumentSymbol(text, child, fromEncoding, toEncoding));
+    }
+    return out;
+  }
+
+  async _convertSymbolInformation(state, info, fromEncoding, toEncoding) {
+    if (!info || typeof info !== 'object') return info;
+    const serverUri = String(info.location?.uri || '');
+    if (!serverUri) return info;
+    const text = await this._getTextForServerUri(state, serverUri);
+    return {
+      ...info,
+      location: {
+        ...info.location,
+        uri: this._mapServerUriToClientUri(state, serverUri),
+        range: info.location?.range ? convertRange(text, info.location.range, fromEncoding, toEncoding) : info.location?.range,
+      },
+    };
+  }
+
+  async documentSymbol(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = {
+      ...params,
+      textDocument: { ...(params?.textDocument || {}), uri: serverUri },
+    };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/documentSymbol', serverParams, { timeoutMs, cancelToken: cts?.token });
+      const list = Array.isArray(result) ? result : [];
+      if (!list.length) return [];
+
+      const isHierarchy = list[0] && list[0].range && !list[0].location;
+
+      if (isHierarchy) {
+        return list.map((item) => this._convertDocumentSymbol(text, item, serverEnc, 'utf-16'));
+      }
+      return await Promise.all(list.map((item) => this._convertSymbolInformation(s, item, serverEnc, 'utf-16')));
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
+  async workspaceSymbol(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const serverEnc = this._serverPositionEncoding(s);
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('workspace/symbol', params, { timeoutMs, cancelToken: cts?.token });
+      const list = Array.isArray(result) ? result : [];
+      return await Promise.all(list.map((item) => this._convertSymbolInformation(s, item, serverEnc, 'utf-16')));
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
   async references(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
     const s = this._getServer(serverId);
     await s.proc.startAndInitialize();
@@ -1607,6 +1739,38 @@ class LspManager {
     };
     const result = await s.proc.sendRequest('textDocument/rename', serverParams, { timeoutMs });
     return await this._convertWorkspaceEdit(s, result, serverEnc, 'utf-16');
+  }
+
+  async prepareRename(serverId, params, { timeoutMs = 5000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = {
+      ...params,
+      textDocument: { ...(params?.textDocument || {}), uri: serverUri },
+      position: params?.position ? convertPosition(text, params.position, 'utf-16', serverEnc) : params?.position,
+    };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/prepareRename', serverParams, { timeoutMs, cancelToken: cts?.token });
+      if (!result) return result;
+      // Result can be Range, { range, placeholder }, { defaultBehavior }
+      if (result.defaultBehavior) return result;
+      if (result.range) {
+        return { ...result, range: convertRange(text, result.range, serverEnc, 'utf-16') };
+      }
+      // It might be just a Range object (duck typing)
+      if (result.start && result.end) {
+        return convertRange(text, result, serverEnc, 'utf-16');
+      }
+      return result;
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
   }
 
   async format(serverId, params, { timeoutMs = 5000 } = {}) {

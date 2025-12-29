@@ -310,6 +310,11 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     return manager.rename(serverId, params, options || {});
   });
 
+  ipcMain.handle('lsp:prepareRename', async (event, serverId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.prepareRename(serverId, params, options || {});
+  });
+
   ipcMain.handle('lsp:format', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.format(serverId, params, options || {});
@@ -394,6 +399,11 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
   ipcMain.handle('lsp:inlayHint', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.inlayHint(serverId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:inlayHintResolve', async (event, serverId, hint, docUri, options) => {
+    ensureSenderSubscribed(event);
+    return manager.inlayHintResolve(serverId, hint, docUri, options || {});
   });
 
   ipcMain.handle('lsp:foldingRange', async (event, serverId, params, options) => {
