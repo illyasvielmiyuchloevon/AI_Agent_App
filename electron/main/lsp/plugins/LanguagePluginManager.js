@@ -277,6 +277,10 @@ class LanguagePluginManager {
     const serverConfigs = [];
     for (const server of matchingServers) {
       const transport = resolveTransportTemplate(server.transport || {}, vars);
+      const cmdTemplate = String(server?.transport?.command || '');
+      if (process?.versions?.electron && cmdTemplate.includes('${NODE}')) {
+        transport.env = { ...(transport.env || {}), ELECTRON_RUN_AS_NODE: '1' };
+      }
 
       let command = String(transport.command || '').trim();
       if (!command) return { ok: false, error: 'resolved command is empty' };

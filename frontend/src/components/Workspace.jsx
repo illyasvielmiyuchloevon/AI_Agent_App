@@ -1738,6 +1738,17 @@ function Workspace({
   }, [activeGroupId, handleEditorMount]);
 
   useEffect(() => {
+    lspService.updateWorkspace({ nextWorkspaceId: backendWorkspaceId, nextRootFsPath: backendRoot, nextWorkspaceFolders: [backendRoot] });
+    lspService.updateUiContext({
+      getFiles: () => filesRef.current,
+      onFileChange,
+      onOpenFile,
+      onSyncStructure,
+      getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
+    });
+  }, [backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure]);
+
+  useEffect(() => {
     const inst = editorInstancesRef.current.get(String(activeGroupId || 'group-1'));
     if (!inst?.editor || !inst?.monaco) return;
     handleEditorMount(inst.editor, inst.monaco);

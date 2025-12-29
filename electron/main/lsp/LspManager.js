@@ -526,6 +526,9 @@ class LspManager {
     proc.on('exit', () => {
       this._handleServerExit(id);
     });
+    proc.on('close', () => {
+      this._handleServerExit(id);
+    });
 
     try {
       await proc.startAndInitialize();
@@ -638,6 +641,7 @@ class LspManager {
         applyWorkspaceEdit: (p) => this._applyWorkspaceEditFromServer(s, p),
       });
       s.proc.on('exit', () => this._handleServerExit(serverId));
+      s.proc.on('close', () => this._handleServerExit(serverId));
 
       try {
         await s.proc.startAndInitialize();
@@ -859,6 +863,29 @@ class LspManager {
   async workspaceSymbol(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
     const s = this._getServer(serverId);
     await s.proc.startAndInitialize();
+
+    // Intercept _typescript.applyWorkspaceEdit to handle it client-side
+    // This fixes issues where tsls fails to execute this command server-side
+    if (params?.command === '_typescript.applyWorkspaceEdit' && Array.isArray(params?.arguments) && params.arguments[0]) {
+      try {
+        const serverEnc = this._serverPositionEncoding(s);
+        const edit = params.arguments[0];
+        const converted = await this._convertWorkspaceEdit(s, edit, serverEnc, 'utf-16');
+        if (this.externalApplyWorkspaceEdit) {
+          const res = await this.externalApplyWorkspaceEdit({
+            serverId: String(serverId),
+            workspaceId: String(s.workspace?.workspaceId || ''),
+            label: 'TypeScript Action',
+            edit: converted,
+          });
+          return res;
+        }
+      } catch (err) {
+        this.logger?.exception?.('intercepted applyWorkspaceEdit failed', err, { serverId });
+        throw err;
+      }
+    }
+
     const cts = cancelToken ? new CancellationTokenSource() : null;
     if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
     try {
@@ -1599,6 +1626,9 @@ class LspManager {
     const key = String(serverId);
     const s = this.servers.get(key);
     if (!s) return;
+    // Remove immediately to prevent auto-restart logic in _handleServerExit
+    this.servers.delete(key);
+
     try {
       if (s.restart?.timer) clearTimeout(s.restart.timer);
     } catch {}
@@ -1606,8 +1636,6 @@ class LspManager {
       await s.proc.shutdown();
     } catch (err) {
       this.logger?.exception?.('shutdownServer failed', err, { serverId: key });
-    } finally {
-      this.servers.delete(key);
     }
   }
 

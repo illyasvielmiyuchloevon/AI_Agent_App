@@ -66,7 +66,9 @@ class LspServerProcess extends EventEmitter {
       this._proc = t.proc;
       try { t.proc?.stderr?.on?.('data', pushStderr); } catch {}
 
+      let exitInfo = null;
       t.proc.on('exit', (code, signal) => {
+        exitInfo = { code, signal };
         this.logger?.warn?.('server exited', { code, signal });
         this.onServerStatus?.({ serverId: this.serverId, status: 'exited', code, signal, stderrTail: getStderrTail() || undefined });
         this.emit('exit', { code, signal });
@@ -78,6 +80,10 @@ class LspServerProcess extends EventEmitter {
 
       const conn = new JsonRpcConnection(t, { logger: this.logger?.child?.('jsonrpc') || this.logger });
       this.connection = conn;
+
+      conn.on('close', () => {
+        this.emit('close');
+      });
 
       conn.onNotification('textDocument/publishDiagnostics', (params) => {
         this.onDiagnostics?.({ serverId: this.serverId, uri: params?.uri, diagnostics: params?.diagnostics || [] });
@@ -233,7 +239,9 @@ class LspServerProcess extends EventEmitter {
 
       let onError = null;
       let onExit = null;
-      const procFailure = new Promise((_, reject) => {
+      let cleanupProcFailure = null;
+      const procFailure = new Promise((resolve, reject) => {
+        cleanupProcFailure = resolve;
         onError = (err) => reject(err instanceof Error ? err : new Error(String(err)));
         onExit = (code, signal) => reject(new Error(`server exited before initialize (code=${code}, signal=${signal})`));
         t.proc.once('error', onError);
@@ -247,6 +255,14 @@ class LspServerProcess extends EventEmitter {
           procFailure,
         ]);
       } catch (err) {
+        if (err?.message === 'Connection closed') {
+          await new Promise((r) => setTimeout(r, 200));
+          if (exitInfo) {
+            const stderrTail = getStderrTail();
+            const newMsg = `Server process exited unexpectedly (code: ${exitInfo.code}, signal: ${exitInfo.signal}). Stderr: ${stderrTail || '(empty)'}`;
+            err = new Error(newMsg);
+          }
+        }
         const stderrTail = getStderrTail();
         const hint = makeHint({ error: err?.message || String(err), stderrTail });
         this.logger?.error?.('initialize failed', {
@@ -271,6 +287,7 @@ class LspServerProcess extends EventEmitter {
         try { clearTimeout(slowTimer2); } catch {}
         try { if (onError) t.proc.off('error', onError); } catch {}
         try { if (onExit) t.proc.off('exit', onExit); } catch {}
+        if (cleanupProcFailure) cleanupProcFailure();
       }
       this.serverCapabilities = result?.capabilities || {};
       this.positionEncoding = normalizePositionEncoding(this.serverCapabilities?.positionEncoding || 'utf-16');

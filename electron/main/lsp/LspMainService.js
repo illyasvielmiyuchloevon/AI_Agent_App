@@ -159,6 +159,23 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     }
     if (!pluginManager) throw new Error('language plugins are not available');
 
+    const tryRepair = async (pluginId, err) => {
+      const isModuleNotFound = String(err?.message || '').includes('MODULE_NOT_FOUND') || String(err?.message || '').includes('Cannot find module');
+      if (!isModuleNotFound || !pluginId) return false;
+      try {
+        broadcast?.('lsp:log', { level: 'warn', message: `[LSP] Plugin '${pluginId}' seems corrupted. Attempting auto-repair...` });
+        const fullPlugin = pluginManager.registry.getPlugin(pluginId);
+        const providerId = fullPlugin?.installed?.source?.providerId || fullPlugin?.source?.providerId || 'official';
+        const version = fullPlugin?.installed?.version || 'latest';
+        await pluginManager.install({ providerId, id: pluginId, version });
+        broadcast?.('lsp:log', { level: 'info', message: `[LSP] Plugin '${pluginId}' reinstalled.` });
+        return true;
+      } catch (repairErr) {
+        broadcast?.('lsp:log', { level: 'error', message: `[LSP] Auto-repair failed: ${repairErr.message}` });
+        return false;
+      }
+    };
+
     const wid = String(workspaceId || '').trim();
     const lang = String(languageId || '').trim();
     const preferred =
@@ -202,7 +219,9 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     if (resolvedMany?.ok) {
       const configs = Array.isArray(resolvedMany.serverConfigs) ? resolvedMany.serverConfigs : [];
       if (!configs.length) throw new Error('plugin has no matching server');
-      const ensured = await Promise.all(configs.map((cfg) => manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: cfg, workspace: workspaceForFile })));
+      const ensured = await Promise.all(configs.map((cfg) => manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: cfg, workspace: workspaceForFile }))).catch((err) => {
+        throw new Error(`Failed to start language servers: ${err.message}`);
+      });
       const primaryIdx = Math.max(0, configs.findIndex((c) => String(c?.role || '').toLowerCase() === 'primary'));
       const serverIds = ensured.map((r) => String(r?.serverId || '')).filter(Boolean);
       const serverId = serverIds[primaryIdx] || serverIds[0] || '';
@@ -220,8 +239,12 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
       throw new Error(msg);
     }
 
-    const res = await manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: resolvedOne.serverConfig, workspace: workspaceForFile });
-    return { ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
+    try {
+      const res = await manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: resolvedOne.serverConfig, workspace: workspaceForFile });
+      return { ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
+    } catch (err) {
+      throw new Error(`Failed to start language server: ${err.message}`);
+    }
   });
 
   ipcMain.handle('lsp:openDocument', async (event, serverId, doc) => {

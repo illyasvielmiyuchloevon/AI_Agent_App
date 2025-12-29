@@ -148,7 +148,11 @@ export const lspService = (() => {
 
   const normalizeFsPath = (p) => {
     const s = String(p || '').trim().replace(/[\\\/]+$/, '');
-    return process.platform === 'win32' ? s.toLowerCase() : s;
+    const isWin =
+      (typeof process !== 'undefined' && process?.platform === 'win32') ||
+      guessIsWindows(s) ||
+      guessIsWindows(rootFsPath);
+    return isWin ? s.toLowerCase() : s;
   };
 
   const pickContainingRootFsPath = (roots, fsPath) => {
@@ -315,6 +319,7 @@ export const lspService = (() => {
     const modelPath = String(model.uri?.toString?.() || '');
     if (!modelPath) return;
     if (modelPath.startsWith('diff-tab-') || modelPath.startsWith('inmemory:')) return;
+    if (!String(rootFsPath || '').trim()) return;
 
     const languageId = typeof model.getLanguageId === 'function' ? String(model.getLanguageId() || '') : inferLanguageIdFromPath(modelPath);
     if (!supportedLanguageIds.has(languageId)) return;
@@ -1470,9 +1475,57 @@ export const lspService = (() => {
   };
 
   const updateWorkspace = ({ nextWorkspaceId, nextRootFsPath, nextWorkspaceFolders } = {}) => {
+    const prevWorkspaceId = workspaceId;
+    const prevRootFsPath = rootFsPath;
+    const prevFolders = Array.isArray(workspaceFolders) ? workspaceFolders.slice() : [];
     if (nextWorkspaceId) workspaceId = String(nextWorkspaceId);
     if (nextRootFsPath) rootFsPath = String(nextRootFsPath);
     if (Array.isArray(nextWorkspaceFolders)) workspaceFolders = nextWorkspaceFolders.map((x) => String(x || '').trim()).filter(Boolean);
+
+    const rootReady = !!String(rootFsPath || '').trim();
+    const prevRootReady = !!String(prevRootFsPath || '').trim();
+    const sameWid = String(prevWorkspaceId || '') === String(workspaceId || '');
+    const sameRoot = normalizeFsPath(prevRootFsPath) === normalizeFsPath(rootFsPath);
+    const sameFolders = prevFolders.map(normalizeFsPath).join('|') === workspaceFolders.map(normalizeFsPath).join('|');
+    const workspaceChanged = !(sameWid && sameRoot && sameFolders);
+
+    const reopenModels = () => {
+      const monaco = monacoRef;
+      if (!attached || !rootReady || !monaco?.editor?.getModels) return;
+      try {
+        for (const m of monaco.editor.getModels()) {
+          void openModelIfNeeded(m).catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    if (workspaceChanged) {
+      serverInfoByKey.clear();
+      serverCapsById.clear();
+      semanticTokenMapByServerId.clear();
+
+      const docs = Array.from(docByModelPath.values());
+      docByModelPath.clear();
+      modelPathByUri.clear();
+
+      for (const s of docs) {
+        const uri = String(s?.uri || '');
+        const serverIds = Array.isArray(s?.serverIds) && s.serverIds.length ? s.serverIds : [String(s?.serverId || '')].filter(Boolean);
+        if (!uri) continue;
+        for (const sid of serverIds) {
+          void bridge.closeDocument(sid, uri).catch(() => {});
+        }
+      }
+
+      reopenModels();
+      return;
+    }
+
+    if (!prevRootReady && rootReady) {
+      reopenModels();
+    }
   };
 
   const updateUiContext = (next) => {
