@@ -6,6 +6,7 @@ import ChatArea from './components/ChatArea';
 import LogPanel from './components/LogPanel';
 import ConfigPanel from './components/ConfigPanel';
 import TerminalSettingsTab from './components/TerminalSettingsTab';
+import TerminalEditorTab from './components/TerminalEditorTab';
 import TitleBar from './components/TitleBar';
 import EditorArea from './workbench/layout/EditorArea';
 import WorkbenchShell from './workbench/WorkbenchShell';
@@ -562,6 +563,7 @@ const initialWorkspaceState = {
 
 const SETTINGS_TAB_PATH = '__system__/settings';
 const TERMINAL_SETTINGS_TAB_PATH = '__system__/terminal-settings';
+const TERMINAL_EDITOR_TAB_PATH = '__system__/terminal-editor';
 const DIFF_TAB_PREFIX = '__diff__/';
 
 function App() {
@@ -688,12 +690,17 @@ function App() {
   });
   const [theme, setTheme] = useState(() => storedThemePreference || DEFAULT_PROJECT_CONFIG.theme || detectSystemTheme());
   const abortControllerRef = useRef(null);
+  const backendWorkspaceRootRef = useRef('');
   const pendingOpenFileRef = useRef({ absPath: '', expectedRoot: '' });
   const clearPendingOpenFile = useCallback(() => {
       pendingOpenFileRef.current = { absPath: '', expectedRoot: '' };
   }, []);
   const pendingDeepLinkRef = useRef({ openFile: '', openMode: '', workspaceFsPath: '' });
   const pendingStartActionRef = useRef({ type: null });
+
+  useEffect(() => {
+      backendWorkspaceRootRef.current = String(backendWorkspaceRoot || '');
+  }, [backendWorkspaceRoot]);
   const clearPendingStartAction = useCallback(() => {
       pendingStartActionRef.current = { type: null };
   }, []);
@@ -1104,27 +1111,56 @@ function App() {
               return;
           }
 
-          if (matchShortcut(e, openEditors)) {
-              const groupId = String(activeGroupIdRef.current || 'group-1');
-              const groups = editorGroupsRef.current || [];
-              const group = Array.isArray(groups) ? groups.find((g) => String(g?.id || '') === groupId) : null;
-               const openTabs = Array.isArray(group?.openTabs) ? group.openTabs : [];
-               const isSpecialTab = (p) =>
-                 p === WELCOME_TAB_PATH
-                 || p === SETTINGS_TAB_PATH
-                 || p === TERMINAL_SETTINGS_TAB_PATH
-                 || (DIFF_TAB_PREFIX && String(p || '').startsWith(DIFF_TAB_PREFIX));
-               const hasRealEditor = openTabs.some((p) => p && !isSpecialTab(p));
-               if (!hasRealEditor) return;
+           if (matchShortcut(e, openEditors)) {
+               const groupId = String(activeGroupIdRef.current || 'group-1');
+               const groups = editorGroupsRef.current || [];
+               const group = Array.isArray(groups) ? groups.find((g) => String(g?.id || '') === groupId) : null;
+                const openTabs = Array.isArray(group?.openTabs) ? group.openTabs : [];
+                const isSpecialTab = (p) =>
+                  p === WELCOME_TAB_PATH
+                  || p === SETTINGS_TAB_PATH
+                  || p === TERMINAL_SETTINGS_TAB_PATH
+                  || p === TERMINAL_EDITOR_TAB_PATH
+                  || (DIFF_TAB_PREFIX && String(p || '').startsWith(DIFF_TAB_PREFIX));
+                const hasRealEditor = openTabs.some((p) => p && !isSpecialTab(p));
+                if (!hasRealEditor) return;
 
               e.preventDefault();
-              setCommandPaletteInitialQuery('edt ');
-              setCommandPaletteContext({ type: 'editorNav', groupId });
-              setShowCommandPalette(true);
-          }
-      };
+               setCommandPaletteInitialQuery('edt ');
+               setCommandPaletteContext({ type: 'editorNav', groupId });
+               setShowCommandPalette(true);
+           }
+
+           if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.altKey && (e.code === 'Backquote' || e.key === '`')) {
+               e.preventDefault();
+               try { window.dispatchEvent(new CustomEvent('workbench:openTerminalEditor', { detail: {} })); } catch {}
+           }
+       };
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+      const onOpen = (e) => {
+          const profile = typeof e?.detail?.profile === 'string' ? String(e.detail.profile || '').trim() : '';
+          try {
+              const api = typeof window !== 'undefined' ? window.electronAPI : null;
+              if (api?.window?.openNewWindow) {
+                  api.window.openNewWindow({
+                      openFile: TERMINAL_EDITOR_TAB_PATH,
+                      openMode: 'persistent',
+                      workspaceFsPath: String(backendWorkspaceRootRef.current || backendWorkspaceRoot || ''),
+                  }).catch(() => {});
+                  return;
+              }
+          } catch {}
+          openFile(TERMINAL_EDITOR_TAB_PATH, { mode: 'persistent' });
+          window.setTimeout(() => {
+              try { window.dispatchEvent(new CustomEvent('workbench:terminalEditorCreate', { detail: profile ? { profile } : {} })); } catch {}
+          }, 0);
+      };
+      window.addEventListener('workbench:openTerminalEditor', onOpen);
+      return () => window.removeEventListener('workbench:openTerminalEditor', onOpen);
   }, []);
 
   const handleConfigSubmit = async (options = {}) => {
@@ -1476,6 +1512,7 @@ function App() {
                   if (p === WELCOME_TAB_PATH) return true;
                   if (p === SETTINGS_TAB_PATH) return true;
                   if (p === TERMINAL_SETTINGS_TAB_PATH) return true;
+                  if (p === TERMINAL_EDITOR_TAB_PATH) return true;
                   if (DIFF_TAB_PREFIX && p.startsWith(DIFF_TAB_PREFIX)) return true;
                   return false;
               };
@@ -3240,6 +3277,7 @@ function App() {
       const isSpecialTab = filePath === WELCOME_TAB_PATH
         || filePath === SETTINGS_TAB_PATH
         || filePath === TERMINAL_SETTINGS_TAB_PATH
+        || filePath === TERMINAL_EDITOR_TAB_PATH
         || (filePath && filePath.startsWith(DIFF_TAB_PREFIX));
 
       if (!isSpecialTab && !workspaceDriver) {
@@ -3352,6 +3390,7 @@ function App() {
           const isSpecialTab = tabPath === WELCOME_TAB_PATH
             || tabPath === SETTINGS_TAB_PATH
             || tabPath === TERMINAL_SETTINGS_TAB_PATH
+            || tabPath === TERMINAL_EDITOR_TAB_PATH
             || (tabPath && tabPath.startsWith(DIFF_TAB_PREFIX));
 
           const now = Date.now();
@@ -3555,7 +3594,7 @@ function App() {
           const { groups, activeGroupId } = ensureEditorGroups(prev);
           const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
 
-          const isSpecialTab = (p) => p === WELCOME_TAB_PATH || p === SETTINGS_TAB_PATH || p === TERMINAL_SETTINGS_TAB_PATH || (p && p.startsWith(DIFF_TAB_PREFIX));
+          const isSpecialTab = (p) => p === WELCOME_TAB_PATH || p === SETTINGS_TAB_PATH || p === TERMINAL_SETTINGS_TAB_PATH || p === TERMINAL_EDITOR_TAB_PATH || (p && p.startsWith(DIFF_TAB_PREFIX));
           const isDirty = (p) => !!(prev.files || []).find((f) => f.path === p)?.dirty;
 
           const requestedGroupId = String(payload?.groupId || '').trim();
@@ -5022,6 +5061,16 @@ function App() {
                     <TerminalSettingsTab
                       workspacePath={backendWorkspaceRoot}
                       onClose={() => closeFile(TERMINAL_SETTINGS_TAB_PATH)}
+                    />
+                  )}
+                  terminalEditorTabPath={TERMINAL_EDITOR_TAB_PATH}
+                  renderTerminalEditorTab={() => (
+                    <TerminalEditorTab
+                      workspacePath={backendWorkspaceRoot}
+                      onOpenFile={openFile}
+                      terminalSettingsTabPath={TERMINAL_SETTINGS_TAB_PATH}
+                      terminalEditorTabPath={TERMINAL_EDITOR_TAB_PATH}
+                      onClose={() => closeFile(TERMINAL_EDITOR_TAB_PATH)}
                     />
                   )}
                   taskReview={taskReview}

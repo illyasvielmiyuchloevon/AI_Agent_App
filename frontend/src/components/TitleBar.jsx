@@ -330,6 +330,23 @@ const TitleBar = ({
         [t('file')]: [
             { label: t('newFile'), action: onAddFile, shortcut: 'Ctrl+N', disabled: !hasDriver },
             { label: t('newFolder'), action: onAddFolder, shortcut: 'Ctrl+Shift+N', disabled: !hasDriver },
+            { label: t('newWindow'), action: () => {
+                try {
+                    if (windowApi?.openNewWindow) {
+                        windowApi.openNewWindow({});
+                        return;
+                    }
+                } catch {
+                    // ignore
+                }
+                try {
+                    const url = new URL(window.location.href);
+                    url.search = '';
+                    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+                } catch {
+                    // ignore
+                }
+            }, shortcut: 'Ctrl+Shift+Alt+N' },
             { type: 'separator' },
             { label: t('openFolder'), action: () => onSelectProject(), shortcut: 'Ctrl+O' },
             { label: t('closeFolder'), action: onCloseWorkspace, disabled: !hasDriver },

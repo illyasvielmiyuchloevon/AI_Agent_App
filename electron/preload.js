@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
     applySnapLayout: (layoutId, zoneIndex) => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex }),
     openNewWindow: (payload) => ipcRenderer.invoke('window:openNewWindow', payload),
+    openTerminalWindow: (payload) => ipcRenderer.invoke('window:openTerminalWindow', payload),
     close: () => ipcRenderer.invoke('window:close'),
   },
   shell: {

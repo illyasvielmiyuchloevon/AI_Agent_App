@@ -33,14 +33,37 @@ const computeLabel = (base, existing) => {
   return count > 0 ? `${name} (${count + 1})` : name;
 };
 
-const getWsUrl = () => {
+const WINDOW_ID_KEY = 'ai-agent:windowId';
+const getWindowId = () => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const existing = sessionStorage.getItem(WINDOW_ID_KEY);
+    if (existing) return existing;
+    const id = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    sessionStorage.setItem(WINDOW_ID_KEY, id);
+    return id;
+  } catch {
+    return '';
+  }
+};
+
+const getWsUrl = (workspaceRoot = '') => {
   if (typeof window === 'undefined') return '';
   const proto = window.location.protocol;
+  const root = String(workspaceRoot || '').trim();
+  const clientId = getWindowId();
+  const qs = (() => {
+    const params = new URLSearchParams();
+    if (root) params.set('workspaceRoot', root);
+    if (clientId) params.set('clientId', clientId);
+    const s = params.toString();
+    return s ? `?${s}` : '';
+  })();
   if (proto === 'file:' || window.location.origin === 'null') {
-    return 'ws://127.0.0.1:8000/terminal/ws';
+    return `ws://127.0.0.1:8000/terminal/ws${qs}`;
   }
   const wsProto = proto === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${window.location.host}/api/terminal/ws`;
+  return `${wsProto}//${window.location.host}/api/terminal/ws${qs}`;
 };
 
 const getPingUrl = () => {
@@ -107,6 +130,7 @@ function TerminalView({
   isResizing = false,
 }, ref) {
   const wsRef = useRef(null);
+  const wsUrlRef = useRef('');
   const pendingCreateRef = useRef(new Map());
   const instanceRef = useRef(new Map()); // id -> { term, fit, search }
   const containerRef = useRef(new Map()); // id -> HTMLElement
@@ -520,6 +544,27 @@ function TerminalView({
     }
   }, []);
 
+  const resetClientState = useCallback(() => {
+    pendingCreateRef.current.clear();
+    activeIdRef.current = '';
+    splitIdsRef.current = [];
+    terminalsRef.current = [];
+
+    setTerminals([]);
+    setActiveId('');
+    setListed(false);
+    setScrollLock(false);
+    setSplit({ enabled: false, orientation: 'vertical', ids: [], size: 0.5 });
+
+    for (const [id, inst] of Array.from(instanceRef.current.entries())) {
+      try { inst?.resultsDispose?.dispose?.(); } catch {}
+      try { inst?.search?.dispose?.(); } catch {}
+      try { inst?.term?.dispose?.(); } catch {}
+      instanceRef.current.delete(id);
+    }
+    containerRef.current.clear();
+  }, []);
+
   const getPersistedMeta = useCallback((id) => {
     const all = readJson(metaKey, {});
     if (!all || typeof all !== 'object') return null;
@@ -698,6 +743,10 @@ function TerminalView({
       try {
         const key = String(ev?.key || '').toLowerCase();
         const ctrlOrCmd = !!(ev?.ctrlKey || ev?.metaKey);
+        if (ctrlOrCmd && ev.shiftKey && !ev.altKey && (ev.code === 'Backquote' || key === '`')) {
+          createTerminal(String(terminalUi?.profile || DEFAULT_PROFILE)).catch(() => {});
+          return false;
+        }
         if (ctrlOrCmd && !ev.altKey && key === 'f') {
           openFind(meta.id);
           return false;
@@ -836,6 +885,26 @@ function TerminalView({
     const ids = prevIds.includes(baseId) ? [...prevIds] : [baseId, ...prevIds];
 
     const prof = String(currentTerminals.find((t) => t.id === baseId)?.profile || DEFAULT_PROFILE);
+    const meta = await createTerminal(prof).catch(() => null);
+    const newId = String(meta?.id || '');
+    if (!newId || ids.includes(newId)) return;
+
+    ids.push(newId);
+    setSplit((prev) => ({ ...prev, enabled: true, orientation: dir, ids }));
+    setActiveId(newId);
+  }, [createTerminal]);
+
+  const splitAddPaneWithProfile = useCallback(async (profileOverride, orientation = splitRef.current.orientation) => {
+    const dir = orientation === 'horizontal' ? 'horizontal' : 'vertical';
+    const currentTerminals = Array.isArray(terminalsRef.current) ? terminalsRef.current : [];
+    const baseId = String(activeIdRef.current || currentTerminals[0]?.id || '');
+    if (!baseId) return;
+
+    const currentSplit = splitRef.current;
+    const prevIds = currentSplit.enabled ? (Array.isArray(currentSplit.ids) ? currentSplit.ids : []) : [baseId];
+    const ids = prevIds.includes(baseId) ? [...prevIds] : [baseId, ...prevIds];
+
+    const prof = String(profileOverride || '').trim() || DEFAULT_PROFILE;
     const meta = await createTerminal(prof).catch(() => null);
     const newId = String(meta?.id || '');
     if (!newId || ids.includes(newId)) return;
@@ -992,12 +1061,15 @@ function TerminalView({
     clearActive,
     killActive,
     disposeTerminal,
+    sendInput: (id, data) => send({ type: 'input', id: String(id || ''), data: String(data ?? '') }),
     setActive: (id) => setActiveId(String(id || '')),
     toggleScrollLock,
     toggleSplit,
     closeActivePane,
     splitAddVertical: () => splitAddPane('vertical'),
     splitAddHorizontal: () => splitAddPane('horizontal'),
+    splitAddVerticalWithProfile: (p) => splitAddPaneWithProfile(p, 'vertical'),
+    splitAddHorizontalWithProfile: (p) => splitAddPaneWithProfile(p, 'horizontal'),
     toggleSplitOrientation,
     openFind: () => openFind(activeId),
     closeFind,
@@ -1027,21 +1099,42 @@ function TerminalView({
     runFind,
     scrollLock,
     splitAddPane,
+    splitAddPaneWithProfile,
     split,
     terminals,
     toggleScrollLock,
     toggleSplit,
     toggleSplitOrientation,
+    send,
   ]);
 
   useEffect(() => {
+    const url = getWsUrl(workspacePath);
+    if (!url) return;
+
     if (!autoConnect) return;
-    if (wsRef.current) return;
+
+    if (connectLoopRef.current.running && wsUrlRef.current && wsUrlRef.current !== url) {
+      try { window.clearTimeout(connectLoopRef.current.timer); } catch {}
+      connectLoopRef.current.timer = 0;
+      try { connectLoopRef.current.abort?.abort?.(); } catch {}
+      connectLoopRef.current.abort = null;
+      connectLoopRef.current.running = false;
+    }
+
+    if (wsRef.current && wsUrlRef.current === url) return;
+
+    if (wsRef.current && wsUrlRef.current && wsUrlRef.current !== url) {
+      const ws = wsRef.current;
+      wsRef.current = null;
+      try { ws?.close?.(); } catch {}
+      wsUrlRef.current = '';
+      resetClientState();
+    }
+
     if (connectLoopRef.current.running) return;
     connectLoopRef.current.running = true;
-
-    const url = getWsUrl();
-    if (!url) return;
+    wsUrlRef.current = url;
 
     const pingUrl = getPingUrl();
     let cancelled = false;
@@ -1094,11 +1187,13 @@ function TerminalView({
       };
 
       ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
         setConnected(false);
         setListed(false);
       };
 
       ws.onerror = () => {
+        if (wsRef.current === ws) wsRef.current = null;
         setConnected(false);
         setListed(false);
       };
@@ -1249,11 +1344,12 @@ function TerminalView({
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnect, createTerminal, ensureXterm, send, workspacePath]);
+  }, [autoConnect, createTerminal, ensureXterm, resetClientState, send, workspacePath]);
 
   useEffect(() => () => {
     const ws = wsRef.current;
     wsRef.current = null;
+    wsUrlRef.current = '';
     try { window.clearTimeout(connectLoopRef.current.timer); } catch {}
     connectLoopRef.current.timer = 0;
     try { connectLoopRef.current.abort?.abort?.(); } catch {}

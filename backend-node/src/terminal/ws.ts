@@ -32,11 +32,59 @@ type TerminalSession = {
   pty: pty.IPty;
   createdAt: number;
   lastActiveAt: number;
+  backlog: string;
 };
 
-const sessions = new Map<string, TerminalSession>();
-const clients = new Set<WebSocket>();
+type ScopeKey = string;
+const DEFAULT_SCOPE: ScopeKey = 'default';
+
+const sessionsByScope = new Map<ScopeKey, Map<string, TerminalSession>>();
+const clientsByScope = new Map<ScopeKey, Set<WebSocket>>();
 const SESSION_TTL_MS = 2 * 60 * 1000;
+const BACKLOG_MAX_CHARS = 120_000;
+
+function getScopeFromRequest(req: any): ScopeKey {
+  try {
+    const host = typeof req?.headers?.host === 'string' ? String(req.headers.host) : 'localhost';
+    const rawUrl = typeof req?.url === 'string' ? req.url : '/terminal/ws';
+    const url = new URL(rawUrl, `http://${host}`);
+    const root = String(url.searchParams.get('workspaceRoot') || '').trim();
+    const clientId = String(url.searchParams.get('clientId') || '').trim();
+    const win = clientId ? `win:${clientId}` : '';
+    const w = win || DEFAULT_SCOPE;
+    if (!root) return w;
+    return `${w}|root:${root}`;
+  } catch {
+    return DEFAULT_SCOPE;
+  }
+}
+
+function getSessions(scope: ScopeKey) {
+  let m = sessionsByScope.get(scope);
+  if (!m) {
+    m = new Map<string, TerminalSession>();
+    sessionsByScope.set(scope, m);
+  }
+  return m;
+}
+
+function getClients(scope: ScopeKey) {
+  let s = clientsByScope.get(scope);
+  if (!s) {
+    s = new Set<WebSocket>();
+    clientsByScope.set(scope, s);
+  }
+  return s;
+}
+
+function appendBacklog(sess: TerminalSession, chunk: string) {
+  try {
+    const next = `${sess.backlog || ''}${chunk || ''}`;
+    sess.backlog = next.length > BACKLOG_MAX_CHARS ? next.slice(next.length - BACKLOG_MAX_CHARS) : next;
+  } catch {
+    // ignore
+  }
+}
 
 function safeNumber(value: unknown, fallback: number) {
   const n = typeof value === 'number' ? value : Number.parseInt(String(value || ''), 10);
@@ -88,8 +136,10 @@ function parseClientMessage(raw: string): ClientMessage | null {
 export function registerTerminalWs(server: HttpServer) {
   const wss = new WebSocketServer({ server, path: '/terminal/ws' });
 
-  const broadcast = (msg: ServerMessage) => {
+  const broadcast = (scope: ScopeKey, msg: ServerMessage) => {
     const payload = JSON.stringify(msg);
+    const clients = clientsByScope.get(scope);
+    if (!clients) return;
     for (const ws of Array.from(clients)) {
       try {
         if ((ws as any).readyState !== (ws as any).OPEN) continue;
@@ -98,23 +148,25 @@ export function registerTerminalWs(server: HttpServer) {
     }
   };
 
-  const dispose = (id: string) => {
-    const sess = sessions.get(id);
+  const dispose = (scope: ScopeKey, id: string) => {
+    const sessions = sessionsByScope.get(scope);
+    const sess = sessions?.get(id);
     if (!sess) return;
-    sessions.delete(id);
+    sessions?.delete(id);
     try {
       sess.pty.kill();
     } catch {}
-    broadcast({ type: 'disposed', id });
+    broadcast(scope, { type: 'disposed', id });
   };
 
-  const sendListTo = (ws: WebSocket, requestId?: string) => {
+  const sendListTo = (scope: ScopeKey, ws: WebSocket, requestId?: string) => {
     try {
       if ((ws as any).readyState !== (ws as any).OPEN) return;
+      const sessions = sessionsByScope.get(scope);
       ws.send(JSON.stringify({
         type: 'list',
         requestId,
-        terminals: Array.from(sessions.values()).map((s) => ({
+        terminals: Array.from(sessions?.values() || []).map((s) => ({
           id: s.id,
           pid: s.pty.pid,
           profile: s.profile,
@@ -122,11 +174,22 @@ export function registerTerminalWs(server: HttpServer) {
           title: s.title,
         })),
       } satisfies ServerMessage));
+
+      // Replay a bounded backlog so newly connected clients can render the prompt/banner.
+      for (const s of Array.from(sessions?.values() || [])) {
+        if (!s?.id) continue;
+        const data = typeof s.backlog === 'string' ? s.backlog : '';
+        if (!data) continue;
+        try {
+          if ((ws as any).readyState !== (ws as any).OPEN) break;
+          ws.send(JSON.stringify({ type: 'data', id: s.id, data } satisfies ServerMessage));
+        } catch {}
+      }
     } catch {}
   };
 
-  const markActive = (id: string) => {
-    const sess = sessions.get(id);
+  const markActive = (scope: ScopeKey, id: string) => {
+    const sess = sessionsByScope.get(scope)?.get(id);
     if (!sess) return;
     sess.lastActiveAt = Date.now();
   };
@@ -137,24 +200,32 @@ export function registerTerminalWs(server: HttpServer) {
       if (started) return;
       started = true;
       setInterval(() => {
-        if (clients.size > 0) return;
         const now = Date.now();
-        for (const s of Array.from(sessions.values())) {
-          if (now - s.lastActiveAt > SESSION_TTL_MS) dispose(s.id);
+        for (const [scope, sessions] of Array.from(sessionsByScope.entries())) {
+          const clients = clientsByScope.get(scope);
+          if (clients && clients.size > 0) continue;
+          for (const s of Array.from(sessions.values())) {
+            if (now - s.lastActiveAt > SESSION_TTL_MS) dispose(scope, s.id);
+          }
         }
       }, 15 * 1000).unref?.();
     };
   })();
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    const scope = getScopeFromRequest(req);
+    (ws as any).__termScope = scope;
+    const clients = getClients(scope);
     clients.add(ws);
     maybeStartGc();
     try {
       if ((ws as any).readyState === (ws as any).OPEN) ws.send(JSON.stringify({ type: 'hello', version: 2 } satisfies ServerMessage));
     } catch {}
-    sendListTo(ws, 'boot');
+    // Client requests the initial list/backlog after connecting.
 
     ws.on('message', (data) => {
+      const scopeKey: ScopeKey = (ws as any).__termScope || scope || DEFAULT_SCOPE;
+      const sessions = getSessions(scopeKey);
       const raw = typeof data === 'string' ? data : data.toString('utf8');
       const msg = parseClientMessage(raw);
       if (!msg) {
@@ -165,7 +236,7 @@ export function registerTerminalWs(server: HttpServer) {
       }
 
       if (msg.type === 'list') {
-        sendListTo(ws, msg.requestId);
+        sendListTo(scopeKey, ws, msg.requestId);
         return;
       }
 
@@ -201,20 +272,21 @@ export function registerTerminalWs(server: HttpServer) {
         }
 
         const now = Date.now();
-        const session: TerminalSession = { id, profile, cwd, title, pty: child, createdAt: now, lastActiveAt: now };
+        const session: TerminalSession = { id, profile, cwd, title, pty: child, createdAt: now, lastActiveAt: now, backlog: '' };
         sessions.set(id, session);
 
         child.onData((chunk) => {
-          markActive(id);
-          broadcast({ type: 'data', id, data: chunk });
+          markActive(scopeKey, id);
+          appendBacklog(session, String(chunk || ''));
+          broadcast(scopeKey, { type: 'data', id, data: chunk });
         });
         child.onExit((ev) => {
           sessions.delete(id);
-          broadcast({ type: 'exit', id, exitCode: safeNumber((ev as any)?.exitCode, 0), signal: (ev as any)?.signal });
-          broadcast({ type: 'disposed', id });
+          broadcast(scopeKey, { type: 'exit', id, exitCode: safeNumber((ev as any)?.exitCode, 0), signal: (ev as any)?.signal });
+          broadcast(scopeKey, { type: 'disposed', id });
         });
 
-        broadcast({ type: 'created', requestId: msg.requestId, id, pid: child.pid, profile, cwd, title });
+        broadcast(scopeKey, { type: 'created', requestId: msg.requestId, id, pid: child.pid, profile, cwd, title });
         return;
       }
 
@@ -224,7 +296,7 @@ export function registerTerminalWs(server: HttpServer) {
         const data = typeof msg.data === 'string' ? msg.data : String(msg.data || '');
         try {
           sess.pty.write(data);
-          markActive(sess.id);
+          markActive(scopeKey, sess.id);
         } catch {}
         return;
       }
@@ -236,19 +308,21 @@ export function registerTerminalWs(server: HttpServer) {
         const rows = safeNumber(msg.rows, 24);
         try {
           sess.pty.resize(cols, rows);
-          markActive(sess.id);
+          markActive(scopeKey, sess.id);
         } catch {}
         return;
       }
 
       if (msg.type === 'dispose') {
-        dispose(String(msg.id || ''));
+        dispose(scopeKey, String(msg.id || ''));
         return;
       }
     });
 
     ws.on('close', () => {
-      clients.delete(ws);
+      const scopeKey: ScopeKey = (ws as any).__termScope || scope || DEFAULT_SCOPE;
+      const clients = clientsByScope.get(scopeKey);
+      clients?.delete(ws);
     });
   });
 }

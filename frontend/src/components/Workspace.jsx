@@ -423,6 +423,8 @@ function Workspace({
   renderSettingsTab,
   terminalSettingsTabPath,
   renderTerminalSettingsTab,
+  terminalEditorTabPath,
+  renderTerminalEditorTab,
   taskReview,
   onTaskKeepFile,
   onTaskRevertFile,
@@ -2026,6 +2028,7 @@ function Workspace({
     if (!p) return true;
     if (settingsTabPath && p === settingsTabPath) return true;
     if (terminalSettingsTabPath && p === terminalSettingsTabPath) return true;
+    if (terminalEditorTabPath && p === terminalEditorTabPath) return true;
     if (welcomeTabPath && p === welcomeTabPath) return true;
     if (diffTabPrefix && p.startsWith(diffTabPrefix)) return true;
     return false;
@@ -2042,13 +2045,20 @@ function Workspace({
     const p = String(tabPath || '');
     const isSettingsTab = settingsTabPath && p === settingsTabPath;
     const isTerminalSettingsTab = terminalSettingsTabPath && p === terminalSettingsTabPath;
+    const isTerminalEditorTab = terminalEditorTabPath && p === terminalEditorTabPath;
     const isWelcomeTab = welcomeTabPath && p === welcomeTabPath;
     const isDiffTab = diffTabPrefix && p.startsWith(diffTabPrefix);
     const diff = isDiffTab && diffTabs ? diffTabs[p] : null;
     const diffLabel = diff
       ? (diff.path ? `Diff: ${diff.path}` : (diff.files ? 'Diff (multi-file)' : 'Diff'))
       : 'Diff';
-    return isSettingsTab ? 'Settings' : (isTerminalSettingsTab ? '终端设置' : (isWelcomeTab ? 'Welcome' : (isDiffTab ? diffLabel : p.split('/').pop())));
+    return isSettingsTab
+      ? 'Settings'
+      : (isTerminalSettingsTab
+        ? '终端设置'
+        : (isTerminalEditorTab
+          ? '终端'
+          : (isWelcomeTab ? 'Welcome' : (isDiffTab ? diffLabel : p.split('/').pop()))));
   };
 
   const renderContextItem = (label, action, { danger = false, disabled = false } = {}) => (
@@ -2134,14 +2144,15 @@ function Workspace({
           {(group.openTabs || []).map((path, idx) => {
             const flags = getTabFlags(group.id, path);
             const isPreviewTab = previewEnabled && !group.locked && flags.preview && group.previewTab === path;
-            const tabIconClass = (() => {
-              const p = String(path || '');
-              if (settingsTabPath && p === settingsTabPath) return 'codicon-settings-gear';
-              if (terminalSettingsTabPath && p === terminalSettingsTabPath) return 'codicon-terminal';
-              if (welcomeTabPath && p === welcomeTabPath) return 'codicon-home';
-              if (diffTabPrefix && p.startsWith(diffTabPrefix)) return 'codicon-diff';
-              return getIconClass(p);
-            })();
+              const tabIconClass = (() => {
+                const p = String(path || '');
+                if (settingsTabPath && p === settingsTabPath) return 'codicon-settings-gear';
+                if (terminalSettingsTabPath && p === terminalSettingsTabPath) return 'codicon-terminal';
+                if (terminalEditorTabPath && p === terminalEditorTabPath) return 'codicon-terminal';
+                if (welcomeTabPath && p === welcomeTabPath) return 'codicon-home';
+                if (diffTabPrefix && p.startsWith(diffTabPrefix)) return 'codicon-diff';
+                return getIconClass(p);
+              })();
             const tabClass = [
               'tab',
               (group.activeFile === path ? 'active' : ''),
@@ -2258,6 +2269,7 @@ function Workspace({
 
     if (settingsTabPath && filePath === settingsTabPath && renderSettingsTab) return renderSettingsTab();
     if (terminalSettingsTabPath && filePath === terminalSettingsTabPath && renderTerminalSettingsTab) return renderTerminalSettingsTab();
+    if (terminalEditorTabPath && filePath === terminalEditorTabPath && renderTerminalEditorTab) return renderTerminalEditorTab();
     if (welcomeTabPath && filePath === welcomeTabPath && renderWelcomeTab) return renderWelcomeTab();
 
     if (diffTabPrefix && filePath.startsWith(diffTabPrefix) && diffTabs && diffTabs[filePath]) {
@@ -2762,6 +2774,7 @@ function Workspace({
         workspacePath={backendRoot || workspaceRoots?.[0]?.path || workspaceRoots?.[0] || ''}
         onOpenFile={onOpenFile}
         terminalSettingsTabPath={terminalSettingsTabPath}
+        terminalEditorTabPath={terminalEditorTabPath}
       />
     </div>
   );

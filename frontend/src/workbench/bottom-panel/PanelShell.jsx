@@ -23,7 +23,7 @@ const shallowEqual = (a, b) => {
   return true;
 };
 
-export default function PanelShell({ workspacePath = '', onOpenFile, terminalSettingsTabPath = '' }) {
+export default function PanelShell({ workspacePath = '', onOpenFile, terminalSettingsTabPath = '', terminalEditorTabPath = '' }) {
   const state = useSyncExternalStore(panelStore.subscribe, panelStore.getSnapshot, panelStore.getSnapshot);
   const { activeViewId, collapsed, hidden, maximized, height } = state;
 
@@ -196,16 +196,18 @@ export default function PanelShell({ workspacePath = '', onOpenFile, terminalSet
     debugConsole: {
       onClear: () => debugService.clear(),
     },
-    terminal: {
       terminal: {
-        terminalRef,
-        getTerminalUi: () => terminalUi,
-        setTerminalUi: (patch) => mergeTerminalUi(patch || {}),
-        onCloseOnEmpty: () => { terminalCloseOnEmptyRef.current = true; },
-        onOpenFile,
-        terminalSettingsTabPath,
+        terminal: {
+          terminalRef,
+          getTerminalUi: () => terminalUi,
+          setTerminalUi: (patch) => mergeTerminalUi(patch || {}),
+          onCloseOnEmpty: () => { terminalCloseOnEmptyRef.current = true; },
+          onOpenFile,
+          terminalSettingsTabPath,
+          terminalEditorTabPath,
+          workspacePath,
+        },
       },
-    },
     ports: {
       ports: {
         refresh: () => portsService.refresh().catch(() => {}),
@@ -216,7 +218,7 @@ export default function PanelShell({ workspacePath = '', onOpenFile, terminalSet
         refresh: () => gitService.refresh({ cwd: workspacePath }).catch(() => {}),
       },
     },
-  }), [mergeTerminalUi, onOpenFile, outputChannelId, outputFilter, problemsFilter, terminalSettingsTabPath, terminalUi, workspacePath]);
+  }), [mergeTerminalUi, onOpenFile, outputChannelId, outputFilter, problemsFilter, terminalEditorTabPath, terminalSettingsTabPath, terminalUi, workspacePath]);
 
   useEffect(() => {
     const ui = terminalUi || {};

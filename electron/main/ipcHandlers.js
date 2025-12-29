@@ -222,6 +222,48 @@ function registerIpcHandlers() {
       return { ok: false, error: err?.message || String(err) };
     }
   });
+
+  ipcMain.handle('window:openTerminalWindow', async (_event, payload) => {
+    const workspaceFsPath = payload && payload.workspaceFsPath ? String(payload.workspaceFsPath) : '';
+    const terminalProfile = payload && payload.terminalProfile ? String(payload.terminalProfile) : '';
+
+    const win = new BrowserWindow({
+      width: 980,
+      height: 620,
+      frame: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    try {
+      if (isDev && process.env.VITE_DEV_SERVER_URL) {
+        const url = new URL(process.env.VITE_DEV_SERVER_URL);
+        url.searchParams.set('terminalWindow', '1');
+        if (workspaceFsPath) url.searchParams.set('workspaceFsPath', workspaceFsPath);
+        if (terminalProfile) url.searchParams.set('terminalProfile', terminalProfile);
+        await win.loadURL(url.toString());
+      } else {
+        const indexPath = path.join(__dirname, '../../frontend/dist/index.html');
+        await win.loadFile(indexPath, {
+          query: {
+            terminalWindow: '1',
+            ...(workspaceFsPath ? { workspaceFsPath } : {}),
+            ...(terminalProfile ? { terminalProfile } : {}),
+          },
+        });
+      }
+      win.focus();
+      return { ok: true };
+    } catch (err) {
+      try { win.close(); } catch {}
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
 }
 
 module.exports = { registerIpcHandlers };
