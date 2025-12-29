@@ -37,6 +37,23 @@ class LspServerProcess extends EventEmitter {
     if (this._ready) return this._ready;
     this._ready = (async () => {
       this.onServerStatus?.({ serverId: this.serverId, status: 'starting' });
+      const stderrRing = { chunks: [], size: 0 };
+      const pushStderr = (buf) => {
+        const msg = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '');
+        if (!msg) return;
+        stderrRing.chunks.push({ ts: Date.now(), msg });
+        stderrRing.size += msg.length;
+        while (stderrRing.size > 16_384 && stderrRing.chunks.length > 1) {
+          const first = stderrRing.chunks.shift();
+          stderrRing.size -= (first?.msg || '').length;
+        }
+      };
+      const getStderrTail = () => {
+        const tail = stderrRing.chunks.map((c) => c.msg).join('');
+        const s = String(tail || '').trim();
+        if (!s) return '';
+        return s.length > 4096 ? s.slice(-4096) : s;
+      };
       const t = new StdioTransport({
         command: this.serverConfig.transport.command,
         args: this.serverConfig.transport.args || [],
@@ -47,15 +64,16 @@ class LspServerProcess extends EventEmitter {
       t.start();
       this.transport = t;
       this._proc = t.proc;
+      try { t.proc?.stderr?.on?.('data', pushStderr); } catch {}
 
       t.proc.on('exit', (code, signal) => {
         this.logger?.warn?.('server exited', { code, signal });
-        this.onServerStatus?.({ serverId: this.serverId, status: 'exited', code, signal });
+        this.onServerStatus?.({ serverId: this.serverId, status: 'exited', code, signal, stderrTail: getStderrTail() || undefined });
         this.emit('exit', { code, signal });
       });
       t.proc.on('error', (err) => {
         this.logger?.exception?.('server process error', err);
-        this.onServerStatus?.({ serverId: this.serverId, status: 'error', error: err?.message || String(err) });
+        this.onServerStatus?.({ serverId: this.serverId, status: 'error', error: err?.message || String(err), stderrTail: getStderrTail() || undefined });
       });
 
       const conn = new JsonRpcConnection(t, { logger: this.logger?.child?.('jsonrpc') || this.logger });
@@ -180,6 +198,38 @@ class LspServerProcess extends EventEmitter {
         return Math.max(5_000, Math.min(120_000, Math.round(n)));
       })();
       this.onServerStatus?.({ serverId: this.serverId, status: 'initializing', timeoutMs: initTimeoutMs });
+      const initStartedAt = Date.now();
+      const makeHint = ({ error = '', stderrTail = '' } = {}) => {
+        const e = String(error || '').toLowerCase();
+        const s = String(stderrTail || '').toLowerCase();
+        const cmd = String(this.serverConfig?.transport?.command || '');
+        if (e.includes('enoent') || e.includes('not found') || s.includes('enoent') || s.includes('not found')) return cmd ? `command not found: ${cmd}` : 'command not found';
+        if (e.includes('eacces') || s.includes('eacces') || s.includes('permission')) return 'permission denied while starting server';
+        if (stderrTail) return 'server produced stderr output during startup';
+        return 'no stderr received; server may be waiting for input or stuck during startup';
+      };
+      const slowTimer1 = setTimeout(() => {
+        const stderrTail = getStderrTail();
+        this.onServerStatus?.({
+          serverId: this.serverId,
+          status: 'initializing_slow',
+          elapsedMs: Date.now() - initStartedAt,
+          stderrTail: stderrTail || undefined,
+          hint: makeHint({ stderrTail }),
+        });
+      }, Math.min(5000, Math.max(1000, Math.round(initTimeoutMs / 3))));
+      const slowTimer2 = setTimeout(() => {
+        const stderrTail = getStderrTail();
+        const hint = makeHint({ stderrTail });
+        this.onServerStatus?.({
+          serverId: this.serverId,
+          status: 'initializing_slow',
+          elapsedMs: Date.now() - initStartedAt,
+          stderrTail: stderrTail || undefined,
+          hint,
+        });
+        this.onLog?.({ serverId: this.serverId, level: 'warn', message: `[startup] initialize is slow (${Date.now() - initStartedAt}ms). ${hint}` });
+      }, Math.min(15000, Math.max(2000, Math.round((initTimeoutMs * 2) / 3))));
 
       let onError = null;
       let onExit = null;
@@ -197,16 +247,28 @@ class LspServerProcess extends EventEmitter {
           procFailure,
         ]);
       } catch (err) {
+        const stderrTail = getStderrTail();
+        const hint = makeHint({ error: err?.message || String(err), stderrTail });
         this.logger?.error?.('initialize failed', {
           serverId: this.serverId,
           timeoutMs: initTimeoutMs,
           command: this.serverConfig?.transport?.command,
           cwd: this.serverConfig?.transport?.cwd,
           error: err?.message || String(err),
+          stderrTail: stderrTail || undefined,
         });
-        this.onServerStatus?.({ serverId: this.serverId, status: 'initialize_failed', error: err?.message || String(err) });
+        this.onServerStatus?.({
+          serverId: this.serverId,
+          status: 'initialize_failed',
+          error: err?.message || String(err),
+          stderrTail: stderrTail || undefined,
+          hint,
+        });
+        if (hint) this.onLog?.({ serverId: this.serverId, level: 'error', message: `[startup] initialize failed. ${hint}` });
         throw err;
       } finally {
+        try { clearTimeout(slowTimer1); } catch {}
+        try { clearTimeout(slowTimer2); } catch {}
         try { if (onError) t.proc.off('error', onError); } catch {}
         try { if (onExit) t.proc.off('exit', onExit); } catch {}
       }

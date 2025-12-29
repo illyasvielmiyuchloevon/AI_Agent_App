@@ -32,8 +32,8 @@ const summarizeLspStatus = (byServerId, languageId) => {
 
   const statuses = entries.map(([, v]) => String(v?.status || '')).filter(Boolean);
   const errors = entries.map(([, v]) => String(v?.error || '')).filter(Boolean);
-  const hasError = statuses.some((s) => s === 'error' || s === 'restart_giveup');
-  const hasRestarting = statuses.some((s) => s === 'restarting' || s === 'starting');
+  const hasError = statuses.some((s) => s === 'error' || s === 'restart_giveup' || s === 'initialize_failed');
+  const hasRestarting = statuses.some((s) => s === 'restarting' || s === 'starting' || s === 'initializing' || s === 'initializing_slow');
   const hasReady = statuses.some((s) => s === 'ready');
 
   if (hasReady) return { label: hasRestarting ? 'LSP: Starting…' : 'LSP: Ready', tone: hasRestarting ? 'warning' : 'ok' };

@@ -461,8 +461,12 @@ export const lspService = (() => {
     const disposables = [];
     const completionPendingByKey = new Map(); // key -> { timer, resolve, cancelToken }
     const hoverPendingByKey = new Map(); // key -> { timer, resolve, cancelToken }
+    const completionCacheByKey = new Map(); // key -> { ts, versionId, positionKey, value }
+    const hoverCacheByKey = new Map(); // key -> { ts, versionId, positionKey, value }
     const COMPLETION_DEBOUNCE_MS = 90;
     const HOVER_DEBOUNCE_MS = 180;
+    const COMPLETION_CACHE_MS = 160;
+    const HOVER_CACHE_MS = 220;
 
     disposables.push(monaco.editor.registerEditorOpener({
       openCodeEditor: (_source, resource, selectionOrPosition) => {
@@ -503,6 +507,13 @@ export const lspService = (() => {
           if (!state) return { suggestions: [] };
 
           const key = `${state.serverId}::${state.uri}`;
+          const versionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
+          const positionKey = `${Number(position?.lineNumber || 0)}:${Number(position?.column || 0)}`;
+          const cached = completionCacheByKey.get(key);
+          if (cached && cached.versionId === versionId && cached.positionKey === positionKey && (Date.now() - cached.ts) <= COMPLETION_CACHE_MS) {
+            return cached.value;
+          }
+
           const prev = completionPendingByKey.get(key);
           if (prev) {
             completionPendingByKey.delete(key);
@@ -519,6 +530,9 @@ export const lspService = (() => {
             const finishEmpty = () => resolve({ suggestions: [] });
             const timer = setTimeout(async () => {
               completionPendingByKey.delete(key);
+              if (token?.isCancellationRequested) return finishEmpty();
+              const nowVersionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
+              if (nowVersionId !== versionId) return finishEmpty();
               const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
               const res = await bridge.completion(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch((err) => {
                 outputService.append('LSP', `[ERROR] completion failed: ${err?.message || String(err)}`);
@@ -547,7 +561,9 @@ export const lspService = (() => {
                   data: { serverId: state.serverId, uri: state.uri, lspItem: it },
                 };
               }).filter((s) => s.label);
-              resolve({ suggestions });
+              const value = { suggestions };
+              completionCacheByKey.set(key, { ts: Date.now(), versionId, positionKey, value });
+              resolve(value);
             }, COMPLETION_DEBOUNCE_MS);
 
             completionPendingByKey.set(key, { timer, resolve: finishEmpty, cancelToken });
@@ -593,6 +609,13 @@ export const lspService = (() => {
           if (!state) return null;
 
           const key = `${state.serverId}::${state.uri}`;
+          const versionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
+          const positionKey = `${Number(position?.lineNumber || 0)}:${Number(position?.column || 0)}`;
+          const cached = hoverCacheByKey.get(key);
+          if (cached && cached.versionId === versionId && cached.positionKey === positionKey && (Date.now() - cached.ts) <= HOVER_CACHE_MS) {
+            return cached.value;
+          }
+
           const prev = hoverPendingByKey.get(key);
           if (prev) {
             hoverPendingByKey.delete(key);
@@ -606,6 +629,9 @@ export const lspService = (() => {
             const finishEmpty = () => resolve(null);
             const timer = setTimeout(async () => {
               hoverPendingByKey.delete(key);
+              if (token?.isCancellationRequested) return finishEmpty();
+              const nowVersionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
+              if (nowVersionId !== versionId) return finishEmpty();
               const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
               const res = await bridge.hover(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch((err) => {
                 outputService.append('LSP', `[ERROR] hover failed: ${err?.message || String(err)}`);
@@ -617,7 +643,9 @@ export const lspService = (() => {
                   (Array.isArray(contents) ? contents.map((c) => c?.value || c).filter(Boolean).join('\n\n') : (contents?.value || ''));
 
               if (!markdown) return resolve(null);
-              resolve({ contents: [{ value: String(markdown) }] });
+              const value = { contents: [{ value: String(markdown) }] };
+              hoverCacheByKey.set(key, { ts: Date.now(), versionId, positionKey, value });
+              resolve(value);
             }, HOVER_DEBOUNCE_MS);
 
             hoverPendingByKey.set(key, { timer, resolve: finishEmpty, cancelToken });
@@ -1392,7 +1420,14 @@ export const lspService = (() => {
     });
     const disposeStatus = bridge.onServerStatus((payload) => {
       const server = payload?.serverId ? String(payload.serverId) : 'unknown';
-      outputService.append('LSP', `[STATUS] ${server} ${String(payload?.status || '')}`);
+      const status = String(payload?.status || '');
+      const parts = [`[STATUS] ${server} ${status}`];
+      if (payload?.elapsedMs) parts.push(`${Number(payload.elapsedMs)}ms`);
+      if (payload?.timeoutMs) parts.push(`timeout=${Number(payload.timeoutMs)}ms`);
+      if (payload?.error) parts.push(`error=${String(payload.error)}`);
+      if (payload?.hint) parts.push(`hint=${String(payload.hint)}`);
+      outputService.append('LSP', parts.join(' '));
+      if (payload?.stderrTail) outputService.append('LSP', `[STDERR] ${server} ${String(payload.stderrTail)}`);
       try {
         globalThis.window.dispatchEvent(new CustomEvent('workbench:lspServerStatus', { detail: payload || {} }));
       } catch {

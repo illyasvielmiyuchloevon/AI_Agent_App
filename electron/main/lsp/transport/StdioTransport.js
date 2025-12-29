@@ -27,6 +27,11 @@ class StdioTransport {
     this.reader = new MessageReader(proc.stdout);
     this.writer = new MessageWriter(proc.stdin);
 
+    proc.stdin.on('error', (err) => {
+      const message = err?.message || String(err);
+      if (message) this.logger?.warn?.('server stdin error', { message });
+    });
+
     proc.stderr.on('data', (buf) => {
       const msg = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '');
       if (msg.trim()) this.logger?.warn?.('server stderr', { message: msg });
@@ -60,4 +65,3 @@ class StdioTransport {
 }
 
 module.exports = { StdioTransport };
-
