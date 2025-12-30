@@ -276,14 +276,19 @@ class LanguagePluginManager {
 
     const serverConfigs = [];
     for (const server of matchingServers) {
-      const transport = resolveTransportTemplate(server.transport || {}, vars);
-      const cmdTemplate = String(server?.transport?.command || '');
-      if (process?.versions?.electron && cmdTemplate.includes('${NODE}')) {
-        transport.env = { ...(transport.env || {}), ELECTRON_RUN_AS_NODE: '1' };
-      }
+      let transport = resolveTransportTemplate(server.transport || {}, vars);
 
       let command = String(transport.command || '').trim();
       if (!command) return { ok: false, error: 'resolved command is empty' };
+
+      if (process.versions?.electron) {
+        if (command === 'node' || command === process.execPath) {
+          const baseEnv = (transport.env && typeof transport.env === 'object') ? transport.env : {};
+          transport = { ...transport, env: { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' } };
+          command = process.execPath;
+        }
+      }
+
       if (!path.isAbsolute(command) && command !== 'node') {
         command = path.join(pluginDir, command);
       }

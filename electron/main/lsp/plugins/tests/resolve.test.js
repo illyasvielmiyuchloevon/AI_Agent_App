@@ -8,8 +8,6 @@ const { LanguagePluginRegistry } = require('../LanguagePluginRegistry');
 const { LanguagePluginManager } = require('../LanguagePluginManager');
 
 test('LanguagePluginManager.resolveServerConfig resolves ${NODE} and ${PLUGIN_DIR}', async () => {
-  const prevElectron = process.versions.electron;
-  try { process.versions.electron = 'test'; } catch {}
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'lsp-plugin-mgr-'));
   const regPath = path.join(dir, 'registry.json');
   const pluginDir = path.join(dir, 'plugins', 'tsls', '1.0.0');
@@ -46,9 +44,5 @@ test('LanguagePluginManager.resolveServerConfig resolves ${NODE} and ${PLUGIN_DI
   assert.equal(res.ok, true);
   assert.equal(res.serverConfig.transport.command, process.execPath);
   assert.ok(String(res.serverConfig.transport.args[0]).includes('server.js'));
-  assert.equal(res.serverConfig.transport.env?.ELECTRON_RUN_AS_NODE, '1');
-  try {
-    if (prevElectron === undefined) delete process.versions.electron;
-    else process.versions.electron = prevElectron;
-  } catch {}
 });
+

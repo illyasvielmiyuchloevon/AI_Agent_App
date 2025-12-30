@@ -17,13 +17,15 @@ const guessIsWindows = (rootFsPath) => /[a-zA-Z]:\\/.test(String(rootFsPath || '
 
 const fileUriToFsPath = (uri, { windows = false } = {}) => {
   const s = String(uri || '');
-  if (!s.startsWith('file://')) return '';
+  if (!s.startsWith('file:')) return '';
   try {
     const u = new URL(s);
+    if (u.protocol !== 'file:') return '';
+    const hostname = u.hostname ? decodeURIComponent(u.hostname) : '';
     const path = decodeURIComponent(u.pathname || '');
     if (windows) {
-      const p = path.replace(/^\//, '').replace(/\//g, '\\');
-      return p;
+      if (hostname) return `\\\\${hostname}${path.replace(/\//g, '\\')}`;
+      return path.replace(/^\//, '').replace(/\//g, '\\');
     }
     return path;
   } catch {
@@ -148,11 +150,8 @@ export const lspService = (() => {
 
   const normalizeFsPath = (p) => {
     const s = String(p || '').trim().replace(/[\\\/]+$/, '');
-    const isWin =
-      (typeof process !== 'undefined' && process?.platform === 'win32') ||
-      guessIsWindows(s) ||
-      guessIsWindows(rootFsPath);
-    return isWin ? s.toLowerCase() : s;
+    const looksWindows = /^[a-zA-Z]:[\\/]/.test(s) || /^\\\\/.test(s) || s.includes('\\');
+    return looksWindows ? s.toLowerCase() : s;
   };
 
   const pickContainingRootFsPath = (roots, fsPath) => {

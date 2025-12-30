@@ -1,5 +1,27 @@
 const isWindowsAbsPath = (p) => /^[a-zA-Z]:[\\/]/.test(String(p || ''));
 const isUncPath = (p) => /^\\\\/.test(String(p || ''));
+const looksLikeFileUri = (s) => /^file:/i.test(String(s || '').trim());
+
+const fileUriToFsPath = (uri, { windowsHint = false } = {}) => {
+  const raw = String(uri || '').trim();
+  if (!looksLikeFileUri(raw)) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'file:') return '';
+    const pathname = decodeURIComponent(u.pathname || '');
+    const hostname = u.hostname ? decodeURIComponent(u.hostname) : '';
+    const looksWindowsDrive = /^[a-zA-Z]:/.test(pathname.replace(/^\//, ''));
+    const windows = !!(windowsHint || hostname || looksWindowsDrive);
+
+    if (windows) {
+      if (hostname) return `\\\\${hostname}${pathname.replace(/\//g, '\\')}`;
+      return pathname.replace(/^\//, '').replace(/\//g, '\\');
+    }
+    return pathname;
+  } catch {
+    return '';
+  }
+};
 
 export function toFileUri(fsPath) {
   const raw = String(fsPath || '').trim();
@@ -50,11 +72,21 @@ export function inferLanguageIdFromPath(filePath) {
 
 export function resolveFsPath(rootFsPath, modelPath) {
   const root = String(rootFsPath || '').trim();
-  const rel = String(modelPath || '').replace(/^\//, '').replace(/^\\/, '');
+  const raw = String(modelPath || '').trim();
+  if (!raw) return '';
+
+  const windows = root.includes('\\') || /^[a-zA-Z]:\\/.test(root) || /^\\\\/.test(root);
+  if (looksLikeFileUri(raw)) {
+    const fsPath = fileUriToFsPath(raw, { windowsHint: windows });
+    if (fsPath) return fsPath;
+  }
+
+  if (isUncPath(raw) || isWindowsAbsPath(raw)) return raw;
+
+  const rel = raw.replace(/^\//, '').replace(/^\\/, '');
   if (!root) return rel;
-  const sep = root.includes('\\') || /^[a-zA-Z]:\\/.test(root) ? '\\' : '/';
+  const sep = windows ? '\\' : '/';
   const left = root.replace(/[\\/]+$/, '');
   const right = rel.replace(/^[\\/]+/, '');
   return `${left}${sep}${right}`;
 }
-

@@ -115,55 +115,25 @@ function normalizeState(raw: any): DBState {
     return state;
 }
 
-async function sleep(ms: number): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function atomicWriteTextFile(filePath: string, payload: string, logLabel: string): Promise<void> {
-    const tmpPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(16).slice(2)}`;
-    await fs.writeFile(tmpPath, payload, 'utf-8');
-
-    const tryRenameWithRetry = async () => {
-        const delays = [0, 25, 60, 120, 240];
-        let lastErr: any = null;
-        for (const d of delays) {
-            if (d) await sleep(d);
-            try {
-                await fs.rename(tmpPath, filePath);
-                return { ok: true as const, err: null };
-            } catch (e: any) {
-                lastErr = e;
-                const code = String(e?.code || '');
-                if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') continue;
-                return { ok: false as const, err: e };
-            }
-        }
-        return { ok: false as const, err: lastErr };
-    };
-
-    try {
-        const res = await tryRenameWithRetry();
-        if (res.ok) return;
-
-        try {
-            await fs.copyFile(tmpPath, filePath);
-            return;
-        } catch {
-            const code = String(res.err?.code || res.err?.message || 'unknown');
-            console.warn(`[DB] rename failed (${code}), fallback to direct write: ${logLabel}`);
-            await fs.writeFile(filePath, payload, 'utf-8');
-            return;
-        }
-    } finally {
-        try { await fs.unlink(tmpPath); } catch {}
-    }
-}
-
 async function saveState(state: DBState): Promise<void> {
     const dir = await ensureDataDir();
     const filePath = path.join(dir, DATA_FILE_NAME);
+    const tempPath = `${filePath}.tmp`;
     const payload = JSON.stringify(state, null, 2);
-    await atomicWriteTextFile(filePath, payload, DATA_FILE_NAME);
+    await fs.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await fs.rename(tempPath, filePath);
+    } catch (e: any) {
+        console.warn(`[DB] rename failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await fs.writeFile(filePath, payload, 'utf-8');
+        } catch (inner) {
+            console.error(`[DB] direct write failed: ${(inner as any)?.message}`);
+            throw inner;
+        } finally {
+            try { await fs.unlink(tempPath); } catch {}
+        }
+    }
 }
 
 // --- Public API ---
@@ -395,7 +365,21 @@ export async function saveLlmConfig(config: any): Promise<any> {
     const filePath = path.join(dir, LLM_CONFIG_FILE);
     console.log(`[DB] Saving LLM config to: ${filePath}`);
     console.log(`[DB] Saving config provider: ${config.provider}`);
+    const tempPath = `${filePath}.tmp`;
     const payload = JSON.stringify(config, null, 2);
-    await atomicWriteTextFile(filePath, payload, LLM_CONFIG_FILE);
+    await fs.writeFile(tempPath, payload, 'utf-8');
+    try {
+        await fs.rename(tempPath, filePath);
+    } catch (e: any) {
+        console.warn(`[DB] rename config failed (${e?.code || e?.message}), fallback to direct write`);
+        try {
+            await fs.writeFile(filePath, payload, 'utf-8');
+        } catch (inner) {
+            console.error(`[DB] direct write config failed: ${(inner as any)?.message}`);
+            throw inner;
+        } finally {
+            try { await fs.unlink(tempPath); } catch {}
+        }
+    }
     return config;
 }

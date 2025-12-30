@@ -5,7 +5,6 @@ const simpleGit = require('simple-git');
 const { registerIpcHandlers } = require('./main/ipcHandlers');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
-const shouldOpenDevTools = process.env.ELECTRON_OPEN_DEVTOOLS !== '0';
 
 // Remove native application menu
 Menu.setApplicationMenu(null);
@@ -64,23 +63,23 @@ function createWindow() {
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
+    // DevTools can be noisy (e.g. Autofill CDP domain mismatch). Only auto-open when explicitly requested.
+    if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+      win.webContents.openDevTools({ mode: 'detach' });
+      win.webContents.once('devtools-opened', () => {
+        const devtools = win.webContents.devToolsWebContents;
+        if (!devtools) return;
+        devtools.executeJavaScript(`
+          try {
+            localStorage.setItem('showSizeOnResize', 'false');
+            localStorage.setItem('emulation.showSizeOnResize', 'false');
+          } catch {}
+        `, true).catch(() => {});
+      });
+    }
   } else {
     const indexPath = path.join(__dirname, '../frontend/dist/index.html');
     win.loadFile(indexPath);
-  }
-
-  if (shouldOpenDevTools) {
-    win.webContents.openDevTools({ mode: 'detach' });
-    win.webContents.once('devtools-opened', () => {
-      const devtools = win.webContents.devToolsWebContents;
-      if (!devtools) return;
-      devtools.executeJavaScript(`
-        try {
-          localStorage.setItem('showSizeOnResize', 'false');
-          localStorage.setItem('emulation.showSizeOnResize', 'false');
-        } catch {}
-      `, true).catch(() => {});
-    });
   }
 }
 

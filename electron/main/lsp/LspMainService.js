@@ -40,6 +40,8 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
   const sink = (payload) => broadcast?.('lsp:log', payload);
   const log = logger || createLogger({ namespace: 'lsp', enabled: true, sink });
 
+  const isCancelledError = (err) => String(err?.name || '') === 'CancelledError';
+
   let lastActiveWebContents = null;
 
   const applyEditPending = new Map(); // requestId -> { resolve, timer }
@@ -93,7 +95,16 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     const wid = String(ws.workspaceId || '').trim();
     const foldersRaw = Array.isArray(ws.folders) ? ws.folders : [];
     const folders = foldersRaw
-      .map((f) => ({ name: String(f?.name || '').trim(), uri: String(f?.uri || '').trim() }))
+      .map((f) => {
+        const name = String(f?.name || '').trim();
+        const rawUri = String(f?.uri || '').trim();
+        if (rawUri.startsWith('file:')) {
+          const fsPath = fromFileUri(rawUri);
+          const uri = fsPath ? toFileUri(fsPath) : rawUri;
+          return { name, uri };
+        }
+        return { name, uri: rawUri };
+      })
       .filter((f) => f.uri);
 
     if (!folders.length && rootFsPath) {
@@ -101,14 +112,19 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
       if (uri) folders.push({ name: path.basename(rootFsPath), uri });
     }
 
-    const rootUri = String(ws.rootUri || '').trim() || (rootFsPath ? toFileUri(rootFsPath) : '') || (folders[0]?.uri || '');
+    let rootUri = String(ws.rootUri || '').trim();
+    if (rootUri.startsWith('file:')) {
+      const fsPath = fromFileUri(rootUri);
+      rootUri = fsPath ? toFileUri(fsPath) : rootUri;
+    }
+    rootUri = rootUri || (rootFsPath ? toFileUri(rootFsPath) : '') || (folders[0]?.uri || '');
     return { workspaceId: wid, rootFsPath, rootUri, folders };
   };
 
   const resolveFileFsPath = (filePath, rootFsPath) => {
     const fp = String(filePath || '').trim();
     if (!fp) return '';
-    if (fp.startsWith('file://')) return fromFileUri(fp);
+    if (fp.startsWith('file:')) return fromFileUri(fp);
     if (path.isAbsolute(fp)) return fp;
     const root = String(rootFsPath || '').trim();
     if (!root) return '';
@@ -159,23 +175,6 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     }
     if (!pluginManager) throw new Error('language plugins are not available');
 
-    const tryRepair = async (pluginId, err) => {
-      const isModuleNotFound = String(err?.message || '').includes('MODULE_NOT_FOUND') || String(err?.message || '').includes('Cannot find module');
-      if (!isModuleNotFound || !pluginId) return false;
-      try {
-        broadcast?.('lsp:log', { level: 'warn', message: `[LSP] Plugin '${pluginId}' seems corrupted. Attempting auto-repair...` });
-        const fullPlugin = pluginManager.registry.getPlugin(pluginId);
-        const providerId = fullPlugin?.installed?.source?.providerId || fullPlugin?.source?.providerId || 'official';
-        const version = fullPlugin?.installed?.version || 'latest';
-        await pluginManager.install({ providerId, id: pluginId, version });
-        broadcast?.('lsp:log', { level: 'info', message: `[LSP] Plugin '${pluginId}' reinstalled.` });
-        return true;
-      } catch (repairErr) {
-        broadcast?.('lsp:log', { level: 'error', message: `[LSP] Auto-repair failed: ${repairErr.message}` });
-        return false;
-      }
-    };
-
     const wid = String(workspaceId || '').trim();
     const lang = String(languageId || '').trim();
     const preferred =
@@ -219,9 +218,7 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     if (resolvedMany?.ok) {
       const configs = Array.isArray(resolvedMany.serverConfigs) ? resolvedMany.serverConfigs : [];
       if (!configs.length) throw new Error('plugin has no matching server');
-      const ensured = await Promise.all(configs.map((cfg) => manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: cfg, workspace: workspaceForFile }))).catch((err) => {
-        throw new Error(`Failed to start language servers: ${err.message}`);
-      });
+      const ensured = await Promise.all(configs.map((cfg) => manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: cfg, workspace: workspaceForFile })));
       const primaryIdx = Math.max(0, configs.findIndex((c) => String(c?.role || '').toLowerCase() === 'primary'));
       const serverIds = ensured.map((r) => String(r?.serverId || '')).filter(Boolean);
       const serverId = serverIds[primaryIdx] || serverIds[0] || '';
@@ -239,12 +236,8 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
       throw new Error(msg);
     }
 
-    try {
-      const res = await manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: resolvedOne.serverConfig, workspace: workspaceForFile });
-      return { ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
-    } catch (err) {
-      throw new Error(`Failed to start language server: ${err.message}`);
-    }
+    const res = await manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: resolvedOne.serverConfig, workspace: workspaceForFile });
+    return { ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
   });
 
   ipcMain.handle('lsp:openDocument', async (event, serverId, doc) => {
@@ -292,12 +285,22 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
 
   ipcMain.handle('lsp:codeAction', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
-    return manager.codeAction(serverId, params, options || {});
+    try {
+      return await manager.codeAction(serverId, params, options || {});
+    } catch (err) {
+      if (isCancelledError(err)) return [];
+      throw err;
+    }
   });
 
   ipcMain.handle('lsp:codeActionResolve', async (event, serverId, action, docUri, options) => {
     ensureSenderSubscribed(event);
-    return manager.codeActionResolve(serverId, action, docUri, options || {});
+    try {
+      return await manager.codeActionResolve(serverId, action, docUri, options || {});
+    } catch (err) {
+      if (isCancelledError(err)) return null;
+      throw err;
+    }
   });
 
   ipcMain.handle('lsp:signatureHelp', async (event, serverId, params, options) => {
@@ -308,11 +311,6 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
   ipcMain.handle('lsp:rename', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.rename(serverId, params, options || {});
-  });
-
-  ipcMain.handle('lsp:prepareRename', async (event, serverId, params, options) => {
-    ensureSenderSubscribed(event);
-    return manager.prepareRename(serverId, params, options || {});
   });
 
   ipcMain.handle('lsp:format', async (event, serverId, params, options) => {
@@ -399,11 +397,6 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
   ipcMain.handle('lsp:inlayHint', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.inlayHint(serverId, params, options || {});
-  });
-
-  ipcMain.handle('lsp:inlayHintResolve', async (event, serverId, hint, docUri, options) => {
-    ensureSenderSubscribed(event);
-    return manager.inlayHintResolve(serverId, hint, docUri, options || {});
   });
 
   ipcMain.handle('lsp:foldingRange', async (event, serverId, params, options) => {
