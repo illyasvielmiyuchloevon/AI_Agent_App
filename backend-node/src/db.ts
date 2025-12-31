@@ -85,7 +85,8 @@ function getDataFilePath(): string {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function safeWriteJsonFile(filePath: string, payload: string, { tag = 'DB' } = {}): Promise<void> {
-    const tempPath = `${filePath}.tmp`;
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
     await fs.writeFile(tempPath, payload, 'utf-8');
 
     const tryRename = async () => {

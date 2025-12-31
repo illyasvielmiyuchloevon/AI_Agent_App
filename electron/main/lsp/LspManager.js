@@ -455,6 +455,218 @@ class LspManager {
     }
   }
 
+  _supportsWorkspaceFileOperation(state, kind) {
+    const s = state;
+    if (!s?.proc) return false;
+    const caps = this._effectiveServerCapabilities(s);
+    const fileOps = caps?.workspace?.fileOperations || {};
+    const regs = s.dynamicRegistrations?.byMethod;
+    const registered = (method) => {
+      const map = regs?.get?.(method);
+      return !!(map && map instanceof Map && map.size > 0);
+    };
+
+    if (kind === 'willCreateFiles') return !!fileOps.willCreate || registered('workspace/willCreateFiles');
+    if (kind === 'didCreateFiles') return !!fileOps.didCreate || registered('workspace/didCreateFiles');
+    if (kind === 'willRenameFiles') return !!fileOps.willRename || registered('workspace/willRenameFiles');
+    if (kind === 'didRenameFiles') return !!fileOps.didRename || registered('workspace/didRenameFiles');
+    if (kind === 'willDeleteFiles') return !!fileOps.willDelete || registered('workspace/willDeleteFiles');
+    if (kind === 'didDeleteFiles') return !!fileOps.didDelete || registered('workspace/didDeleteFiles');
+    return false;
+  }
+
+  async _mapWorkspaceFileOperationParams(state, kind, params) {
+    const s = state;
+    const p = (params && typeof params === 'object') ? params : {};
+    const files = Array.isArray(p.files) ? p.files : [];
+    if (!s || !files.length) return { ...p, files };
+
+    const mapped = [];
+    for (const f of files) {
+      if (!f || typeof f !== 'object') continue;
+      if (kind.includes('Rename')) {
+        const oldUri = String(f.oldUri || '');
+        const newUri = String(f.newUri || '');
+        if (!oldUri || !newUri) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const serverOldUri = await this._mapClientUriToServerUri(s, oldUri);
+        // eslint-disable-next-line no-await-in-loop
+        const serverNewUri = await this._mapClientUriToServerUri(s, newUri);
+        mapped.push({ ...f, oldUri: serverOldUri, newUri: serverNewUri });
+      } else {
+        const uri = String(f.uri || '');
+        if (!uri) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const serverUri = await this._mapClientUriToServerUri(s, uri);
+        mapped.push({ ...f, uri: serverUri });
+      }
+    }
+
+    return { ...p, files: mapped };
+  }
+
+  async willCreateFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false, results: [] };
+
+    const results = [];
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'willCreateFiles')) continue;
+
+      await state.proc.startAndInitialize();
+      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willCreateFiles', params);
+
+      const cts = cancelToken ? new CancellationTokenSource() : null;
+      if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const edit = await state.proc.sendRequest('workspace/willCreateFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
+        let applied = false;
+        let failureReason;
+        if (edit && this.externalApplyWorkspaceEdit) {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willCreateFiles', edit });
+          applied = !!res?.applied;
+          failureReason = res?.failureReason;
+        }
+        results.push({ serverId, ok: true, applied, failureReason, hasEdit: !!edit });
+      } catch (err) {
+        results.push({ serverId, ok: false, error: err?.message || String(err) });
+      } finally {
+        if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+      }
+    }
+
+    return { ok: true, results };
+  }
+
+  async didCreateFiles(workspaceId, params) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'didCreateFiles')) continue;
+      try {
+        await state.proc.startAndInitialize();
+        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didCreateFiles', params);
+        state.proc.sendNotification('workspace/didCreateFiles', serverParams);
+      } catch (err) {
+        this.logger?.exception?.('workspace/didCreateFiles notify failed', err, { serverId });
+      }
+    }
+    return { ok: true };
+  }
+
+  async willRenameFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false, results: [] };
+
+    const results = [];
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'willRenameFiles')) continue;
+
+      await state.proc.startAndInitialize();
+      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willRenameFiles', params);
+
+      const cts = cancelToken ? new CancellationTokenSource() : null;
+      if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const edit = await state.proc.sendRequest('workspace/willRenameFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
+        let applied = false;
+        let failureReason;
+        if (edit && this.externalApplyWorkspaceEdit) {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willRenameFiles', edit });
+          applied = !!res?.applied;
+          failureReason = res?.failureReason;
+        }
+        results.push({ serverId, ok: true, applied, failureReason, hasEdit: !!edit });
+      } catch (err) {
+        results.push({ serverId, ok: false, error: err?.message || String(err) });
+      } finally {
+        if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+      }
+    }
+
+    return { ok: true, results };
+  }
+
+  async didRenameFiles(workspaceId, params) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'didRenameFiles')) continue;
+      try {
+        await state.proc.startAndInitialize();
+        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didRenameFiles', params);
+        state.proc.sendNotification('workspace/didRenameFiles', serverParams);
+      } catch (err) {
+        this.logger?.exception?.('workspace/didRenameFiles notify failed', err, { serverId });
+      }
+    }
+    return { ok: true };
+  }
+
+  async willDeleteFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false, results: [] };
+
+    const results = [];
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'willDeleteFiles')) continue;
+
+      await state.proc.startAndInitialize();
+      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willDeleteFiles', params);
+
+      const cts = cancelToken ? new CancellationTokenSource() : null;
+      if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const edit = await state.proc.sendRequest('workspace/willDeleteFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
+        let applied = false;
+        let failureReason;
+        if (edit && this.externalApplyWorkspaceEdit) {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willDeleteFiles', edit });
+          applied = !!res?.applied;
+          failureReason = res?.failureReason;
+        }
+        results.push({ serverId, ok: true, applied, failureReason, hasEdit: !!edit });
+      } catch (err) {
+        results.push({ serverId, ok: false, error: err?.message || String(err) });
+      } finally {
+        if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+      }
+    }
+
+    return { ok: true, results };
+  }
+
+  async didDeleteFiles(workspaceId, params) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, 'didDeleteFiles')) continue;
+      try {
+        await state.proc.startAndInitialize();
+        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didDeleteFiles', params);
+        state.proc.sendNotification('workspace/didDeleteFiles', serverParams);
+      } catch (err) {
+        this.logger?.exception?.('workspace/didDeleteFiles notify failed', err, { serverId });
+      }
+    }
+    return { ok: true };
+  }
+
   async ensureServer({ workspaceId, languageId, serverConfig, workspace }) {
     const cfg = serverConfig || {};
     if (!cfg?.transport?.command) throw new Error('serverConfig.transport.command is required');
@@ -851,6 +1063,112 @@ class LspManager {
     try {
       const result = await s.proc.sendRequest('textDocument/definition', serverParams, { timeoutMs, cancelToken: cts?.token });
       return await this._convertLocations(s, result, serverEnc, 'utf-16', { originServerUri: serverUri });
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
+  async declaration(serverId, params, { timeoutMs = 2000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = {
+      ...params,
+      textDocument: { ...(params?.textDocument || {}), uri: serverUri },
+      position: params?.position ? convertPosition(text, params.position, 'utf-16', serverEnc) : params?.position,
+    };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/declaration', serverParams, { timeoutMs, cancelToken: cts?.token });
+      return await this._convertLocations(s, result, serverEnc, 'utf-16', { originServerUri: serverUri });
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
+  async documentColor(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = { ...params, textDocument: { ...(params?.textDocument || {}), uri: serverUri } };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/documentColor', serverParams, { timeoutMs, cancelToken: cts?.token });
+      const list = Array.isArray(result) ? result : [];
+      return list.map((ci) => {
+        if (!ci || typeof ci !== 'object') return ci;
+        if (!ci.range) return ci;
+        return { ...ci, range: convertRange(text, ci.range, serverEnc, 'utf-16') };
+      });
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
+  async colorPresentation(serverId, params, { timeoutMs = 4000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = {
+      ...params,
+      textDocument: { ...(params?.textDocument || {}), uri: serverUri },
+      range: params?.range ? convertRange(text, params.range, 'utf-16', serverEnc) : params?.range,
+    };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/colorPresentation', serverParams, { timeoutMs, cancelToken: cts?.token });
+      const list = Array.isArray(result) ? result : [];
+      const out = [];
+      for (const cp of list) {
+        if (!cp || typeof cp !== 'object') {
+          out.push(cp);
+          continue;
+        }
+        const next = { ...cp };
+        if (next.textEdit) next.textEdit = this._convertTextEdit(text, next.textEdit, serverEnc, 'utf-16');
+        if (Array.isArray(next.additionalTextEdits)) next.additionalTextEdits = next.additionalTextEdits.map((e) => this._convertTextEdit(text, e, serverEnc, 'utf-16'));
+        out.push(next);
+      }
+      return out;
+    } finally {
+      if (cancelToken) this.pendingByToken.delete(String(cancelToken));
+    }
+  }
+
+  async linkedEditingRange(serverId, params, { timeoutMs = 2000, cancelToken } = {}) {
+    const s = this._getServer(serverId);
+    await s.proc.startAndInitialize();
+    const clientUri = String(params?.textDocument?.uri || '');
+    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
+    const serverEnc = this._serverPositionEncoding(s);
+    const text = await this._getTextForServerUri(s, serverUri);
+    const serverParams = {
+      ...params,
+      textDocument: { ...(params?.textDocument || {}), uri: serverUri },
+      position: params?.position ? convertPosition(text, params.position, 'utf-16', serverEnc) : params?.position,
+    };
+    const cts = cancelToken ? new CancellationTokenSource() : null;
+    if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
+    try {
+      const result = await s.proc.sendRequest('textDocument/linkedEditingRange', serverParams, { timeoutMs, cancelToken: cts?.token });
+      if (!result || typeof result !== 'object') return result;
+      const ranges = Array.isArray(result.ranges) ? result.ranges : [];
+      return {
+        ...result,
+        ranges: ranges.map((r) => (r ? convertRange(text, r, serverEnc, 'utf-16') : r)),
+      };
     } finally {
       if (cancelToken) this.pendingByToken.delete(String(cancelToken));
     }

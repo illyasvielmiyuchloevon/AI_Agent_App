@@ -62,6 +62,7 @@ function buildClientCapabilities({
       },
       hover: { dynamicRegistration },
       definition: { dynamicRegistration },
+      declaration: { dynamicRegistration },
       references: { dynamicRegistration },
       signatureHelp: { dynamicRegistration, signatureInformation: { documentationFormat: ['markdown', 'plaintext'] } },
       documentSymbol: { dynamicRegistration },
@@ -69,6 +70,8 @@ function buildClientCapabilities({
       formatting: { dynamicRegistration },
       rangeFormatting: { dynamicRegistration },
       codeAction: { dynamicRegistration, codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix', 'refactor', 'source'] } } },
+      colorProvider: { dynamicRegistration },
+      linkedEditingRange: { dynamicRegistration },
       foldingRange: { dynamicRegistration, lineFoldingOnly: true },
       implementation: { dynamicRegistration },
       typeDefinition: { dynamicRegistration },
@@ -91,6 +94,15 @@ function buildClientCapabilities({
       configuration: !!configuration,
       workspaceFolders: true,
       didChangeWatchedFiles: { dynamicRegistration: true },
+      fileOperations: {
+        dynamicRegistration: true,
+        didCreate: true,
+        willCreate: true,
+        didRename: true,
+        willRename: true,
+        didDelete: true,
+        willDelete: true,
+      },
       symbol: { dynamicRegistration },
     },
     window: {
@@ -107,10 +119,13 @@ function supports(serverCaps, feature, dynamicRegistrationsByMethod) {
     return !!(map && map instanceof Map && map.size > 0);
   };
 
+  const fileOps = caps?.workspace?.fileOperations || {};
+
   if (feature === 'diagnostics') return true;
   if (feature === 'completion') return !!caps.completionProvider || registered('textDocument/completion');
   if (feature === 'hover') return !!caps.hoverProvider || registered('textDocument/hover');
   if (feature === 'definition') return !!caps.definitionProvider || registered('textDocument/definition');
+  if (feature === 'declaration') return !!caps.declarationProvider || registered('textDocument/declaration');
   if (feature === 'references') return !!caps.referencesProvider || registered('textDocument/references');
   if (feature === 'signatureHelp') return !!caps.signatureHelpProvider || registered('textDocument/signatureHelp');
   if (feature === 'documentSymbol') return !!caps.documentSymbolProvider || registered('textDocument/documentSymbol');
@@ -119,7 +134,15 @@ function supports(serverCaps, feature, dynamicRegistrationsByMethod) {
   if (feature === 'formatting') return !!caps.documentFormattingProvider || registered('textDocument/formatting');
   if (feature === 'rangeFormatting') return !!caps.documentRangeFormattingProvider || registered('textDocument/rangeFormatting');
   if (feature === 'codeAction') return !!caps.codeActionProvider || registered('textDocument/codeAction');
+  if (feature === 'documentColor') return !!caps.colorProvider || registered('textDocument/documentColor');
+  if (feature === 'linkedEditingRange') return !!caps.linkedEditingRangeProvider || registered('textDocument/linkedEditingRange');
   if (feature === 'executeCommand') return !!caps.executeCommandProvider || registered('workspace/executeCommand');
+  if (feature === 'willCreateFiles') return !!fileOps.willCreate || registered('workspace/willCreateFiles');
+  if (feature === 'didCreateFiles') return !!fileOps.didCreate || registered('workspace/didCreateFiles');
+  if (feature === 'willRenameFiles') return !!fileOps.willRename || registered('workspace/willRenameFiles');
+  if (feature === 'didRenameFiles') return !!fileOps.didRename || registered('workspace/didRenameFiles');
+  if (feature === 'willDeleteFiles') return !!fileOps.willDelete || registered('workspace/willDeleteFiles');
+  if (feature === 'didDeleteFiles') return !!fileOps.didDelete || registered('workspace/didDeleteFiles');
   if (feature === 'inlayHint') return !!caps.inlayHintProvider || registered('textDocument/inlayHint');
   if (feature === 'semanticTokens') return !!caps.semanticTokensProvider || registered('textDocument/semanticTokens');
   if (feature === 'foldingRange') return !!caps.foldingRangeProvider || registered('textDocument/foldingRange');

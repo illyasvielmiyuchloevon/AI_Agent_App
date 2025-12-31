@@ -27,6 +27,19 @@ const basename = (abs = '') => {
   return idx >= 0 ? s.slice(idx + 1) : s;
 };
 
+const resolveBackendUrl = (url) => {
+  const u = String(url || '');
+  if (!u.startsWith('/')) return u;
+  if (typeof window === 'undefined') return u;
+  const proto = window.location?.protocol;
+  const origin = window.location?.origin;
+  if (proto === 'file:' || origin === 'null') {
+    const rewritten = u.startsWith('/api') ? u.replace(/^\/api/, '') : u;
+    return `http://127.0.0.1:8000${rewritten || '/'}`;
+  }
+  return u;
+};
+
 async function readJsonResponse(res) {
   try {
     return await res.json();
@@ -79,14 +92,14 @@ export class BackendWorkspaceDriver {
   }
 
   async _getJson(url) {
-    const res = await fetch(url, { method: 'GET', headers: this._headers() });
+    const res = await fetch(resolveBackendUrl(url), { method: 'GET', headers: this._headers() });
     const data = await readJsonResponse(res);
     if (!res.ok) throw new Error(data?.detail || res.statusText || 'Request failed');
     return data;
   }
 
   async _postJson(url, body) {
-    const res = await fetch(url, {
+    const res = await fetch(resolveBackendUrl(url), {
       method: 'POST',
       headers: this._headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body || {}),
@@ -173,7 +186,7 @@ export class BackendWorkspaceDriver {
 
   async search(query, options = {}) {
     const { caseSensitive = false, isRegex = false } = options;
-    const data = await this._postJson('/workspace/search', { 
+    const data = await this._postJson('/api/workspace/search', { 
         query,
         case_sensitive: caseSensitive,
         regex: isRegex

@@ -13,7 +13,10 @@ import { applyLspTextEdits } from '../../lsp/util/textEdits';
 
 const supportedLanguageIds = new Set(['typescript', 'javascript', 'python', 'rust', 'json']);
 
-const guessIsWindows = (rootFsPath) => /[a-zA-Z]:\\/.test(String(rootFsPath || '')) || String(rootFsPath || '').includes('\\');
+const guessIsWindows = (rootFsPath) => {
+  const s = String(rootFsPath || '');
+  return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\') || s.includes('\\');
+};
 
 const fileUriToFsPath = (uri, { windows = false } = {}) => {
   const s = String(uri || '');
@@ -38,8 +41,8 @@ const toWorkspaceRelativePath = (fsPath, rootFsPath) => {
   const full = String(fsPath || '').trim();
   if (!root || !full) return '';
 
-  const windows = guessIsWindows(root);
-  const norm = (p) => windows ? p.replace(/\//g, '\\') : p.replace(/\\/g, '/');
+  const windows = guessIsWindows(rootFsPath);
+  const norm = (p) => (windows ? p.replace(/\//g, '\\') : p.replace(/\\/g, '/'));
   const a = norm(root).replace(/[\\/]+$/, '');
   const b = norm(full);
 
@@ -47,11 +50,15 @@ const toWorkspaceRelativePath = (fsPath, rootFsPath) => {
     const lowerA = a.toLowerCase();
     const lowerB = b.toLowerCase();
     if (!lowerB.startsWith(lowerA)) return '';
+    const boundary = b.charAt(a.length);
+    if (boundary && boundary !== '\\' && boundary !== '/') return '';
     const rest = b.slice(a.length).replace(/^[\\/]+/, '');
     return rest.replace(/\\/g, '/');
   }
 
   if (!b.startsWith(a)) return '';
+  const boundary = b.charAt(a.length);
+  if (boundary && boundary !== '/') return '';
   const rest = b.slice(a.length).replace(/^[\\/]+/, '');
   return rest;
 };
@@ -135,6 +142,9 @@ export const lspService = (() => {
     onFileChange: null,
     onOpenFile: null,
     onSyncStructure: null,
+    onWorkspaceCreateFile: null,
+    onWorkspaceRenamePath: null,
+    onWorkspaceDeletePath: null,
     getActiveGroupId: () => 'group-1',
   };
 
@@ -313,6 +323,94 @@ export const lspService = (() => {
     return bridge.didChangeConfiguration(wid, s);
   };
 
+  const pathToFileUri = (relPath) => {
+    const p = String(relPath || '').trim();
+    if (!p) return '';
+    if (!String(rootFsPath || '').trim()) return '';
+    const fsPath = resolveFsPath(rootFsPath, p);
+    return toFileUri(fsPath);
+  };
+
+  const willCreateFiles = async (paths, options = {}) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(paths) ? paths : [])
+      .map((p) => ({ uri: pathToFileUri(p) }))
+      .filter((x) => x.uri);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.willCreateFiles(wid, { files }, options);
+  };
+
+  const didCreateFiles = async (paths) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(paths) ? paths : [])
+      .map((p) => ({ uri: pathToFileUri(p) }))
+      .filter((x) => x.uri);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.didCreateFiles(wid, { files });
+  };
+
+  const willRenameFiles = async (pairs, options = {}) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(pairs) ? pairs : [])
+      .map((p) => {
+        const oldPath = String(p?.from || p?.oldPath || '').trim();
+        const newPath = String(p?.to || p?.newPath || '').trim();
+        const oldUri = pathToFileUri(oldPath);
+        const newUri = pathToFileUri(newPath);
+        if (!oldUri || !newUri) return null;
+        return { oldUri, newUri };
+      })
+      .filter(Boolean);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.willRenameFiles(wid, { files }, options);
+  };
+
+  const didRenameFiles = async (pairs) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(pairs) ? pairs : [])
+      .map((p) => {
+        const oldPath = String(p?.from || p?.oldPath || '').trim();
+        const newPath = String(p?.to || p?.newPath || '').trim();
+        const oldUri = pathToFileUri(oldPath);
+        const newUri = pathToFileUri(newPath);
+        if (!oldUri || !newUri) return null;
+        return { oldUri, newUri };
+      })
+      .filter(Boolean);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.didRenameFiles(wid, { files });
+  };
+
+  const willDeleteFiles = async (paths, options = {}) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(paths) ? paths : [])
+      .map((p) => ({ uri: pathToFileUri(p) }))
+      .filter((x) => x.uri);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.willDeleteFiles(wid, { files }, options);
+  };
+
+  const didDeleteFiles = async (paths) => {
+    if (!bridge.isAvailable()) return { ok: false };
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+    const files = (Array.isArray(paths) ? paths : [])
+      .map((p) => ({ uri: pathToFileUri(p) }))
+      .filter((x) => x.uri);
+    if (!files.length) return { ok: true, skipped: true };
+    return bridge.didDeleteFiles(wid, { files });
+  };
+
   const openModelIfNeeded = async (model) => {
     if (!model || !bridge.isAvailable()) return;
     const modelPath = String(model.uri?.toString?.() || '');
@@ -379,16 +477,88 @@ export const lspService = (() => {
     if (!monaco) return;
     const workspaceEdit = edit || {};
 
-    const windows = guessIsWindows(rootFsPath);
-    const fsPathToRel = (fsPath) => toWorkspaceRelativePath(fsPath, rootFsPath) || '';
+    const getEffectiveRootFsPath = () => {
+      const direct = String(rootFsPath || '').trim();
+      if (direct) return direct;
+      try {
+        const w = globalThis?.window;
+        const fromWindow = w?.__NODE_AGENT_WORKSPACE_ROOT__ || w?.__NODE_AGENT_WORKSPACE_ROOT;
+        return String(fromWindow || '').trim();
+      } catch {
+        return '';
+      }
+    };
+
+    const effectiveRootFsPath = getEffectiveRootFsPath();
+    const windows = guessIsWindows(effectiveRootFsPath || rootFsPath);
+
+    const normalizeTextEdit = (e) => {
+      if (!e || typeof e !== 'object') return null;
+      const range = e.range || e.replace || e.insert || null;
+      if (!range || !range.start || !range.end) return null;
+      const newText = typeof e.newText === 'string' ? e.newText : (typeof e.text === 'string' ? e.text : '');
+      return { range, newText };
+    };
+
+    const looksAbsolutePath = (p) => {
+      const s = String(p || '').trim();
+      if (!s) return false;
+      if (windows) return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\');
+      return s.startsWith('/');
+    };
+
     const uriToModelPath = (uri) => {
-      const u = String(uri || '');
+      const u = String(uri || '').trim();
       if (!u) return '';
       if (u.startsWith('file://')) {
         const fsPath = fileUriToFsPath(u, { windows });
-        return fsPathToRel(fsPath) || u;
+        if (!fsPath) return '';
+        const roots = (Array.isArray(workspaceFolders) && workspaceFolders.length ? workspaceFolders : [effectiveRootFsPath])
+          .map((x) => String(x || '').trim())
+          .filter(Boolean);
+        const chosenRoot = pickContainingRootFsPath(roots, fsPath) || effectiveRootFsPath;
+        const rel = toWorkspaceRelativePath(fsPath, chosenRoot);
+        return String(rel || '').trim();
+      }
+      if (looksAbsolutePath(u)) {
+        const roots = (Array.isArray(workspaceFolders) && workspaceFolders.length ? workspaceFolders : [effectiveRootFsPath])
+          .map((x) => String(x || '').trim())
+          .filter(Boolean);
+        const chosenRoot = pickContainingRootFsPath(roots, u) || effectiveRootFsPath;
+        const rel = toWorkspaceRelativePath(u, chosenRoot);
+        return String(rel || '').trim();
       }
       return u;
+    };
+
+    let fileOpsTouched = false;
+
+    const createPathIfSupported = async (modelPath, meta = {}) => {
+      const mp = String(modelPath || '').trim();
+      if (!mp) return;
+      if (typeof uiContext.onWorkspaceCreateFile === 'function') {
+        fileOpsTouched = true;
+        await uiContext.onWorkspaceCreateFile(mp, meta);
+      }
+    };
+
+    const renamePathIfSupported = async (fromModelPath, toModelPath, meta = {}) => {
+      const from = String(fromModelPath || '').trim();
+      const to = String(toModelPath || '').trim();
+      if (!from || !to) return;
+      if (typeof uiContext.onWorkspaceRenamePath === 'function') {
+        fileOpsTouched = true;
+        await uiContext.onWorkspaceRenamePath(from, to, meta);
+      }
+    };
+
+    const deletePathIfSupported = async (modelPath, meta = {}) => {
+      const mp = String(modelPath || '').trim();
+      if (!mp) return;
+      if (typeof uiContext.onWorkspaceDeletePath === 'function') {
+        fileOpsTouched = true;
+        await uiContext.onWorkspaceDeletePath(mp, meta);
+      }
     };
 
     const applyEditsToPath = async (modelPath, edits) => {
@@ -396,8 +566,24 @@ export const lspService = (() => {
       if (!mp) return;
       const resource = monaco.Uri.parse(mp);
       const model = preferOpenModels ? monaco.editor.getModel(resource) : null;
+      const groupId = uiContext.getActiveGroupId?.() || 'group-1';
+      const normalizedEdits = (Array.isArray(edits) ? edits : []).map(normalizeTextEdit).filter(Boolean);
+      const applyToUi = async (nextContent) => {
+        if (typeof uiContext.onWorkspaceWriteFile === 'function') {
+          fileOpsTouched = true;
+          await uiContext.onWorkspaceWriteFile(mp, nextContent);
+          return;
+        }
+        if (typeof uiContext.onFileChange === 'function') {
+          uiContext.onFileChange(mp, nextContent, { groupId });
+        }
+      };
       if (model) {
+        const current = model.getValue?.() ?? '';
+        const next = applyLspTextEdits(current, normalizedEdits);
         const operations = (Array.isArray(edits) ? edits : [])
+          .map(normalizeTextEdit)
+          .filter(Boolean)
           .map((e) => ({
             range: lspRangeToMonacoRange(monaco, e.range),
             text: String(e.newText ?? ''),
@@ -408,45 +594,148 @@ export const lspService = (() => {
         } catch {
           // ignore
         }
+        await applyToUi(next);
         return;
       }
 
-      const files = uiContext.getFiles?.() || [];
-      const fileEntry = (Array.isArray(files) ? files : []).find((f) => String(f?.path || '') === mp);
-      const current = fileEntry ? String(fileEntry.content || '') : '';
-      const next = applyLspTextEdits(current, edits);
-      const groupId = uiContext.getActiveGroupId?.() || 'group-1';
-      if (typeof uiContext.onFileChange === 'function') {
-        uiContext.onFileChange(mp, next, { groupId });
+      let current = '';
+      if (typeof uiContext.onWorkspaceReadFile === 'function') {
+        const res = await uiContext.onWorkspaceReadFile(mp).catch(() => null);
+        if (res && res.exists !== false) current = String(res.content ?? '');
+      } else {
+        const files = uiContext.getFiles?.() || [];
+        const fileEntry = (Array.isArray(files) ? files : []).find((f) => String(f?.path || '') === mp);
+        if (!fileEntry) fileOpsTouched = true;
+        current = fileEntry ? String(fileEntry.content || '') : '';
       }
+      const next = applyLspTextEdits(current, normalizedEdits);
+      await applyToUi(next);
     };
 
-    const changes = workspaceEdit.changes && typeof workspaceEdit.changes === 'object' ? workspaceEdit.changes : null;
-    if (changes) {
-      for (const [uri, edits] of Object.entries(changes)) {
-        // eslint-disable-next-line no-await-in-loop
-        await applyEditsToPath(uriToModelPath(uri), edits);
-      }
-    }
+    const files = uiContext.getFiles?.() || [];
+    const originalExistingPaths = new Set((Array.isArray(files) ? files : []).map((f) => String(f?.path || '')).filter(Boolean));
+    const knownPaths = new Set(originalExistingPaths);
+
+    const creates = [];
+    const renames = [];
+    const deletes = [];
+    const textEdits = [];
 
     const documentChanges = Array.isArray(workspaceEdit.documentChanges) ? workspaceEdit.documentChanges : null;
     if (documentChanges) {
       for (const dc of documentChanges) {
         const kind = String(dc?.kind || '');
-        if (kind) {
-          // CreateFile/RenameFile/DeleteFile are ignored in Phase 1 (handled in Phase 2).
+        if (kind === 'create') {
+          const uri = String(dc?.uri || '').trim();
+          if (!uri) continue;
+          const modelPath = uriToModelPath(uri);
+          if (!modelPath) throw new Error(`Unresolvable create uri: ${uri}`);
+          if (looksAbsolutePath(modelPath) || modelPath.startsWith('file:')) throw new Error(`Invalid create path: ${modelPath}`);
+          creates.push({ modelPath, meta: { uri, options: dc?.options || {} } });
           continue;
         }
+        if (kind === 'rename') {
+          const oldUri = String(dc?.oldUri || '').trim();
+          const newUri = String(dc?.newUri || '').trim();
+          if (!oldUri || !newUri) continue;
+          const from = uriToModelPath(oldUri);
+          const to = uriToModelPath(newUri);
+          if (!from || !to) throw new Error(`Unresolvable rename uri: ${oldUri} -> ${newUri}`);
+          if (looksAbsolutePath(from) || looksAbsolutePath(to) || from.startsWith('file:') || to.startsWith('file:')) {
+            throw new Error(`Invalid rename path: ${from} -> ${to}`);
+          }
+          renames.push({ from, to, meta: { oldUri, newUri, options: dc?.options || {} } });
+          continue;
+        }
+        if (kind === 'delete') {
+          const uri = String(dc?.uri || '').trim();
+          if (!uri) continue;
+          const modelPath = uriToModelPath(uri);
+          if (!modelPath) throw new Error(`Unresolvable delete uri: ${uri}`);
+          if (looksAbsolutePath(modelPath) || modelPath.startsWith('file:')) throw new Error(`Invalid delete path: ${modelPath}`);
+          deletes.push({ modelPath, meta: { uri, options: dc?.options || {} } });
+          continue;
+        }
+        if (kind) continue;
+
         const uri = dc?.textDocument?.uri;
         const edits = dc?.edits;
         if (!uri || !Array.isArray(edits)) continue;
-        // eslint-disable-next-line no-await-in-loop
-        await applyEditsToPath(uriToModelPath(uri), edits);
+        const modelPath = uriToModelPath(uri);
+        if (!modelPath) throw new Error(`Unresolvable textDocument uri: ${String(uri)}`);
+        if (looksAbsolutePath(modelPath) || modelPath.startsWith('file:')) throw new Error(`Invalid edit path: ${modelPath}`);
+        textEdits.push({ modelPath, edits });
+      }
+    }
+
+    const changes = workspaceEdit.changes && typeof workspaceEdit.changes === 'object' ? workspaceEdit.changes : null;
+    if (changes) {
+      for (const [uri, edits] of Object.entries(changes)) {
+        const modelPath = uriToModelPath(uri);
+        if (!modelPath) throw new Error(`Unresolvable changes uri: ${String(uri)}`);
+        if (looksAbsolutePath(modelPath) || modelPath.startsWith('file:')) throw new Error(`Invalid edit path: ${modelPath}`);
+        textEdits.push({ modelPath, edits });
+      }
+    }
+
+    for (const op of creates) knownPaths.add(op.modelPath);
+
+    const ensurePaths = new Map();
+    for (const op of creates) ensurePaths.set(op.modelPath, op.meta);
+    for (const op of textEdits) {
+      if (!originalExistingPaths.has(op.modelPath)) ensurePaths.set(op.modelPath, ensurePaths.get(op.modelPath) || {});
+    }
+
+    for (const [modelPath, meta] of ensurePaths.entries()) {
+      // eslint-disable-next-line no-await-in-loop
+      await createPathIfSupported(modelPath, meta);
+    }
+
+    const sortedTextEdits = textEdits.slice().sort((a, b) => {
+      const aExisting = originalExistingPaths.has(a.modelPath) ? 1 : 0;
+      const bExisting = originalExistingPaths.has(b.modelPath) ? 1 : 0;
+      return aExisting - bExisting;
+    });
+
+    for (const op of sortedTextEdits) {
+      // eslint-disable-next-line no-await-in-loop
+      await applyEditsToPath(op.modelPath, op.edits);
+    }
+
+    for (const op of renames) {
+      // eslint-disable-next-line no-await-in-loop
+      await renamePathIfSupported(op.from, op.to, op.meta);
+      const fromModel = monaco.editor.getModel(monaco.Uri.parse(op.from));
+      if (fromModel) {
+        const targetUri = monaco.Uri.parse(op.to);
+        const existing = monaco.editor.getModel(targetUri);
+        if (!existing && typeof monaco.editor.createModel === 'function') {
+          const value = fromModel.getValue?.() ?? '';
+          const lang = typeof fromModel.getLanguageId === 'function' ? fromModel.getLanguageId() : undefined;
+          const nextModel = monaco.editor.createModel(String(value), lang, targetUri);
+          void openModelIfNeeded(nextModel).catch(() => {});
+        }
+        try { fromModel.dispose(); } catch {}
+      }
+    }
+
+    for (const op of deletes) {
+      // eslint-disable-next-line no-await-in-loop
+      await deletePathIfSupported(op.modelPath, op.meta);
+      const model = monaco.editor.getModel(monaco.Uri.parse(op.modelPath));
+      if (model) {
+        try { model.dispose(); } catch {}
       }
     }
 
     if (typeof uiContext.onSyncStructure === 'function') {
-      uiContext.onSyncStructure();
+      if (fileOpsTouched) {
+        setTimeout(() => {
+          try { uiContext.onSyncStructure(); } catch {}
+        }, 350);
+      } else {
+        uiContext.onSyncStructure();
+      }
     }
   };
 
@@ -893,6 +1182,39 @@ export const lspService = (() => {
         },
       }));
 
+      if (typeof monaco.languages.registerDeclarationProvider === 'function') {
+        disposables.push(monaco.languages.registerDeclarationProvider(lang, {
+          provideDeclaration: async (model, position, token) => {
+            const state = getDocState(model);
+            if (!state) return null;
+            const cancelToken = `dc${cancelSeq++}`;
+            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
+            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
+            const res = await bridge.declaration(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => null);
+            const windows = guessIsWindows(rootFsPath);
+
+            const toLocationLink = (loc) => {
+              const targetUri = String(loc?.uri || loc?.targetUri || '');
+              const fullRange = loc?.targetRange || loc?.range || loc?.targetSelectionRange;
+              const selectionRange = loc?.targetSelectionRange || loc?.targetRange || loc?.range;
+              if (!targetUri || !fullRange) return null;
+              const fsPath = fileUriToFsPath(targetUri, { windows });
+              const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
+              const targetModelPath = rel || targetUri;
+              return {
+                originSelectionRange: undefined,
+                uri: monaco.Uri.parse(targetModelPath),
+                range: lspRangeToMonacoRange(monaco, fullRange),
+                targetSelectionRange: selectionRange ? lspRangeToMonacoRange(monaco, selectionRange) : undefined,
+              };
+            };
+
+            const list = Array.isArray(res) ? res : (res ? [res] : []);
+            return list.map(toLocationLink).filter(Boolean);
+          },
+        }));
+      }
+
       if (typeof monaco.languages.registerTypeDefinitionProvider === 'function') {
         disposables.push(monaco.languages.registerTypeDefinitionProvider(lang, {
           provideTypeDefinition: async (model, position, token) => {
@@ -955,6 +1277,53 @@ export const lspService = (() => {
 
             const list = Array.isArray(res) ? res : (res ? [res] : []);
             return list.map(toLocationLink).filter(Boolean);
+          },
+        }));
+      }
+
+      if (typeof monaco.languages.registerColorProvider === 'function') {
+        disposables.push(monaco.languages.registerColorProvider(lang, {
+          provideDocumentColors: async (model, token) => {
+            const state = getDocState(model);
+            if (!state) return [];
+            const caps = await getServerCaps(state.serverId);
+            if (!caps?.colorProvider) return [];
+            const cancelToken = `cl${cancelSeq++}`;
+            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
+            const res = await bridge.documentColor(state.serverId, { textDocument: { uri: state.uri } }, { timeoutMs: 4000, cancelToken }).catch(() => []);
+            const list = Array.isArray(res) ? res : [];
+            return list.map((ci) => {
+              const range = ci?.range ? lspRangeToMonacoRange(monaco, ci.range) : null;
+              const color = ci?.color || null;
+              if (!range || !color) return null;
+              return { range, color };
+            }).filter(Boolean);
+          },
+          provideColorPresentations: async (model, colorInfo, token) => {
+            const state = getDocState(model);
+            if (!state) return [];
+            const caps = await getServerCaps(state.serverId);
+            if (!caps?.colorProvider) return [];
+            const cancelToken = `cp${cancelSeq++}`;
+            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
+            const params = {
+              textDocument: { uri: state.uri },
+              color: colorInfo?.color,
+              range: toLspRangeFromMonacoRange(colorInfo?.range),
+            };
+            const res = await bridge.colorPresentation(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => []);
+            const list = Array.isArray(res) ? res : [];
+            return list.map((p) => {
+              const label = String(p?.label || '');
+              if (!label) return null;
+              const te = p?.textEdit;
+              const textEdit = te?.range ? { range: lspRangeToMonacoRange(monaco, te.range), text: String(te.newText ?? '') } : undefined;
+              const additionalTextEdits = (Array.isArray(p?.additionalTextEdits) ? p.additionalTextEdits : []).map((e) => {
+                if (!e?.range) return null;
+                return { range: lspRangeToMonacoRange(monaco, e.range), text: String(e.newText ?? '') };
+              }).filter(Boolean);
+              return { label, textEdit, additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined };
+            }).filter(Boolean);
           },
         }));
       }
@@ -1182,6 +1551,32 @@ export const lspService = (() => {
         }));
       }
 
+      if (typeof monaco.languages.registerLinkedEditingRangeProvider === 'function') {
+        disposables.push(monaco.languages.registerLinkedEditingRangeProvider(lang, {
+          provideLinkedEditingRanges: async (model, position, token) => {
+            const state = getDocState(model);
+            if (!state) return null;
+            const caps = await getServerCaps(state.serverId);
+            if (!caps?.linkedEditingRangeProvider) return null;
+            const cancelToken = `ler${cancelSeq++}`;
+            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
+            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
+            const res = await bridge.linkedEditingRange(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => null);
+            const ranges = (Array.isArray(res?.ranges) ? res.ranges : []).map((r) => {
+              if (!r) return null;
+              return lspRangeToMonacoRange(monaco, r);
+            }).filter(Boolean);
+            if (!ranges.length) return null;
+            const pat = res?.wordPattern ? String(res.wordPattern) : '';
+            let wordPattern;
+            if (pat) {
+              try { wordPattern = new RegExp(pat); } catch {}
+            }
+            return { ranges, wordPattern };
+          },
+        }));
+      }
+
       if (typeof monaco.languages.registerDocumentSemanticTokensProvider === 'function') {
         const legend = monaco?.languages?.SemanticTokensLegend
           ? new monaco.languages.SemanticTokensLegend(SEMANTIC_TOKEN_TYPES, SEMANTIC_TOKEN_MODIFIERS)
@@ -1261,7 +1656,14 @@ export const lspService = (() => {
         const serverId = payload?.serverId ? String(payload.serverId) : '';
         const action = payload?.action || null;
         if (!serverId || !action) return;
-        if (action.edit) await applyWorkspaceEdit(action.edit);
+        if (action.edit) {
+          try {
+            await applyWorkspaceEdit(action.edit);
+          } catch (err) {
+            outputService.append('LSP', `[ERROR] applyWorkspaceEdit failed: ${err?.message || String(err)}`);
+            return;
+          }
+        }
         if (action.command) {
           try {
             await bridge.executeCommand(serverId, { command: action.command.command, arguments: action.command.arguments || [] }, { timeoutMs: 8000 });
@@ -1573,6 +1975,12 @@ export const lspService = (() => {
     updateWorkspace,
     updateUiContext,
     didChangeConfiguration,
+    willCreateFiles,
+    didCreateFiles,
+    willRenameFiles,
+    didRenameFiles,
+    willDeleteFiles,
+    didDeleteFiles,
     didSavePath,
     didSaveAll,
     searchWorkspaceSymbols,

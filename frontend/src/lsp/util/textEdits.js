@@ -21,7 +21,7 @@ export function applyLspTextEdits(text, edits) {
 
   const normalized = list
     .map((e) => ({
-      range: e?.range,
+      range: e?.range || e?.replace || e?.insert,
       newText: typeof e?.newText === 'string' ? e.newText : String(e?.text || ''),
     }))
     .filter((e) => e.range && e.range.start && e.range.end)
@@ -38,4 +38,3 @@ export function applyLspTextEdits(text, edits) {
   }
   return out;
 }
-

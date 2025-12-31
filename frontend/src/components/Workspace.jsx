@@ -419,6 +419,11 @@ function Workspace({
   onToggleTheme,
   onToggleView,
   onSyncStructure,
+  onWorkspaceCreateFile,
+  onWorkspaceRenamePath,
+  onWorkspaceDeletePath,
+  onWorkspaceReadFile,
+  onWorkspaceWriteFile,
   onPreviewEntryChange,
   settingsTabPath,
   renderSettingsTab,
@@ -634,9 +639,14 @@ function Workspace({
       onFileChange,
       onOpenFile,
       onSyncStructure,
+      onWorkspaceCreateFile,
+      onWorkspaceRenamePath,
+      onWorkspaceDeletePath,
+      onWorkspaceReadFile,
+      onWorkspaceWriteFile,
       getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
     });
-  }, [activeGroupId, onFileChange, onOpenFile, onSyncStructure]);
+  }, [activeGroupId, onFileChange, onOpenFile, onSyncStructure, onWorkspaceCreateFile, onWorkspaceRenamePath, onWorkspaceDeletePath, onWorkspaceReadFile, onWorkspaceWriteFile]);
 
   const taskReviewFile = useMemo(() => {
     const list = taskReview?.files;
@@ -1717,6 +1727,11 @@ function Workspace({
         onFileChange,
         onOpenFile,
         onSyncStructure,
+        onWorkspaceCreateFile,
+        onWorkspaceRenamePath,
+        onWorkspaceDeletePath,
+        onWorkspaceReadFile,
+        onWorkspaceWriteFile,
         getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
       },
     );
@@ -1728,7 +1743,7 @@ function Workspace({
     setTimeout(() => {
       setEditorVersion(v => v + 1);
     }, 500);
-  }, [normalizedUndoRedoLimit, backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure]);
+  }, [normalizedUndoRedoLimit, backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure, onWorkspaceCreateFile, onWorkspaceRenamePath, onWorkspaceDeletePath, onWorkspaceReadFile, onWorkspaceWriteFile]);
 
   const handleEditorMountForGroup = useCallback((groupId) => (editor, monaco) => {
     editorInstancesRef.current.set(String(groupId || 'group-1'), { editor, monaco });
@@ -1744,9 +1759,14 @@ function Workspace({
       onFileChange,
       onOpenFile,
       onSyncStructure,
+      onWorkspaceCreateFile,
+      onWorkspaceRenamePath,
+      onWorkspaceDeletePath,
+      onWorkspaceReadFile,
+      onWorkspaceWriteFile,
       getActiveGroupId: () => activeGroupIdRef.current || 'group-1',
     });
-  }, [backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure]);
+  }, [backendWorkspaceId, backendRoot, onFileChange, onOpenFile, onSyncStructure, onWorkspaceCreateFile, onWorkspaceRenamePath, onWorkspaceDeletePath, onWorkspaceReadFile, onWorkspaceWriteFile]);
 
   useEffect(() => {
     const inst = editorInstancesRef.current.get(String(activeGroupId || 'group-1'));

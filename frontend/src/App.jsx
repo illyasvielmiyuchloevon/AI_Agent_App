@@ -832,10 +832,22 @@ function App() {
       void lspService.didChangeConfiguration(projectConfig?.lsp || {}).catch(() => {});
   }, [backendBound, backendWorkspaceId, backendWorkspaceRoot, projectConfig?.lsp]);
 
+  const resolveApiUrl = useCallback((url) => {
+      if (typeof window === 'undefined') return url;
+      if (typeof url !== 'string') return url;
+      if (!url.startsWith('/api/')) return url;
+      const proto = window.location.protocol;
+      const origin = window.location.origin;
+      if (proto === 'file:' || origin === 'null') {
+          return `http://127.0.0.1:8000${url.replace(/^\/api/, '')}`;
+      }
+      return url;
+  }, []);
+
   const projectFetch = useCallback((url, options = {}) => {
-      const headers = { ...(options.headers || {}), ...projectHeaders };
-      return fetch(url, { ...options, headers });
-  }, [projectHeaders]);
+      const headers = { ...projectHeaders, ...(options.headers || {}) };
+      return fetch(resolveApiUrl(url), { ...options, headers });
+  }, [projectHeaders, resolveApiUrl]);
 
   const aiEngineClient = useMemo(() => createAiEngineClient({ fetch: projectFetch }), [projectFetch]);
 
@@ -1258,7 +1270,7 @@ function App() {
           let timeoutId = null;
           try {
               timeoutId = setTimeout(() => abort.abort(), 15000);
-              const res = await fetch('/api/workspace/bind-root', {
+              const res = await projectFetch('/api/workspace/bind-root', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', 'X-Workspace-Root': trimmed },
                   body: JSON.stringify({
@@ -1333,7 +1345,7 @@ function App() {
               console.warn(`打开 Workspace 失败：${err.message || err}`);
           }
       }
-  }, [config, toolSettings]);
+  }, [config, getBackendConfig, projectFetch, toolSettings]);
 
   const refreshRecentProjects = useCallback(async () => {
       try {
@@ -1375,7 +1387,7 @@ function App() {
       let cancelled = false;
       const load = async () => {
           try {
-              const res = await fetch('/api/workspaces');
+              const res = await projectFetch('/api/workspaces');
               if (!res.ok) return;
               const data = await res.json();
               if (!Array.isArray(data)) return;
@@ -1389,7 +1401,7 @@ function App() {
           cancelled = true;
           clearInterval(timer);
       };
-  }, []);
+  }, [projectFetch]);
 
   const removeRecentProject = useCallback(async (proj) => {
       const id = proj?.id;
@@ -1505,7 +1517,13 @@ function App() {
           setWorkspaceState((prevRaw) => {
               const prev = syncLegacyTabsFromGroups(prevRaw);
               const prevMap = Object.fromEntries((prev.files || []).map((f) => [f.path, f]));
-              const merged = incoming.length ? incoming.map((file) => {
+              const incomingPaths = new Set(incoming.map((f) => f.path));
+              const prevFiles = Array.isArray(prev.files) ? prev.files : [];
+              const dirtyExtraFiles = incoming.length
+                ? prevFiles.filter((f) => f && f.dirty && f.path && !incomingPaths.has(f.path) && !shouldHidePath(f.path))
+                : [];
+
+              const mergedBase = incoming.length ? incoming.map((file) => {
                   const prevFile = prevMap[file.path];
                   if (prevFile?.dirty) {
                       return { ...prevFile, truncated: file.truncated, updated: prevFile.updated };
@@ -1515,11 +1533,18 @@ function App() {
                   return { ...file, updated: changed || isNew, dirty: false };
               }) : (prev.files || []);
 
+              const merged = incoming.length && dirtyExtraFiles.length
+                ? [...mergedBase, ...dirtyExtraFiles]
+                : mergedBase;
+
               const existingFilePaths = new Set(
                   (data.entries || [])
                       .filter((entry) => entry && entry.type === 'file' && typeof entry.path === 'string' && !shouldHidePath(entry.path))
                       .map((entry) => entry.path)
               );
+              for (const f of prevFiles) {
+                  if (f && f.dirty && f.path && !shouldHidePath(f.path)) existingFilePaths.add(f.path);
+              }
               const isSpecialTab = (p) => {
                   if (!p) return true;
                   if (p === WELCOME_TAB_PATH) return true;
@@ -1745,6 +1770,18 @@ function App() {
           pathLabel: cfg.projectPath || cfg.backendRoot || driver.pathLabel || driver.rootName
       });
       applyConfigToState(cfg, driver);
+      try {
+          if (driver?.setFileOperationsHooks && typeof driver.setFileOperationsHooks === 'function') {
+              driver.setFileOperationsHooks({
+                  willCreateFiles: (paths, options) => lspService.willCreateFiles(paths, options),
+                  didCreateFiles: (paths) => lspService.didCreateFiles(paths),
+                  willRenameFiles: (pairs, options) => lspService.willRenameFiles(pairs, options),
+                  didRenameFiles: (pairs) => lspService.didRenameFiles(pairs),
+                  willDeleteFiles: (paths, options) => lspService.willDeleteFiles(paths, options),
+                  didDeleteFiles: (paths) => lspService.didDeleteFiles(paths),
+              });
+          }
+      } catch {}
       setWorkspaceDriver(driver);
       refreshRecentProjects();
       let candidateRoot = null;
@@ -2426,6 +2463,8 @@ function App() {
               try { void lspService.didSavePath(path, content); } catch {}
               setWorkspaceState((prev) => ({ ...prev, livePreview: `${Date.now()}` }));
               setHotReloadToken(Date.now());
+              setWorkspaceBindingError('');
+              setWorkspaceBindingStatus('ready');
           } catch (err) {
               console.error('Save failed', err);
               setWorkspaceBindingError(err.message);
@@ -3201,7 +3240,13 @@ function App() {
       setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
       try {
           if (target.changeType === 'added') {
+              if (!workspaceDriver?.setFileOperationsHooks) {
+                  try { await lspService.willDeleteFiles([path]); } catch {}
+              }
               await workspaceDriver.deletePath(path);
+              if (!workspaceDriver?.setFileOperationsHooks) {
+                  try { await lspService.didDeleteFiles([path]); } catch {}
+              }
           } else {
               await workspaceDriver.writeFile(path, target.before || '', { createDirectories: true });
           }
@@ -3227,6 +3272,10 @@ function App() {
       if (!taskReview?.files?.length || !workspaceDriver) return;
       setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
       try {
+          const deletePaths = taskReview.files.filter((f) => f?.changeType === 'added').map((f) => f.path).filter(Boolean);
+          if (deletePaths.length && !workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.willDeleteFiles(deletePaths); } catch {}
+          }
           for (const file of taskReview.files) {
               // eslint-disable-next-line no-await-in-loop
               if (file.changeType === 'added') {
@@ -3234,6 +3283,9 @@ function App() {
               } else {
                   await workspaceDriver.writeFile(file.path, file.before || '', { createDirectories: true });
               }
+          }
+          if (deletePaths.length && !workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.didDeleteFiles(deletePaths); } catch {}
           }
           await syncWorkspaceFromDisk({ includeContent: true, highlight: false, force: true });
           setTaskReview((prev) => (prev ? {
@@ -3786,10 +3838,17 @@ function App() {
       }
 
       const spec = getTemplateSpec(templateId);
+      const createdPaths = [folder, ...Object.keys(spec.files || {}).map((rel) => `${folder}/${rel}`)].filter(Boolean);
+      if (!workspaceDriver?.setFileOperationsHooks) {
+          try { await lspService.willCreateFiles(createdPaths); } catch {}
+      }
       await workspaceDriver.createFolder(folder);
       for (const [rel, content] of Object.entries(spec.files || {})) {
           // eslint-disable-next-line no-await-in-loop
           await workspaceDriver.writeFile(`${folder}/${rel}`, String(content || ''), { createDirectories: true });
+      }
+      if (!workspaceDriver?.setFileOperationsHooks) {
+          try { await lspService.didCreateFiles(createdPaths); } catch {}
       }
       await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });
       openFile(`${folder}/${spec.entry}`);
@@ -3964,10 +4023,16 @@ function App() {
           placeholder: 'src/App.js',
           confirmText: '创建',
           icon: 'codicon-new-file',
-          onConfirm: async (name) => {
+           onConfirm: async (name) => {
               if (!name) return;
               try {
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.willCreateFiles([name]); } catch {}
+                  }
                   await workspaceDriver.writeFile(name, '', { createDirectories: true });
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.didCreateFiles([name]); } catch {}
+                  }
                   await syncWorkspaceFromDisk({ includeContent: true, highlight: true });
                   openFile(name);
               } catch (err) {
@@ -4011,10 +4076,16 @@ function App() {
           placeholder: 'src/components',
           confirmText: '创建',
           icon: 'codicon-new-folder',
-          onConfirm: async (name) => {
+           onConfirm: async (name) => {
               if (!name) return;
               try {
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.willCreateFiles([name]); } catch {}
+                  }
                   await workspaceDriver.createFolder(name);
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.didCreateFiles([name]); } catch {}
+                  }
                   await syncWorkspaceFromDisk({ includeContent: false, highlight: false });
               } catch (err) {
                   console.error('Failed to create folder', err);
@@ -4042,7 +4113,13 @@ function App() {
       if (!path) return;
       if (!window.confirm(`确认删除 ${path} ?`)) return;
       try {
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.willDeleteFiles([path]); } catch {}
+          }
           await workspaceDriver.deletePath(path);
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.didDeleteFiles([path]); } catch {}
+          }
           await syncWorkspaceFromDisk({ includeContent: true, highlight: false });
           setWorkspaceState((prevRaw) => {
               const prev = syncLegacyTabsFromGroups(prevRaw);
@@ -4082,7 +4159,13 @@ function App() {
       }
       if (nextPathInput) {
           try {
+              if (!workspaceDriver?.setFileOperationsHooks) {
+                  try { await lspService.willRenameFiles([{ from: oldPath, to: nextPathInput }]); } catch {}
+              }
               await workspaceDriver.renamePath(oldPath, nextPathInput);
+              if (!workspaceDriver?.setFileOperationsHooks) {
+                  try { await lspService.didRenameFiles([{ from: oldPath, to: nextPathInput }]); } catch {}
+              }
               await syncWorkspaceFromDisk({ includeContent: true, highlight: true });
           } catch (err) {
               console.error('Failed to rename', err);
@@ -4104,7 +4187,13 @@ function App() {
                   return;
               }
               try {
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.willRenameFiles([{ from: oldPath, to: nextPath }]); } catch {}
+                  }
                   await workspaceDriver.renamePath(oldPath, nextPath);
+                  if (!workspaceDriver?.setFileOperationsHooks) {
+                      try { await lspService.didRenameFiles([{ from: oldPath, to: nextPath }]); } catch {}
+                  }
                   await syncWorkspaceFromDisk({ includeContent: true, highlight: true });
               } catch (err) {
                   console.error('Failed to rename', err);
@@ -4114,6 +4203,162 @@ function App() {
           onClose: () => setInputModal(prev => ({ ...prev, isOpen: false }))
       });
   };
+
+  const applyWorkspaceEditCreateFile = useCallback(async (path, meta = {}) => {
+      const relPath = String(path || '').trim();
+      if (!workspaceDriver || !relPath) return false;
+      const options = meta?.options && typeof meta.options === 'object' ? meta.options : {};
+      const ignoreIfExists = options?.ignoreIfExists === true || options?.ignore_if_exists === true;
+      const overwrite = options?.overwrite === true;
+      if (ignoreIfExists || !overwrite) {
+          try {
+              const existing = await workspaceDriver.readFile(relPath, { allowMissing: true });
+              if (existing?.exists !== false) return true;
+          } catch {}
+      }
+      const initial = typeof meta?.initialContent === 'string' ? meta.initialContent : (typeof meta?.content === 'string' ? meta.content : '');
+      await workspaceDriver.writeFile(relPath, initial, { createDirectories: true, notifyCreate: false });
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const prevFiles = Array.isArray(prev.files) ? prev.files : [];
+          const hasEntry = prevFiles.some((f) => f && f.path === relPath);
+          const nextFiles = hasEntry
+              ? prevFiles
+              : [...prevFiles, { path: relPath, content: initial, truncated: false, updated: false, dirty: false }];
+          return syncLegacyTabsFromGroups({ ...prev, files: nextFiles });
+      });
+      setWorkspaceBindingStatus('ready');
+      return true;
+  }, [workspaceDriver]);
+
+  const applyWorkspaceEditReadFile = useCallback(async (path) => {
+      const relPath = String(path || '').trim();
+      if (!workspaceDriver || !relPath) return { exists: false, content: '' };
+      const res = await workspaceDriver.readFile(relPath, { allowMissing: true });
+      const exists = res?.exists !== false;
+      return { exists, content: String(res?.content ?? '') };
+  }, [workspaceDriver]);
+
+  const applyWorkspaceEditWriteFile = useCallback(async (path, content) => {
+      const relPath = String(path || '').trim();
+      if (!workspaceDriver || !relPath) return false;
+      const nextContent = String(content ?? '');
+      await workspaceDriver.writeFile(relPath, nextContent, { createDirectories: true, notifyCreate: false });
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const prevFiles = Array.isArray(prev.files) ? prev.files : [];
+          const hasEntry = prevFiles.some((f) => f && f.path === relPath);
+          const nextFiles = hasEntry
+              ? prevFiles.map((f) => f && f.path === relPath ? { ...f, content: nextContent, dirty: false } : f)
+              : [...prevFiles, { path: relPath, content: nextContent, truncated: false, updated: false, dirty: false }];
+          return syncLegacyTabsFromGroups({ ...prev, files: nextFiles });
+      });
+      setWorkspaceBindingStatus('ready');
+      return true;
+  }, [workspaceDriver]);
+
+  const applyWorkspaceEditRenamePath = useCallback(async (oldPath, nextPath) => {
+      const from = String(oldPath || '').trim();
+      const to = String(nextPath || '').trim();
+      if (!workspaceDriver || !from || !to || from === to) return false;
+      let content = '';
+      try {
+          const data = await workspaceDriver.readFile(from, { allowMissing: true });
+          if (data?.exists !== false) content = String(data?.content ?? '');
+      } catch {}
+
+      await workspaceDriver.writeFile(to, content, { createDirectories: true, notifyCreate: false });
+      try {
+          await workspaceDriver.deletePath(from, { notify: false });
+      } catch {
+          await workspaceDriver.deletePath(from);
+      }
+
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const prevFiles = Array.isArray(prev.files) ? prev.files : [];
+          const existing = prevFiles.find((f) => f && f.path === from) || null;
+          const nextFiles = existing
+              ? prevFiles.map((f) => f && f.path === from ? { ...f, path: to } : f)
+              : [...prevFiles, { path: to, content, truncated: false, updated: false, dirty: false }];
+
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          const nextGroups = groups.map((g) => {
+              const openTabs = (g.openTabs || []).map((t) => t === from ? to : t);
+              const activeFile = g.activeFile === from ? to : g.activeFile;
+              const previewTab = g.previewTab === from ? to : g.previewTab;
+              return { ...g, openTabs, activeFile, previewTab };
+          });
+          const nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId) ? activeGroupId : (nextGroups[0]?.id || 'group-1');
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          Object.keys(nextTabMeta).forEach((k) => {
+              if (!k.endsWith(`::${from}`)) return;
+              const v = nextTabMeta[k];
+              delete nextTabMeta[k];
+              const nk = k.replace(`::${from}`, `::${to}`);
+              nextTabMeta[nk] = v;
+          });
+
+          const nextHistory = Array.isArray(prev.tabHistory)
+              ? prev.tabHistory.map((p) => p === from ? to : p)
+              : prev.tabHistory;
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              files: nextFiles,
+              editorGroups: nextGroups,
+              activeGroupId: nextActiveGroupId,
+              tabMeta: nextTabMeta,
+              tabHistory: nextHistory,
+          });
+      });
+
+      return true;
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, workspaceDriver]);
+
+  const applyWorkspaceEditDeletePath = useCallback(async (path) => {
+      const relPath = String(path || '').trim();
+      if (!workspaceDriver || !relPath) return false;
+      try {
+          await workspaceDriver.deletePath(relPath, { notify: false });
+      } catch {
+          await workspaceDriver.deletePath(relPath);
+      }
+      setWorkspaceState((prevRaw) => {
+          const prev = syncLegacyTabsFromGroups(prevRaw);
+          const { groups, activeGroupId } = ensureEditorGroups(prev);
+          let nextGroups = groups.map((g) => {
+              const openTabs = (g.openTabs || []).filter((t) => t !== relPath);
+              const activeFile = g.activeFile === relPath ? (openTabs[openTabs.length - 1] || '') : g.activeFile;
+              const previewTab = g.previewTab === relPath ? '' : g.previewTab;
+              return { ...g, openTabs, activeFile, previewTab };
+          });
+          if (nextGroups.length > 1) nextGroups = nextGroups.filter((g) => g.openTabs.length > 0);
+          const nextActiveGroupId = nextGroups.some((g) => g.id === activeGroupId) ? activeGroupId : (nextGroups[0]?.id || 'group-1');
+
+          const tabMeta = prev.tabMeta && typeof prev.tabMeta === 'object' ? prev.tabMeta : {};
+          const nextTabMeta = { ...tabMeta };
+          Object.keys(nextTabMeta).forEach((k) => {
+              if (k.endsWith(`::${relPath}`)) delete nextTabMeta[k];
+          });
+
+          const nextHistory = Array.isArray(prev.tabHistory)
+              ? prev.tabHistory.filter((p) => p !== relPath)
+              : prev.tabHistory;
+
+          return syncLegacyTabsFromGroups({
+              ...prev,
+              files: (prev.files || []).filter((f) => f.path !== relPath),
+              editorGroups: nextGroups,
+              activeGroupId: nextActiveGroupId,
+              tabMeta: nextTabMeta,
+              tabHistory: nextHistory,
+          });
+      });
+      return true;
+  }, [ensureEditorGroups, syncLegacyTabsFromGroups, workspaceDriver]);
 
   const handleRefreshPreview = async () => {
       await syncWorkspaceFromDisk({ includeContent: true, highlight: false });
@@ -4319,8 +4564,14 @@ function App() {
           await GitDriver.restore(backendWorkspaceRoot, tracked);
       }
       if (untracked.length > 0 && workspaceDriver) {
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.willDeleteFiles(untracked); } catch {}
+          }
           for (const p of untracked) {
              try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.didDeleteFiles(untracked); } catch {}
           }
       }
       refreshGitStatus();
@@ -4346,8 +4597,14 @@ function App() {
           await GitDriver.restore(backendWorkspaceRoot, tracked.length === files.length ? '.' : tracked);
       }
       if (untracked.length > 0 && workspaceDriver) {
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.willDeleteFiles(untracked); } catch {}
+          }
           for (const p of untracked) {
              try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
+          }
+          if (!workspaceDriver?.setFileOperationsHooks) {
+              try { await lspService.didDeleteFiles(untracked); } catch {}
           }
       }
       refreshGitStatus();
@@ -5045,8 +5302,8 @@ function App() {
                   onToggleTabKeptOpen={toggleTabKeptOpen}
                   onCloseEditors={closeEditors}
                   onSplitEditor={splitEditor}
-                   onAddFile={handleAddFile}
-                   onAddFolder={handleAddFolder}
+                  onAddFile={handleAddFile}
+                  onAddFolder={handleAddFolder}
                   onRefreshPreview={handleRefreshPreview}
                   onToggleTheme={handleToggleTheme}
                   onToggleView={() => setWorkspaceState((prev) => {
@@ -5055,6 +5312,11 @@ function App() {
                     return { ...prev, view: nextView, previewEntry: nextPreviewEntry };
                   })}
                   onSyncStructure={() => syncWorkspaceFromDisk({ includeContent: true, highlight: false })}
+                  onWorkspaceCreateFile={applyWorkspaceEditCreateFile}
+                  onWorkspaceRenamePath={applyWorkspaceEditRenamePath}
+                  onWorkspaceDeletePath={applyWorkspaceEditDeletePath}
+                  onWorkspaceReadFile={applyWorkspaceEditReadFile}
+                  onWorkspaceWriteFile={applyWorkspaceEditWriteFile}
                   previewEntry={workspaceState.previewEntry}
                   onPreviewEntryChange={(value) => setWorkspaceState((prev) => ({ ...prev, previewEntry: value }))}
                   settingsTabPath={SETTINGS_TAB_PATH}

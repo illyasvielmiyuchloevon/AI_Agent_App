@@ -317,12 +317,20 @@ VS Code 的多根工作区常见于 monorepo。此仓库支持：
 | SemanticTokens | ✅ 已实现 | full/delta/range（取决于 server + Monaco API） |
 | DocumentLink/CodeLens/Highlight/SelectionRange | ✅ 已实现 | 取决于 caps |
 | CallHierarchy/Implementation/TypeDefinition | ✅ 已实现 | 取决于 caps |
+| Declaration | ❌ 未实现 | `textDocument/declaration` 未见实现 |
+| TypeHierarchy | ❌ 未实现 | `textDocument/prepareTypeHierarchy` / typeHierarchy 未见实现 |
+| DocumentColor | ❌ 未实现 | `textDocument/documentColor` / `colorPresentation` 未见实现 |
+| InlineValue / LinkedEditingRange | ❌ 未实现 | `textDocument/inlineValue`、`textDocument/linkedEditingRange` 未见实现 |
+| DocumentSymbol（层级/Outline 同步） | ✅ 部分实现 | 有数据获取，但产品呈现未对齐 VS Code |
 | 插件安装 | npm / vsix / archive | ✅ 已实现 | `PluginInstaller` |
 | 插件启用/选择 | ✅ 已实现 | `LspSettingsPage` 可绑定 language→plugin |
 | 多根工作区 | ✅ 部分实现 | 有 serverKey 与 uriMap，但 UI/工作区管理未对齐 VS Code |
-| workspace file ops | ❌ 未实现 | create/rename/delete hooks 等 |
-| diagnostics pull model | ❌ 未实现 | 仅 push（publishDiagnostics） |
-| transport 多样性 | ❌ 未实现 | 目前仅 stdio |
+| workspace file ops | ❌ 未实现 | `workspace/will*Files` / `workspace/did*Files` 未实现 |
+| diagnostics pull model | ❌ 未实现 | 仅 push（publishDiagnostics），无 `textDocument/diagnostic` |
+| transport 多样性 | ❌ 未实现 | 目前仅 stdio，缺 socket/pipe 等 |
+| Capabilities → UI 覆盖 | ❌ 未实现 | CodeAction 灯泡、Outline、Peek 等交互未对齐 |
+| Problems/诊断 UI | ❌ 未实现 | VS Code 风格 Problems 面板与分组/过滤策略缺失 |
+| Settings/配置体系 | ✅ 部分实现 | 有 `didChangeConfiguration`，但 settings 作用域与 UI 偏轻量 |
 | VS Code Extension Host | ❌ 未实现 | 不对标 VS Code 扩展 API |
 | DAP 调试 | ❌ 未实现 | 非 LSP，但 VS Code 级必备 |
 
@@ -336,4 +344,3 @@ VS Code 的多根工作区常见于 monorepo。此仓库支持：
   - main→server：对所有 `textDocument.uri` 做映射/转换
 - `resolveFsPath` 必须具备 `file:` 识别能力，且不可把 URI 字符串直接 join 到 fsPath 上。
 - 取消不应视为错误：对 `CancelledError` 统一降噪，避免污染日志与误导排查。
-

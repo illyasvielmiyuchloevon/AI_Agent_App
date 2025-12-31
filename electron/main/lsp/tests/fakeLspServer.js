@@ -140,14 +140,26 @@ reader.on('message', async (msg) => {
       respond(id, {
         capabilities: {
           textDocumentSync: { openClose: true, change: 2, save: { includeText: true } },
+          workspace: {
+            fileOperations: {
+              didCreate: true,
+              willCreate: true,
+              didRename: true,
+              willRename: true,
+              didDelete: true,
+              willDelete: true,
+            },
+          },
           completionProvider: { triggerCharacters: ['.'], resolveProvider: true },
           hoverProvider: true,
           definitionProvider: true,
+          declarationProvider: true,
           typeDefinitionProvider: true,
           implementationProvider: true,
           referencesProvider: true,
           signatureHelpProvider: { triggerCharacters: ['(', ','] },
           codeActionProvider: { resolveProvider: true },
+          colorProvider: true,
           renameProvider: true,
           documentFormattingProvider: true,
           documentRangeFormattingProvider: true,
@@ -155,6 +167,7 @@ reader.on('message', async (msg) => {
           codeLensProvider: { resolveProvider: true },
           documentHighlightProvider: true,
           selectionRangeProvider: true,
+          linkedEditingRangeProvider: true,
           foldingRangeProvider: true,
           inlayHintProvider: true,
           callHierarchyProvider: true,
@@ -201,9 +214,49 @@ reader.on('message', async (msg) => {
       return;
     }
 
+    if (msg.method === 'textDocument/declaration') {
+      const uri = msg.params?.textDocument?.uri || '';
+      respond(id, { uri, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } } });
+      return;
+    }
+
     if (msg.method === 'textDocument/typeDefinition' || msg.method === 'textDocument/implementation') {
       const uri = msg.params?.textDocument?.uri || '';
       respond(id, [{ uri, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } } }]);
+      return;
+    }
+
+    if (msg.method === 'textDocument/documentColor') {
+      respond(id, [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          color: { red: 1, green: 0, blue: 0, alpha: 1 },
+        },
+      ]);
+      return;
+    }
+
+    if (msg.method === 'textDocument/colorPresentation') {
+      respond(id, [
+        {
+          label: 'red',
+          textEdit: {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+            newText: '#ff0000',
+          },
+        },
+      ]);
+      return;
+    }
+
+    if (msg.method === 'textDocument/linkedEditingRange') {
+      respond(id, {
+        ranges: [
+          { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+          { start: { line: 0, character: 5 }, end: { line: 0, character: 9 } },
+        ],
+        wordPattern: '\\\\w+',
+      });
       return;
     }
 
@@ -288,6 +341,11 @@ reader.on('message', async (msg) => {
 
     if (msg.method === 'workspace/executeCommand') {
       respond(id, { ok: true });
+      return;
+    }
+
+    if (msg.method === 'workspace/willCreateFiles' || msg.method === 'workspace/willRenameFiles' || msg.method === 'workspace/willDeleteFiles') {
+      respond(id, { changes: {} });
       return;
     }
 
@@ -516,6 +574,11 @@ reader.on('message', async (msg) => {
     if (msg.method === 'textDocument/didClose') {
       const uri = String(msg.params?.textDocument?.uri || '');
       docs.delete(uri);
+      return;
+    }
+
+    if (msg.method === 'workspace/didCreateFiles' || msg.method === 'workspace/didRenameFiles' || msg.method === 'workspace/didDeleteFiles') {
+      notify('window/logMessage', { message: `${msg.method} ${JSON.stringify(msg.params || {})}` });
       return;
     }
   }

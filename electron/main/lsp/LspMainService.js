@@ -278,6 +278,11 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     return manager.definition(serverId, params, options || {});
   });
 
+  ipcMain.handle('lsp:declaration', async (event, serverId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.declaration(serverId, params, options || {});
+  });
+
   ipcMain.handle('lsp:references', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.references(serverId, params, options || {});
@@ -336,6 +341,21 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
   ipcMain.handle('lsp:documentSymbol', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
     return manager.documentSymbol(serverId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:documentColor', async (event, serverId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.documentColor(serverId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:colorPresentation', async (event, serverId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.colorPresentation(serverId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:linkedEditingRange', async (event, serverId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.linkedEditingRange(serverId, params, options || {});
   });
 
   ipcMain.handle('lsp:saveDocument', async (event, serverId, params) => {
@@ -433,6 +453,36 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     ensureSenderSubscribed(event);
     await manager.didChangeConfiguration(workspaceId, settings);
     return { ok: true };
+  });
+
+  ipcMain.handle('lsp:willCreateFiles', async (event, workspaceId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.willCreateFiles(workspaceId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:didCreateFiles', async (event, workspaceId, params) => {
+    ensureSenderSubscribed(event);
+    return manager.didCreateFiles(workspaceId, params);
+  });
+
+  ipcMain.handle('lsp:willRenameFiles', async (event, workspaceId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.willRenameFiles(workspaceId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:didRenameFiles', async (event, workspaceId, params) => {
+    ensureSenderSubscribed(event);
+    return manager.didRenameFiles(workspaceId, params);
+  });
+
+  ipcMain.handle('lsp:willDeleteFiles', async (event, workspaceId, params, options) => {
+    ensureSenderSubscribed(event);
+    return manager.willDeleteFiles(workspaceId, params, options || {});
+  });
+
+  ipcMain.handle('lsp:didDeleteFiles', async (event, workspaceId, params) => {
+    ensureSenderSubscribed(event);
+    return manager.didDeleteFiles(workspaceId, params);
   });
 
   ipcMain.handle('lsp:applyEditResponse', async (event, requestId, result) => {

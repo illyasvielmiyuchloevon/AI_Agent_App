@@ -52,6 +52,11 @@ export class LspUiBridge {
     return this.api.definition(serverId, params, options);
   }
 
+  declaration(serverId, params, options) {
+    if (!this.api?.declaration) throw new Error('electronAPI.lsp.declaration unavailable');
+    return this.api.declaration(serverId, params, options);
+  }
+
   rename(serverId, params, options) {
     if (!this.api?.rename) throw new Error('electronAPI.lsp.rename unavailable');
     return this.api.rename(serverId, params, options);
@@ -102,6 +107,16 @@ export class LspUiBridge {
     return this.api.documentSymbol(serverId, params, options);
   }
 
+  documentColor(serverId, params, options) {
+    if (!this.api?.documentColor) throw new Error('electronAPI.lsp.documentColor unavailable');
+    return this.api.documentColor(serverId, params, options);
+  }
+
+  colorPresentation(serverId, params, options) {
+    if (!this.api?.colorPresentation) throw new Error('electronAPI.lsp.colorPresentation unavailable');
+    return this.api.colorPresentation(serverId, params, options);
+  }
+
   saveDocument(serverId, params) {
     if (!this.api?.saveDocument) throw new Error('electronAPI.lsp.saveDocument unavailable');
     return this.api.saveDocument(serverId, params);
@@ -135,6 +150,11 @@ export class LspUiBridge {
   selectionRange(serverId, params, options) {
     if (!this.api?.selectionRange) throw new Error('electronAPI.lsp.selectionRange unavailable');
     return this.api.selectionRange(serverId, params, options);
+  }
+
+  linkedEditingRange(serverId, params, options) {
+    if (!this.api?.linkedEditingRange) throw new Error('electronAPI.lsp.linkedEditingRange unavailable');
+    return this.api.linkedEditingRange(serverId, params, options);
   }
 
   getServerCapabilities(serverId) {
@@ -195,6 +215,36 @@ export class LspUiBridge {
   didChangeConfiguration(workspaceId, settings) {
     if (!this.api?.didChangeConfiguration) throw new Error('electronAPI.lsp.didChangeConfiguration unavailable');
     return this.api.didChangeConfiguration(workspaceId, settings);
+  }
+
+  willCreateFiles(workspaceId, params, options) {
+    if (!this.api?.willCreateFiles) throw new Error('electronAPI.lsp.willCreateFiles unavailable');
+    return this.api.willCreateFiles(workspaceId, params, options);
+  }
+
+  didCreateFiles(workspaceId, params) {
+    if (!this.api?.didCreateFiles) throw new Error('electronAPI.lsp.didCreateFiles unavailable');
+    return this.api.didCreateFiles(workspaceId, params);
+  }
+
+  willRenameFiles(workspaceId, params, options) {
+    if (!this.api?.willRenameFiles) throw new Error('electronAPI.lsp.willRenameFiles unavailable');
+    return this.api.willRenameFiles(workspaceId, params, options);
+  }
+
+  didRenameFiles(workspaceId, params) {
+    if (!this.api?.didRenameFiles) throw new Error('electronAPI.lsp.didRenameFiles unavailable');
+    return this.api.didRenameFiles(workspaceId, params);
+  }
+
+  willDeleteFiles(workspaceId, params, options) {
+    if (!this.api?.willDeleteFiles) throw new Error('electronAPI.lsp.willDeleteFiles unavailable');
+    return this.api.willDeleteFiles(workspaceId, params, options);
+  }
+
+  didDeleteFiles(workspaceId, params) {
+    if (!this.api?.didDeleteFiles) throw new Error('electronAPI.lsp.didDeleteFiles unavailable');
+    return this.api.didDeleteFiles(workspaceId, params);
   }
 
   cancel(token) {
