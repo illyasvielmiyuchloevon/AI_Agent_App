@@ -342,6 +342,7 @@ const TitleBar = ({
                 try {
                     const url = new URL(window.location.href);
                     url.search = '';
+                    url.searchParams.set('newWindow', '1');
                     window.open(url.toString(), '_blank', 'noopener,noreferrer');
                 } catch {
                     // ignore

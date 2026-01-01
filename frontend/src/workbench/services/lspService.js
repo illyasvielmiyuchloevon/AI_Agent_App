@@ -1,7 +1,6 @@
 import { LspUiBridge } from '../../lsp/LspUiBridge';
 import { applyDiagnosticsToMonaco } from '../../lsp/features/diagnosticsUI';
 import {
-  inferLanguageIdFromPath,
   resolveFsPath,
   toFileUri,
   toLspPositionFromMonaco,
@@ -10,58 +9,15 @@ import {
 import { lspRangeToMonacoRange } from '../../lsp/adapters/fromLsp';
 import { outputService } from './outputService';
 import { applyLspTextEdits } from '../../lsp/util/textEdits';
+import { guessIsWindows, fileUriToFsPath, toWorkspaceRelativePath } from '../../lsp/util/fsPath';
+import { createDebouncedCachedRequest } from '../../lsp/util/requestCache';
+import { registerEditorOpener } from '../../lsp/monaco/registerEditorOpener';
+import { registerLanguageFeatures } from '../../lsp/monaco/providers/registerLanguageFeatures';
+import { registerSemanticTokens } from '../../lsp/monaco/providers/registerSemanticTokens';
+import { registerLspCommands } from '../../lsp/monaco/commands/registerLspCommands';
+import { createModelSync } from '../../lsp/monaco/modelSync';
 
 const supportedLanguageIds = new Set(['typescript', 'javascript', 'python', 'rust', 'json']);
-
-const guessIsWindows = (rootFsPath) => {
-  const s = String(rootFsPath || '');
-  return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\') || s.includes('\\');
-};
-
-const fileUriToFsPath = (uri, { windows = false } = {}) => {
-  const s = String(uri || '');
-  if (!s.startsWith('file:')) return '';
-  try {
-    const u = new URL(s);
-    if (u.protocol !== 'file:') return '';
-    const hostname = u.hostname ? decodeURIComponent(u.hostname) : '';
-    const path = decodeURIComponent(u.pathname || '');
-    if (windows) {
-      if (hostname) return `\\\\${hostname}${path.replace(/\//g, '\\')}`;
-      return path.replace(/^\//, '').replace(/\//g, '\\');
-    }
-    return path;
-  } catch {
-    return '';
-  }
-};
-
-const toWorkspaceRelativePath = (fsPath, rootFsPath) => {
-  const root = String(rootFsPath || '').trim();
-  const full = String(fsPath || '').trim();
-  if (!root || !full) return '';
-
-  const windows = guessIsWindows(rootFsPath);
-  const norm = (p) => (windows ? p.replace(/\//g, '\\') : p.replace(/\\/g, '/'));
-  const a = norm(root).replace(/[\\/]+$/, '');
-  const b = norm(full);
-
-  if (windows) {
-    const lowerA = a.toLowerCase();
-    const lowerB = b.toLowerCase();
-    if (!lowerB.startsWith(lowerA)) return '';
-    const boundary = b.charAt(a.length);
-    if (boundary && boundary !== '\\' && boundary !== '/') return '';
-    const rest = b.slice(a.length).replace(/^[\\/]+/, '');
-    return rest.replace(/\\/g, '/');
-  }
-
-  if (!b.startsWith(a)) return '';
-  const boundary = b.charAt(a.length);
-  if (boundary && boundary !== '/') return '';
-  const rest = b.slice(a.length).replace(/^[\\/]+/, '');
-  return rest;
-};
 
 const lspKindToMonacoKind = (monaco, kind) => {
   const K = monaco?.languages?.CompletionItemKind;
@@ -149,8 +105,6 @@ export const lspService = (() => {
   };
 
   const serverInfoByKey = new Map(); // `${workspaceId}::${rootFsPath}::${languageId}` -> { serverId, serverIds }
-  const docByModelPath = new Map(); // modelPath -> { uri, serverId, languageId, version }
-  const modelPathByUri = new Map(); // fileUri -> modelPath
   const serverCapsById = new Map(); // serverId -> capabilities
   const semanticTokenMapByServerId = new Map(); // serverId -> { tokenTypeIndexMap:number[], modifierBitMap:bigint[], supportsDelta:boolean, supportsRange:boolean }
 
@@ -311,6 +265,13 @@ export const lspService = (() => {
     return '';
   };
 
+  const modelSync = createModelSync({
+    bridge,
+    supportedLanguageIds,
+    ensureServerForLanguage,
+    getRootFsPath: () => rootFsPath,
+  });
+
   const didChangeConfiguration = async (settings) => {
     if (!bridge.isAvailable()) return { ok: false };
     const wid = String(workspaceId || '').trim();
@@ -409,67 +370,6 @@ export const lspService = (() => {
       .filter((x) => x.uri);
     if (!files.length) return { ok: true, skipped: true };
     return bridge.didDeleteFiles(wid, { files });
-  };
-
-  const openModelIfNeeded = async (model) => {
-    if (!model || !bridge.isAvailable()) return;
-    const modelPath = String(model.uri?.toString?.() || '');
-    if (!modelPath) return;
-    if (modelPath.startsWith('diff-tab-') || modelPath.startsWith('inmemory:')) return;
-    if (!String(rootFsPath || '').trim()) return;
-
-    const languageId = typeof model.getLanguageId === 'function' ? String(model.getLanguageId() || '') : inferLanguageIdFromPath(modelPath);
-    if (!supportedLanguageIds.has(languageId)) return;
-    if (docByModelPath.has(modelPath)) return;
-
-    const info = await ensureServerForLanguage(languageId, modelPath);
-    const serverId = String(info?.serverId || '');
-    const serverIds = Array.isArray(info?.serverIds) ? info.serverIds.map((x) => String(x || '')).filter(Boolean) : (serverId ? [serverId] : []);
-    if (!serverId) return;
-
-    const fsPath = resolveFsPath(rootFsPath, modelPath);
-    const uri = toFileUri(fsPath);
-    if (!uri) return;
-
-    const doc = { uri, languageId, version: 1, text: model.getValue() };
-    docByModelPath.set(modelPath, { uri, serverId, serverIds, languageId, version: 1 });
-    modelPathByUri.set(uri, modelPath);
-    for (const sid of serverIds.length ? serverIds : [serverId]) {
-      // eslint-disable-next-line no-await-in-loop
-      await bridge.openDocument(sid, doc);
-    }
-
-    model.onDidChangeContent((e) => {
-      const state = docByModelPath.get(modelPath);
-      if (!state) return;
-      state.version += 1;
-      const contentChanges = (e?.changes || []).map((ch) => ({
-        range: toLspRangeFromMonacoRange(ch.range),
-        text: String(ch.text || ''),
-      }));
-      for (const sid of Array.isArray(state.serverIds) && state.serverIds.length ? state.serverIds : [serverId]) {
-        void bridge.changeDocument(sid, {
-          uri,
-          version: state.version,
-          contentChanges,
-        }).catch(() => {});
-      }
-    });
-
-    model.onWillDispose(() => {
-      docByModelPath.delete(modelPath);
-      modelPathByUri.delete(uri);
-      for (const sid of serverIds.length ? serverIds : [serverId]) {
-        void bridge.closeDocument(sid, uri).catch(() => {});
-      }
-    });
-  };
-
-  const getDocState = (model) => {
-    const modelPath = String(model?.uri?.toString?.() || '');
-    const state = docByModelPath.get(modelPath);
-    if (!state) return null;
-    return { modelPath, ...state };
   };
 
   const applyWorkspaceEdit = async (edit, { preferOpenModels = true } = {}) => {
@@ -713,7 +613,7 @@ export const lspService = (() => {
           const value = fromModel.getValue?.() ?? '';
           const lang = typeof fromModel.getLanguageId === 'function' ? fromModel.getLanguageId() : undefined;
           const nextModel = monaco.editor.createModel(String(value), lang, targetUri);
-          void openModelIfNeeded(nextModel).catch(() => {});
+          void modelSync.openModelIfNeeded(nextModel).catch(() => {});
         }
         try { fromModel.dispose(); } catch {}
       }
@@ -752,937 +652,62 @@ export const lspService = (() => {
   const registerProviders = (monaco) => {
     const languages = Array.from(supportedLanguageIds);
     const disposables = [];
-    const completionPendingByKey = new Map(); // key -> { timer, resolve, cancelToken }
-    const hoverPendingByKey = new Map(); // key -> { timer, resolve, cancelToken }
-    const completionCacheByKey = new Map(); // key -> { ts, versionId, positionKey, value }
-    const hoverCacheByKey = new Map(); // key -> { ts, versionId, positionKey, value }
-    const COMPLETION_DEBOUNCE_MS = 90;
-    const HOVER_DEBOUNCE_MS = 180;
-    const COMPLETION_CACHE_MS = 160;
-    const HOVER_CACHE_MS = 220;
+    const completionRequest = createDebouncedCachedRequest({
+      debounceMs: 90,
+      cacheMs: 160,
+      emptyValue: () => ({ suggestions: [] }),
+      onCancel: (t) => void bridge.cancel(t),
+    });
+    const hoverRequest = createDebouncedCachedRequest({
+      debounceMs: 180,
+      cacheMs: 220,
+      emptyValue: null,
+      onCancel: (t) => void bridge.cancel(t),
+      shouldCache: (v) => v != null,
+    });
+    const nextCancelToken = (prefix) => `${String(prefix || '')}${cancelSeq++}`;
 
-    disposables.push(monaco.editor.registerEditorOpener({
-      openCodeEditor: (_source, resource, selectionOrPosition) => {
-        const windows = guessIsWindows(rootFsPath);
-        const uri = resource?.toString?.() || '';
-        let relPath = '';
-        if (String(resource?.scheme || '') === 'file' || uri.startsWith('file://')) {
-          const fsPath = fileUriToFsPath(uri, { windows });
-          relPath = toWorkspaceRelativePath(fsPath, rootFsPath);
-        } else {
-          relPath = String(resource?.path || uri || '').replace(/^\//, '');
-        }
-
-        if (!relPath) return false;
-        try {
-          globalThis.window.dispatchEvent(new CustomEvent('workbench:openFile', { detail: { path: relPath } }));
-          if (selectionOrPosition?.startLineNumber || selectionOrPosition?.lineNumber) {
-            const line = Number(selectionOrPosition?.startLineNumber || selectionOrPosition?.lineNumber);
-            const column = Number(selectionOrPosition?.startColumn || selectionOrPosition?.column || 1);
-            setTimeout(() => {
-              try {
-                globalThis.window.dispatchEvent(new CustomEvent('workbench:revealInActiveEditor', { detail: { line, column } }));
-              } catch {}
-            }, 50);
-          }
-          return true;
-        } catch {
-          return false;
-        }
-      },
-    }));
+    const opener = registerEditorOpener(monaco, { rootFsPath });
+    if (opener) disposables.push(opener);
 
     for (const lang of languages) {
-      disposables.push(monaco.languages.registerCompletionItemProvider(lang, {
-        triggerCharacters: ['.', '"', '\'', '/', '@', '<'],
-        provideCompletionItems: async (model, position, _ctx, token) => {
-          const state = getDocState(model);
-          if (!state) return { suggestions: [] };
-
-          const key = `${state.serverId}::${state.uri}`;
-          const versionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
-          const positionKey = `${Number(position?.lineNumber || 0)}:${Number(position?.column || 0)}`;
-          const cached = completionCacheByKey.get(key);
-          if (cached && cached.versionId === versionId && cached.positionKey === positionKey && (Date.now() - cached.ts) <= COMPLETION_CACHE_MS) {
-            return cached.value;
-          }
-
-          const prev = completionPendingByKey.get(key);
-          if (prev) {
-            completionPendingByKey.delete(key);
-            try { clearTimeout(prev.timer); } catch {}
-            try { prev.resolve({ suggestions: [] }); } catch {}
-            try { if (prev.cancelToken) void bridge.cancel(prev.cancelToken); } catch {}
-          }
-
-          return await new Promise((resolve) => {
-            const cancelToken = `c${cancelSeq++}`;
-            const word = model.getWordUntilPosition(position);
-            const defaultRange = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
-
-            const finishEmpty = () => resolve({ suggestions: [] });
-            const timer = setTimeout(async () => {
-              completionPendingByKey.delete(key);
-              if (token?.isCancellationRequested) return finishEmpty();
-              const nowVersionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
-              if (nowVersionId !== versionId) return finishEmpty();
-              const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-              const res = await bridge.completion(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch((err) => {
-                outputService.append('LSP', `[ERROR] completion failed: ${err?.message || String(err)}`);
-                return null;
-              });
-              const items = normalizeCompletionItems(res);
-              const suggestions = items.map((it) => {
-                const insertText = String(it?.insertText || it?.label || '');
-                const textEdit = it?.textEdit;
-                const usesSnippet = Number(it?.insertTextFormat || 1) === 2;
-                const itemRange = textEdit?.range ? lspRangeToMonacoRange(monaco, textEdit.range) : defaultRange;
-                const additionalTextEdits = Array.isArray(it?.additionalTextEdits)
-                  ? it.additionalTextEdits.map((e) => ({ range: lspRangeToMonacoRange(monaco, e.range), text: String(e.newText || '') }))
-                  : undefined;
-
-                const documentation = it?.documentation?.value || it?.documentation || '';
-                return {
-                  label: String(it?.label || ''),
-                  kind: lspKindToMonacoKind(monaco, it?.kind),
-                  detail: it?.detail ? String(it.detail) : undefined,
-                  documentation: documentation ? String(documentation) : undefined,
-                  insertText: textEdit?.newText ? String(textEdit.newText) : insertText,
-                  range: itemRange,
-                  insertTextRules: usesSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-                  additionalTextEdits,
-                  data: { serverId: state.serverId, uri: state.uri, lspItem: it },
-                };
-              }).filter((s) => s.label);
-              const value = { suggestions };
-              completionCacheByKey.set(key, { ts: Date.now(), versionId, positionKey, value });
-              resolve(value);
-            }, COMPLETION_DEBOUNCE_MS);
-
-            completionPendingByKey.set(key, { timer, resolve: finishEmpty, cancelToken });
-            token?.onCancellationRequested?.(() => {
-              const cur = completionPendingByKey.get(key);
-              if (cur?.timer === timer) completionPendingByKey.delete(key);
-              try { clearTimeout(timer); } catch {}
-              try { void bridge.cancel(cancelToken); } catch {}
-              finishEmpty();
-            });
-          });
-
-        },
-        resolveCompletionItem: async (item, token) => {
-          const data = item?.data || null;
-          const serverId = String(data?.serverId || '');
-          const uri = String(data?.uri || '');
-          const lspItem = data?.lspItem || null;
-          if (!serverId || !uri || !lspItem) return item;
-          const cancelToken = `cr${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const resolved = await bridge.completionResolve(serverId, lspItem, uri, { timeoutMs: 2000, cancelToken }).catch(() => null);
-          if (!resolved || typeof resolved !== 'object') return item;
-
-          const documentation = resolved?.documentation?.value || resolved?.documentation || '';
-          const additionalTextEdits = Array.isArray(resolved?.additionalTextEdits)
-            ? resolved.additionalTextEdits.map((e) => ({ range: lspRangeToMonacoRange(monaco, e.range), text: String(e.newText ?? '') }))
-            : item.additionalTextEdits;
-
-          return {
-            ...item,
-            detail: resolved?.detail ? String(resolved.detail) : item.detail,
-            documentation: documentation ? String(documentation) : item.documentation,
-            additionalTextEdits,
-            data: { ...data, lspItem: resolved },
-          };
-        },
+      disposables.push(...registerLanguageFeatures(monaco, {
+        lang,
+        bridge,
+        outputService,
+        rootFsPath,
+        getDocState: modelSync.getDocState,
+        completionRequest,
+        hoverRequest,
+        nextCancelToken,
+        toLspPositionFromMonaco,
+        toLspRangeFromMonacoRange,
+        lspRangeToMonacoRange,
+        lspKindToMonacoKind,
+        normalizeCompletionItems,
+        guessIsWindows,
+        fileUriToFsPath,
+        toWorkspaceRelativePath,
+        getServerCaps,
+        toLspDiagnosticFromMarker,
       }));
 
-      disposables.push(monaco.languages.registerHoverProvider(lang, {
-        provideHover: async (model, position, token) => {
-          const state = getDocState(model);
-          if (!state) return null;
-
-          const key = `${state.serverId}::${state.uri}`;
-          const versionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
-          const positionKey = `${Number(position?.lineNumber || 0)}:${Number(position?.column || 0)}`;
-          const cached = hoverCacheByKey.get(key);
-          if (cached && cached.versionId === versionId && cached.positionKey === positionKey && (Date.now() - cached.ts) <= HOVER_CACHE_MS) {
-            return cached.value;
-          }
-
-          const prev = hoverPendingByKey.get(key);
-          if (prev) {
-            hoverPendingByKey.delete(key);
-            try { clearTimeout(prev.timer); } catch {}
-            try { prev.resolve(null); } catch {}
-            try { if (prev.cancelToken) void bridge.cancel(prev.cancelToken); } catch {}
-          }
-
-          return await new Promise((resolve) => {
-            const cancelToken = `h${cancelSeq++}`;
-            const finishEmpty = () => resolve(null);
-            const timer = setTimeout(async () => {
-              hoverPendingByKey.delete(key);
-              if (token?.isCancellationRequested) return finishEmpty();
-              const nowVersionId = typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 0;
-              if (nowVersionId !== versionId) return finishEmpty();
-              const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-              const res = await bridge.hover(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch((err) => {
-                outputService.append('LSP', `[ERROR] hover failed: ${err?.message || String(err)}`);
-                return null;
-              });
-              const contents = res?.contents;
-              const markdown =
-                typeof contents === 'string' ? contents :
-                  (Array.isArray(contents) ? contents.map((c) => c?.value || c).filter(Boolean).join('\n\n') : (contents?.value || ''));
-
-              if (!markdown) return resolve(null);
-              const value = { contents: [{ value: String(markdown) }] };
-              hoverCacheByKey.set(key, { ts: Date.now(), versionId, positionKey, value });
-              resolve(value);
-            }, HOVER_DEBOUNCE_MS);
-
-            hoverPendingByKey.set(key, { timer, resolve: finishEmpty, cancelToken });
-            token?.onCancellationRequested?.(() => {
-              const cur = hoverPendingByKey.get(key);
-              if (cur?.timer === timer) hoverPendingByKey.delete(key);
-              try { clearTimeout(timer); } catch {}
-              try { void bridge.cancel(cancelToken); } catch {}
-              finishEmpty();
-            });
-          });
-        },
+      disposables.push(...registerSemanticTokens(monaco, {
+        lang,
+        bridge,
+        getDocState: modelSync.getDocState,
+        getSemanticTokenMap,
+        mapSemanticTokenData,
+        toLspRangeFromMonacoRange,
+        nextCancelToken,
+        tokenTypes: SEMANTIC_TOKEN_TYPES,
+        tokenModifiers: SEMANTIC_TOKEN_MODIFIERS,
       }));
-
-      disposables.push(monaco.languages.registerReferenceProvider(lang, {
-        provideReferences: async (model, position, context, token) => {
-          const state = getDocState(model);
-          if (!state) return [];
-          const cancelToken = `r${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const params = {
-            textDocument: { uri: state.uri },
-            position: toLspPositionFromMonaco(position),
-            context: { includeDeclaration: !!context?.includeDeclaration },
-          };
-          const res = await bridge.references(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch((err) => {
-            outputService.append('LSP', `[ERROR] references failed: ${err?.message || String(err)}`);
-            return [];
-          });
-          const list = Array.isArray(res) ? res : (res ? [res] : []);
-          const windows = guessIsWindows(rootFsPath);
-          return list.map((loc) => {
-            const uri = String(loc?.uri || '');
-            const range = loc?.range;
-            if (!uri || !range) return null;
-            const fsPath = fileUriToFsPath(uri, { windows });
-            const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-            const targetModelPath = rel || uri;
-            return { uri: monaco.Uri.parse(targetModelPath), range: lspRangeToMonacoRange(monaco, range) };
-          }).filter(Boolean);
-        },
-      }));
-
-      disposables.push(monaco.languages.registerRenameProvider(lang, {
-        provideRenameEdits: async (model, position, newName, token) => {
-          const state = getDocState(model);
-          if (!state) return { edits: [] };
-          const cancelToken = `n${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position), newName: String(newName || '') };
-          const res = await bridge.rename(state.serverId, params, { timeoutMs: 5000, cancelToken }).catch(() => null);
-          if (!res) return { edits: [] };
-
-          const windows = guessIsWindows(rootFsPath);
-          const edits = [];
-          const addEditsForUri = (uri, lspEdits) => {
-            const fsPath = fileUriToFsPath(uri, { windows });
-            const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-            const targetModelPath = rel || uri;
-            for (const e of Array.isArray(lspEdits) ? lspEdits : []) {
-              edits.push({
-                resource: monaco.Uri.parse(targetModelPath),
-                edit: { range: lspRangeToMonacoRange(monaco, e.range), text: String(e.newText ?? '') },
-              });
-            }
-          };
-
-          if (res.changes) {
-            for (const [uri, lspEdits] of Object.entries(res.changes)) addEditsForUri(uri, lspEdits);
-          }
-          if (Array.isArray(res.documentChanges)) {
-            for (const dc of res.documentChanges) {
-              const kind = String(dc?.kind || '');
-              if (kind) continue;
-              if (dc?.textDocument?.uri && Array.isArray(dc.edits)) addEditsForUri(dc.textDocument.uri, dc.edits);
-            }
-          }
-          return { edits };
-        },
-      }));
-
-      disposables.push(monaco.languages.registerCodeActionProvider(lang, {
-        providedCodeActionKinds: ['quickfix', 'refactor', 'source.organizeImports'],
-        provideCodeActions: async (model, range, context, token) => {
-          const state = getDocState(model);
-          if (!state) return { actions: [], dispose: () => {} };
-          const cancelToken = `a${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-
-          const markers = Array.isArray(context?.markers) ? context.markers : [];
-          const diagnostics = markers.map(toLspDiagnosticFromMarker);
-          const only = context?.only?.value ? String(context.only.value) : (context?.only ? String(context.only) : '');
-
-          const params = {
-            textDocument: { uri: state.uri },
-            range: toLspRangeFromMonacoRange(range),
-            context: { diagnostics, only: only ? [only] : undefined, triggerKind: 1 },
-          };
-          const res = await bridge.codeAction(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch((err) => {
-            outputService.append('LSP', `[ERROR] codeAction failed: ${err?.message || String(err)}`);
-            return [];
-          });
-          const list = Array.isArray(res) ? res : [];
-          const actions = list.map((item) => {
-            const isCommand = item && item.command && !item.edit && !item.kind && !item.diagnostics;
-            const action = isCommand ? { title: item.title, command: item } : item;
-            const title = String(action?.title || '');
-            if (!title) return null;
-            return {
-              title,
-              kind: action?.kind ? String(action.kind) : undefined,
-              isPreferred: !!action?.isPreferred,
-              disabled: action?.disabled?.reason ? { reason: String(action.disabled.reason) } : undefined,
-              data: { serverId: state.serverId, uri: state.uri, lspAction: action },
-              command: {
-                id: 'lsp.executeCodeAction',
-                title,
-                arguments: [{ serverId: state.serverId, action }],
-              },
-            };
-          }).filter(Boolean);
-
-          return { actions, dispose: () => {} };
-        },
-        resolveCodeAction: async (codeAction, token) => {
-          const data = codeAction?.data || null;
-          const serverId = String(data?.serverId || '');
-          const uri = String(data?.uri || '');
-          const lspAction = data?.lspAction || null;
-          if (!serverId || !uri || !lspAction) return codeAction;
-          const cancelToken = `car${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const resolved = await bridge.codeActionResolve(serverId, lspAction, uri, { timeoutMs: 4000, cancelToken }).catch(() => null);
-          if (!resolved || typeof resolved !== 'object') return codeAction;
-          const title = String(resolved?.title || codeAction?.title || '');
-          return {
-            ...codeAction,
-            title,
-            data: { ...data, lspAction: resolved },
-            command: {
-              id: 'lsp.executeCodeAction',
-              title,
-              arguments: [{ serverId, action: resolved }],
-            },
-          };
-        },
-      }));
-
-      disposables.push(monaco.languages.registerSignatureHelpProvider(lang, {
-        signatureHelpTriggerCharacters: ['(', ',', '<'],
-        provideSignatureHelp: async (model, position, _token, context) => {
-          const state = getDocState(model);
-          if (!state) return { value: { signatures: [], activeSignature: 0, activeParameter: 0 }, dispose: () => {} };
-          const cancelToken = `s${cancelSeq++}`;
-          _token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const params = {
-            textDocument: { uri: state.uri },
-            position: toLspPositionFromMonaco(position),
-            context: {
-              triggerKind: Number(context?.triggerKind || 1),
-              triggerCharacter: context?.triggerCharacter ? String(context.triggerCharacter) : undefined,
-              isRetrigger: !!context?.isRetrigger,
-            },
-          };
-          const res = await bridge.signatureHelp(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => null);
-          return { value: res || { signatures: [], activeSignature: 0, activeParameter: 0 }, dispose: () => {} };
-        },
-      }));
-
-      disposables.push(monaco.languages.registerDocumentFormattingEditProvider(lang, {
-        provideDocumentFormattingEdits: async (model, _options, token) => {
-          const state = getDocState(model);
-          if (!state) return [];
-          const cancelToken = `f${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const opts = model.getOptions?.();
-          const params = {
-            textDocument: { uri: state.uri },
-            options: { tabSize: opts?.tabSize || 4, insertSpaces: !!opts?.insertSpaces },
-          };
-          const res = await bridge.format(state.serverId, params, { timeoutMs: 5000, cancelToken }).catch(() => []);
-          return (Array.isArray(res) ? res : []).map((e) => ({
-            range: lspRangeToMonacoRange(monaco, e.range),
-            text: String(e.newText ?? ''),
-          }));
-        },
-      }));
-
-      disposables.push(monaco.languages.registerDocumentRangeFormattingEditProvider(lang, {
-        provideDocumentRangeFormattingEdits: async (model, range, _options, token) => {
-          const state = getDocState(model);
-          if (!state) return [];
-          const cancelToken = `g${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const opts = model.getOptions?.();
-          const params = {
-            textDocument: { uri: state.uri },
-            range: toLspRangeFromMonacoRange(range),
-            options: { tabSize: opts?.tabSize || 4, insertSpaces: !!opts?.insertSpaces },
-          };
-          const res = await bridge.rangeFormat(state.serverId, params, { timeoutMs: 5000, cancelToken }).catch(() => []);
-          return (Array.isArray(res) ? res : []).map((e) => ({
-            range: lspRangeToMonacoRange(monaco, e.range),
-            text: String(e.newText ?? ''),
-          }));
-        },
-      }));
-
-      disposables.push(monaco.languages.registerDefinitionProvider(lang, {
-        provideDefinition: async (model, position, token) => {
-          const state = getDocState(model);
-          if (!state) return null;
-          const cancelToken = `d${cancelSeq++}`;
-          token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-          const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-          const res = await bridge.definition(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch((err) => {
-            outputService.append('LSP', `[ERROR] definition failed: ${err?.message || String(err)}`);
-            return null;
-          });
-          const windows = guessIsWindows(rootFsPath);
-
-          const toLocationLink = (loc) => {
-            const targetUri = String(loc?.uri || loc?.targetUri || '');
-            const fullRange = loc?.targetRange || loc?.range || loc?.targetSelectionRange;
-            const selectionRange = loc?.targetSelectionRange || loc?.targetRange || loc?.range;
-            if (!targetUri || !fullRange) return null;
-
-            const fsPath = fileUriToFsPath(targetUri, { windows });
-            const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-            const targetModelPath = rel || targetUri;
-            return {
-              originSelectionRange: undefined,
-              uri: monaco.Uri.parse(targetModelPath),
-              range: lspRangeToMonacoRange(monaco, fullRange),
-              targetSelectionRange: selectionRange ? lspRangeToMonacoRange(monaco, selectionRange) : undefined,
-            };
-          };
-
-          const list = Array.isArray(res) ? res : (res ? [res] : []);
-          return list.map(toLocationLink).filter(Boolean);
-        },
-      }));
-
-      if (typeof monaco.languages.registerDeclarationProvider === 'function') {
-        disposables.push(monaco.languages.registerDeclarationProvider(lang, {
-          provideDeclaration: async (model, position, token) => {
-            const state = getDocState(model);
-            if (!state) return null;
-            const cancelToken = `dc${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-            const res = await bridge.declaration(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => null);
-            const windows = guessIsWindows(rootFsPath);
-
-            const toLocationLink = (loc) => {
-              const targetUri = String(loc?.uri || loc?.targetUri || '');
-              const fullRange = loc?.targetRange || loc?.range || loc?.targetSelectionRange;
-              const selectionRange = loc?.targetSelectionRange || loc?.targetRange || loc?.range;
-              if (!targetUri || !fullRange) return null;
-              const fsPath = fileUriToFsPath(targetUri, { windows });
-              const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-              const targetModelPath = rel || targetUri;
-              return {
-                originSelectionRange: undefined,
-                uri: monaco.Uri.parse(targetModelPath),
-                range: lspRangeToMonacoRange(monaco, fullRange),
-                targetSelectionRange: selectionRange ? lspRangeToMonacoRange(monaco, selectionRange) : undefined,
-              };
-            };
-
-            const list = Array.isArray(res) ? res : (res ? [res] : []);
-            return list.map(toLocationLink).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerTypeDefinitionProvider === 'function') {
-        disposables.push(monaco.languages.registerTypeDefinitionProvider(lang, {
-          provideTypeDefinition: async (model, position, token) => {
-            const state = getDocState(model);
-            if (!state) return null;
-            const cancelToken = `td${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-            const res = await bridge.typeDefinition(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => null);
-            const windows = guessIsWindows(rootFsPath);
-
-            const toLocationLink = (loc) => {
-              const targetUri = String(loc?.uri || loc?.targetUri || '');
-              const fullRange = loc?.targetRange || loc?.range || loc?.targetSelectionRange;
-              const selectionRange = loc?.targetSelectionRange || loc?.targetRange || loc?.range;
-              if (!targetUri || !fullRange) return null;
-              const fsPath = fileUriToFsPath(targetUri, { windows });
-              const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-              const targetModelPath = rel || targetUri;
-              return {
-                originSelectionRange: undefined,
-                uri: monaco.Uri.parse(targetModelPath),
-                range: lspRangeToMonacoRange(monaco, fullRange),
-                targetSelectionRange: selectionRange ? lspRangeToMonacoRange(monaco, selectionRange) : undefined,
-              };
-            };
-
-            const list = Array.isArray(res) ? res : (res ? [res] : []);
-            return list.map(toLocationLink).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerImplementationProvider === 'function') {
-        disposables.push(monaco.languages.registerImplementationProvider(lang, {
-          provideImplementation: async (model, position, token) => {
-            const state = getDocState(model);
-            if (!state) return null;
-            const cancelToken = `im${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-            const res = await bridge.implementation(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => null);
-            const windows = guessIsWindows(rootFsPath);
-
-            const toLocationLink = (loc) => {
-              const targetUri = String(loc?.uri || loc?.targetUri || '');
-              const fullRange = loc?.targetRange || loc?.range || loc?.targetSelectionRange;
-              const selectionRange = loc?.targetSelectionRange || loc?.targetRange || loc?.range;
-              if (!targetUri || !fullRange) return null;
-              const fsPath = fileUriToFsPath(targetUri, { windows });
-              const rel = toWorkspaceRelativePath(fsPath, rootFsPath);
-              const targetModelPath = rel || targetUri;
-              return {
-                originSelectionRange: undefined,
-                uri: monaco.Uri.parse(targetModelPath),
-                range: lspRangeToMonacoRange(monaco, fullRange),
-                targetSelectionRange: selectionRange ? lspRangeToMonacoRange(monaco, selectionRange) : undefined,
-              };
-            };
-
-            const list = Array.isArray(res) ? res : (res ? [res] : []);
-            return list.map(toLocationLink).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerColorProvider === 'function') {
-        disposables.push(monaco.languages.registerColorProvider(lang, {
-          provideDocumentColors: async (model, token) => {
-            const state = getDocState(model);
-            if (!state) return [];
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.colorProvider) return [];
-            const cancelToken = `cl${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const res = await bridge.documentColor(state.serverId, { textDocument: { uri: state.uri } }, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            return list.map((ci) => {
-              const range = ci?.range ? lspRangeToMonacoRange(monaco, ci.range) : null;
-              const color = ci?.color || null;
-              if (!range || !color) return null;
-              return { range, color };
-            }).filter(Boolean);
-          },
-          provideColorPresentations: async (model, colorInfo, token) => {
-            const state = getDocState(model);
-            if (!state) return [];
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.colorProvider) return [];
-            const cancelToken = `cp${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = {
-              textDocument: { uri: state.uri },
-              color: colorInfo?.color,
-              range: toLspRangeFromMonacoRange(colorInfo?.range),
-            };
-            const res = await bridge.colorPresentation(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            return list.map((p) => {
-              const label = String(p?.label || '');
-              if (!label) return null;
-              const te = p?.textEdit;
-              const textEdit = te?.range ? { range: lspRangeToMonacoRange(monaco, te.range), text: String(te.newText ?? '') } : undefined;
-              const additionalTextEdits = (Array.isArray(p?.additionalTextEdits) ? p.additionalTextEdits : []).map((e) => {
-                if (!e?.range) return null;
-                return { range: lspRangeToMonacoRange(monaco, e.range), text: String(e.newText ?? '') };
-              }).filter(Boolean);
-              return { label, textEdit, additionalTextEdits: additionalTextEdits.length ? additionalTextEdits : undefined };
-            }).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerFoldingRangeProvider === 'function') {
-        disposables.push(monaco.languages.registerFoldingRangeProvider(lang, {
-          provideFoldingRanges: async (model, _context, token) => {
-            const state = getDocState(model);
-            if (!state) return [];
-            const cancelToken = `fr${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri } };
-            const res = await bridge.foldingRange(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-
-            const kindMap = monaco?.languages?.FoldingRangeKind;
-            const toKind = (k) => {
-              const s = String(k || '');
-              if (!kindMap || !s) return undefined;
-              if (s === 'comment') return kindMap.Comment;
-              if (s === 'imports') return kindMap.Imports;
-              if (s === 'region') return kindMap.Region;
-              return undefined;
-            };
-
-            return list.map((r) => {
-              const start = Number(r?.startLine);
-              const end = Number(r?.endLine);
-              if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-              return {
-                start: Math.max(1, start + 1),
-                end: Math.max(1, end + 1),
-                kind: toKind(r?.kind),
-              };
-            }).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerInlayHintsProvider === 'function') {
-        disposables.push(monaco.languages.registerInlayHintsProvider(lang, {
-          provideInlayHints: async (model, range, token) => {
-            const state = getDocState(model);
-            if (!state) return { hints: [], dispose: () => {} };
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.inlayHintProvider) return { hints: [], dispose: () => {} };
-            const cancelToken = `ih${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri }, range: toLspRangeFromMonacoRange(range) };
-            const res = await bridge.inlayHint(state.serverId, params, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-
-            const kindMap = monaco?.languages?.InlayHintKind;
-            const toKind = (k) => {
-              const n = Number(k || 0);
-              if (!kindMap) return undefined;
-              if (n === 1) return kindMap.Type;
-              if (n === 2) return kindMap.Parameter;
-              return undefined;
-            };
-
-            const hints = list.map((h) => {
-              const pos = h?.position;
-              const line0 = Number(pos?.line);
-              const ch0 = Number(pos?.character);
-              if (!Number.isFinite(line0) || !Number.isFinite(ch0)) return null;
-              const lineNumber = Math.max(1, line0 + 1);
-              const maxCol = model.getLineMaxColumn(lineNumber);
-              const column = Math.max(1, Math.min(maxCol, ch0 + 1));
-              const label =
-                typeof h?.label === 'string'
-                  ? h.label
-                  : (Array.isArray(h?.label) ? h.label.map((p) => p?.value || '').join('') : String(h?.label?.value || ''));
-              if (!label) return null;
-
-              const tooltip = h?.tooltip?.value || h?.tooltip || '';
-              return {
-                position: { lineNumber, column },
-                label: String(label),
-                kind: toKind(h?.kind),
-                paddingLeft: !!h?.paddingLeft,
-                paddingRight: !!h?.paddingRight,
-                tooltip: tooltip ? String(tooltip) : undefined,
-              };
-            }).filter(Boolean);
-
-            return { hints, dispose: () => {} };
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerLinkProvider === 'function') {
-        disposables.push(monaco.languages.registerLinkProvider(lang, {
-          provideLinks: async (model, token) => {
-            const state = getDocState(model);
-            if (!state) return { links: [] };
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.documentLinkProvider) return { links: [] };
-            const cancelToken = `dl${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const res = await bridge.documentLink(state.serverId, { textDocument: { uri: state.uri } }, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            const links = list.map((l) => {
-              const range = l?.range ? lspRangeToMonacoRange(monaco, l.range) : null;
-              const target = l?.target ? String(l.target) : '';
-              if (!range) return null;
-              return {
-                range,
-                url: target || undefined,
-                tooltip: l?.tooltip ? String(l.tooltip) : undefined,
-                data: { serverId: state.serverId, uri: state.uri, lspLink: l },
-              };
-            }).filter(Boolean);
-            return { links };
-          },
-          resolveLink: async (link, token) => {
-            const data = link?.data || null;
-            const serverId = String(data?.serverId || '');
-            const uri = String(data?.uri || '');
-            const lspLink = data?.lspLink || null;
-            if (!serverId || !uri || !lspLink) return link;
-            const cancelToken = `dlr${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const resolved = await bridge.documentLinkResolve(serverId, lspLink, uri, { timeoutMs: 4000, cancelToken }).catch(() => null);
-            if (!resolved || typeof resolved !== 'object') return link;
-            const target = resolved?.target ? String(resolved.target) : '';
-            return { ...link, url: target || link.url, data: { ...data, lspLink: resolved } };
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerCodeLensProvider === 'function') {
-        disposables.push(monaco.languages.registerCodeLensProvider(lang, {
-          provideCodeLenses: async (model, token) => {
-            const state = getDocState(model);
-            if (!state) return { lenses: [], dispose: () => {} };
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.codeLensProvider) return { lenses: [], dispose: () => {} };
-            const cancelToken = `cl${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const res = await bridge.codeLens(state.serverId, { textDocument: { uri: state.uri } }, { timeoutMs: 4000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            const lenses = list.map((l) => {
-              const range = l?.range ? lspRangeToMonacoRange(monaco, l.range) : null;
-              if (!range) return null;
-              const cmd = l?.command;
-              const title = cmd?.title ? String(cmd.title) : '';
-              const commandId = cmd?.command ? String(cmd.command) : '';
-              return {
-                range,
-                command: commandId ? { id: 'lsp.executeServerCommand', title: title || commandId, arguments: [{ serverId: state.serverId, command: cmd }] } : undefined,
-                data: { serverId: state.serverId, uri: state.uri, lspLens: l },
-              };
-            }).filter(Boolean);
-            return { lenses, dispose: () => {} };
-          },
-          resolveCodeLens: async (lens, token) => {
-            const data = lens?.data || null;
-            const serverId = String(data?.serverId || '');
-            const uri = String(data?.uri || '');
-            const lspLens = data?.lspLens || null;
-            if (!serverId || !uri || !lspLens) return lens;
-            const cancelToken = `clr${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const resolved = await bridge.codeLensResolve(serverId, lspLens, uri, { timeoutMs: 4000, cancelToken }).catch(() => null);
-            if (!resolved || typeof resolved !== 'object') return lens;
-            const cmd = resolved?.command;
-            const title = cmd?.title ? String(cmd.title) : '';
-            const commandId = cmd?.command ? String(cmd.command) : '';
-            return {
-              ...lens,
-              command: commandId ? { id: 'lsp.executeServerCommand', title: title || commandId, arguments: [{ serverId, command: cmd }] } : lens.command,
-              data: { ...data, lspLens: resolved },
-            };
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerDocumentHighlightProvider === 'function') {
-        disposables.push(monaco.languages.registerDocumentHighlightProvider(lang, {
-          provideDocumentHighlights: async (model, position, token) => {
-            const state = getDocState(model);
-            if (!state) return [];
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.documentHighlightProvider) return [];
-            const cancelToken = `dh${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const res = await bridge.documentHighlight(state.serverId, { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) }, { timeoutMs: 2000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            const kindMap = monaco?.languages?.DocumentHighlightKind;
-            return list.map((h) => {
-              const range = h?.range ? lspRangeToMonacoRange(monaco, h.range) : null;
-              if (!range) return null;
-              const k = Number(h?.kind || 0);
-              const kind = kindMap ? (k === 2 ? kindMap.Write : (k === 3 ? kindMap.Text : kindMap.Read)) : undefined;
-              return { range, kind };
-            }).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerSelectionRangeProvider === 'function') {
-        disposables.push(monaco.languages.registerSelectionRangeProvider(lang, {
-          provideSelectionRanges: async (model, positions, token) => {
-            const state = getDocState(model);
-            if (!state) return [];
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.selectionRangeProvider) return [];
-            const cancelToken = `srp${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = {
-              textDocument: { uri: state.uri },
-              positions: (Array.isArray(positions) ? positions : []).map((p) => toLspPositionFromMonaco(p)),
-            };
-            const res = await bridge.selectionRange(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => []);
-            const list = Array.isArray(res) ? res : [];
-            const convertOne = (sr) => {
-              if (!sr || typeof sr !== 'object' || !sr.range) return null;
-              const next = { range: lspRangeToMonacoRange(monaco, sr.range) };
-              if (sr.parent) next.parent = convertOne(sr.parent);
-              return next;
-            };
-            return list.map(convertOne).filter(Boolean);
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerLinkedEditingRangeProvider === 'function') {
-        disposables.push(monaco.languages.registerLinkedEditingRangeProvider(lang, {
-          provideLinkedEditingRanges: async (model, position, token) => {
-            const state = getDocState(model);
-            if (!state) return null;
-            const caps = await getServerCaps(state.serverId);
-            if (!caps?.linkedEditingRangeProvider) return null;
-            const cancelToken = `ler${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-            const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
-            const res = await bridge.linkedEditingRange(state.serverId, params, { timeoutMs: 2000, cancelToken }).catch(() => null);
-            const ranges = (Array.isArray(res?.ranges) ? res.ranges : []).map((r) => {
-              if (!r) return null;
-              return lspRangeToMonacoRange(monaco, r);
-            }).filter(Boolean);
-            if (!ranges.length) return null;
-            const pat = res?.wordPattern ? String(res.wordPattern) : '';
-            let wordPattern;
-            if (pat) {
-              try { wordPattern = new RegExp(pat); } catch {}
-            }
-            return { ranges, wordPattern };
-          },
-        }));
-      }
-
-      if (typeof monaco.languages.registerDocumentSemanticTokensProvider === 'function') {
-        const legend = monaco?.languages?.SemanticTokensLegend
-          ? new monaco.languages.SemanticTokensLegend(SEMANTIC_TOKEN_TYPES, SEMANTIC_TOKEN_MODIFIERS)
-          : { tokenTypes: SEMANTIC_TOKEN_TYPES, tokenModifiers: SEMANTIC_TOKEN_MODIFIERS };
-
-        disposables.push(monaco.languages.registerDocumentSemanticTokensProvider(lang, {
-          getLegend: () => legend,
-          provideDocumentSemanticTokens: async (model, lastResultId, token) => {
-            const state = getDocState(model);
-            if (!state) return { data: new Uint32Array() };
-            const map = await getSemanticTokenMap(state.serverId);
-            if (!map) return { data: new Uint32Array() };
-
-            const cancelToken = `st${cancelSeq++}`;
-            token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-
-            if (lastResultId && map.supportsDelta) {
-              const deltaRes = await bridge.semanticTokensFullDelta(
-                state.serverId,
-                { textDocument: { uri: state.uri }, previousResultId: String(lastResultId) },
-                { timeoutMs: 4000, cancelToken },
-              ).catch(() => null);
-
-              if (deltaRes && Array.isArray(deltaRes.edits)) {
-                const edits = deltaRes.edits.map((e) => ({
-                  start: Number(e?.start || 0),
-                  deleteCount: Number(e?.deleteCount || 0),
-                  data: Array.isArray(e?.data) ? mapSemanticTokenData(e.data, map) : undefined,
-                }));
-                return { resultId: deltaRes?.resultId ? String(deltaRes.resultId) : undefined, edits };
-              }
-
-              if (deltaRes && Array.isArray(deltaRes.data)) {
-                return {
-                  resultId: deltaRes?.resultId ? String(deltaRes.resultId) : undefined,
-                  data: mapSemanticTokenData(deltaRes.data, map),
-                };
-              }
-            }
-
-            const fullRes = await bridge.semanticTokensFull(
-              state.serverId,
-              { textDocument: { uri: state.uri } },
-              { timeoutMs: 4000, cancelToken },
-            ).catch(() => null);
-
-            const data = mapSemanticTokenData(fullRes?.data, map);
-            return { resultId: fullRes?.resultId ? String(fullRes.resultId) : undefined, data };
-          },
-        }));
-
-        if (typeof monaco.languages.registerDocumentRangeSemanticTokensProvider === 'function') {
-          disposables.push(monaco.languages.registerDocumentRangeSemanticTokensProvider(lang, {
-            getLegend: () => legend,
-            provideDocumentRangeSemanticTokens: async (model, range, token) => {
-              const state = getDocState(model);
-              if (!state) return { data: new Uint32Array() };
-              const map = await getSemanticTokenMap(state.serverId);
-              if (!map || !map.supportsRange) return { data: new Uint32Array() };
-              const cancelToken = `sr${cancelSeq++}`;
-              token?.onCancellationRequested?.(() => { void bridge.cancel(cancelToken); });
-              const res = await bridge.semanticTokensRange(
-                state.serverId,
-                { textDocument: { uri: state.uri }, range: toLspRangeFromMonacoRange(range) },
-                { timeoutMs: 4000, cancelToken },
-              ).catch(() => null);
-              return { resultId: res?.resultId ? String(res.resultId) : undefined, data: mapSemanticTokenData(res?.data, map) };
-            },
-          }));
-        }
-      }
     }
 
     if (!commandsRegistered) {
       commandsRegistered = true;
-      disposables.push(monaco.editor.registerCommand('lsp.executeCodeAction', async (_accessor, payload) => {
-        const serverId = payload?.serverId ? String(payload.serverId) : '';
-        const action = payload?.action || null;
-        if (!serverId || !action) return;
-        if (action.edit) {
-          try {
-            await applyWorkspaceEdit(action.edit);
-          } catch (err) {
-            outputService.append('LSP', `[ERROR] applyWorkspaceEdit failed: ${err?.message || String(err)}`);
-            return;
-          }
-        }
-        if (action.command) {
-          try {
-            await bridge.executeCommand(serverId, { command: action.command.command, arguments: action.command.arguments || [] }, { timeoutMs: 8000 });
-          } catch (err) {
-            outputService.append('LSP', `[ERROR] executeCommand failed: ${err?.message || String(err)}`);
-          }
-        }
-      }));
-
-      disposables.push(monaco.editor.registerCommand('lsp.executeServerCommand', async (_accessor, payload) => {
-        const serverId = payload?.serverId ? String(payload.serverId) : '';
-        const cmd = payload?.command || null;
-        if (!serverId || !cmd?.command) return;
-        try {
-          await bridge.executeCommand(serverId, { command: String(cmd.command), arguments: cmd.arguments || [] }, { timeoutMs: 8000 });
-        } catch (err) {
-          outputService.append('LSP', `[ERROR] executeCommand failed: ${err?.message || String(err)}`);
-        }
-      }));
+      disposables.push(...registerLspCommands(monaco, { bridge, outputService, applyWorkspaceEdit }));
     }
 
     return () => disposables.forEach((d) => d?.dispose?.());
@@ -1713,7 +738,7 @@ export const lspService = (() => {
     if (!mp) return [];
     const model = monaco.editor.getModel(monaco.Uri.parse(mp));
     if (!model) return [];
-    const state = getDocState(model);
+    const state = modelSync.getDocState(model);
     if (!state) return [];
     const res = await bridge.documentSymbol(state.serverId, { textDocument: { uri: state.uri } }, { timeoutMs: 4000 }).catch(() => []);
     const isSymbolInformation = (x) => x && typeof x === 'object' && x.location && x.location.uri && x.location.range;
@@ -1747,19 +772,8 @@ export const lspService = (() => {
     return out.filter((x) => x.name && x.modelPath && x.range);
   };
 
-  const lspUriToModelPath = (uri) => {
-    const u = String(uri || '');
-    if (!u) return '';
-    if (u.startsWith('file://')) {
-      const windows = guessIsWindows(rootFsPath);
-      const fsPath = fileUriToFsPath(u, { windows });
-      return toWorkspaceRelativePath(fsPath, rootFsPath) || u;
-    }
-    return u;
-  };
-
   const prepareCallHierarchy = async (model, position) => {
-    const state = getDocState(model);
+    const state = modelSync.getDocState(model);
     if (!state) return { serverId: '', items: [] };
     const cancelToken = `chp${cancelSeq++}`;
     const params = { textDocument: { uri: state.uri }, position: toLspPositionFromMonaco(position) };
@@ -1797,7 +811,7 @@ export const lspService = (() => {
     const disposeDiagnostics = bridge.onDiagnostics((payload) => {
       applyDiagnosticsToMonaco({
         monaco,
-        modelPathByUri,
+        modelPathByUri: modelSync.modelPathByUri,
         uri: payload?.uri,
         diagnostics: payload?.diagnostics || [],
         owner: `lsp:${payload?.serverId || 'default'}`,
@@ -1853,13 +867,13 @@ export const lspService = (() => {
     });
 
     monaco.editor.onDidCreateModel((model) => {
-      void openModelIfNeeded(model).catch(() => {});
+      void modelSync.openModelIfNeeded(model).catch(() => {});
     });
 
     // Best-effort: open already-existing models (e.g. initial tab).
     try {
       for (const m of monaco.editor.getModels()) {
-        void openModelIfNeeded(m).catch(() => {});
+        void modelSync.openModelIfNeeded(m).catch(() => {});
       }
     } catch {
       // ignore
@@ -1895,7 +909,7 @@ export const lspService = (() => {
       if (!attached || !rootReady || !monaco?.editor?.getModels) return;
       try {
         for (const m of monaco.editor.getModels()) {
-          void openModelIfNeeded(m).catch(() => {});
+          void modelSync.openModelIfNeeded(m).catch(() => {});
         }
       } catch {
         // ignore
@@ -1906,19 +920,7 @@ export const lspService = (() => {
       serverInfoByKey.clear();
       serverCapsById.clear();
       semanticTokenMapByServerId.clear();
-
-      const docs = Array.from(docByModelPath.values());
-      docByModelPath.clear();
-      modelPathByUri.clear();
-
-      for (const s of docs) {
-        const uri = String(s?.uri || '');
-        const serverIds = Array.isArray(s?.serverIds) && s.serverIds.length ? s.serverIds : [String(s?.serverId || '')].filter(Boolean);
-        if (!uri) continue;
-        for (const sid of serverIds) {
-          void bridge.closeDocument(sid, uri).catch(() => {});
-        }
-      }
+      modelSync.clearDocumentsAndClose();
 
       reopenModels();
       return;
@@ -1933,42 +935,8 @@ export const lspService = (() => {
     uiContext = { ...uiContext, ...(next || {}) };
   };
 
-  const didSavePath = async (relPath, text) => {
-    if (!bridge.isAvailable()) return { ok: false };
-    const mp = String(relPath || '').trim();
-    if (!mp) return { ok: false };
-    const direct = docByModelPath.get(mp);
-    const state = direct?.uri
-      ? direct
-      : (() => {
-        try {
-          const fsPath = resolveFsPath(rootFsPath, mp);
-          const uri = toFileUri(fsPath);
-          const modelPath = uri ? modelPathByUri.get(uri) : '';
-          return modelPath ? docByModelPath.get(modelPath) : null;
-        } catch {
-          return null;
-        }
-      })();
-    if (!state?.uri) return { ok: true, skipped: true };
-    const uri = String(state.uri);
-    const serverIds = Array.isArray(state.serverIds) && state.serverIds.length ? state.serverIds : [String(state.serverId || '')].filter(Boolean);
-    for (const sid of serverIds) {
-      // eslint-disable-next-line no-await-in-loop
-      await bridge.saveDocument(sid, { uri, version: state.version, text: typeof text === 'string' ? text : undefined }).catch(() => {});
-    }
-    return { ok: true };
-  };
-
-  const didSaveAll = async () => {
-    if (!bridge.isAvailable()) return { ok: false };
-    const entries = Array.from(docByModelPath.entries());
-    for (const [mp, s] of entries) {
-      // eslint-disable-next-line no-await-in-loop
-      await didSavePath(mp, undefined).catch(() => {});
-    }
-    return { ok: true };
-  };
+  const didSavePath = (relPath, text) => modelSync.didSavePath(relPath, text);
+  const didSaveAll = () => modelSync.didSaveAll();
 
   return {
     attachMonaco,
@@ -1985,7 +953,7 @@ export const lspService = (() => {
     didSaveAll,
     searchWorkspaceSymbols,
     searchDocumentSymbols,
-    lspUriToModelPath,
+    lspUriToModelPath: modelSync.lspUriToModelPath,
     prepareCallHierarchy,
     callHierarchyIncoming,
     callHierarchyOutgoing,

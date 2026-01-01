@@ -318,6 +318,7 @@ function ConfigPanel({
   const navItems = useMemo(
     () => [
       { id: 'app', label: language === 'zh' ? '通用' : 'General', icon: GeneralIcon },
+      { id: 'developer', label: language === 'zh' ? '开发者模式' : 'Developer', icon: ToolsIcon },
       { id: 'appearance', label: language === 'zh' ? '外观' : 'Appearance', icon: PaletteIcon },
       { id: 'editor', label: language === 'zh' ? '编辑器' : 'Editor', icon: SlidersIcon },
       { id: 'lsp', label: language === 'zh' ? 'LSP / 插件' : 'LSP / Plugins', icon: ToolsIcon },
@@ -439,6 +440,56 @@ function ConfigPanel({
                 const next = Number.isFinite(raw) ? Math.max(8, Math.min(64, Math.round(raw))) : 16;
                 setConfig((prev) => ({ ...prev, editorUndoRedoLimit: next }));
               }}
+            />
+          </SettingRow>
+        </SectionCard>
+      </>
+    );
+  };
+
+  const renderDeveloperPage = () => {
+    const pageTitle = language === 'zh' ? '开发者模式' : 'Developer';
+    return (
+      <>
+        <h1 className="settings-page-title">{pageTitle}</h1>
+        <p className="settings-page-intro">
+          {language === 'zh'
+            ? '开发调试相关的启动行为与实验性选项。'
+            : 'Developer-oriented startup behavior and experimental options.'}
+        </p>
+
+        <div className="settings-group-title">{language === 'zh' ? '启动行为' : 'Startup behavior'}</div>
+        <SectionCard>
+          <SettingRow
+            title={language === 'zh' ? '启动时打开 DevTools' : 'Open DevTools on startup'}
+            description={language === 'zh' ? '启动应用后自动打开开发者工具' : 'Automatically open DevTools when the app starts.'}
+          >
+            <Switch
+              checked={config?.features?.openDevToolsOnStart !== false}
+              label={language === 'zh' ? '启动时打开 DevTools' : 'Open DevTools on startup'}
+              onChange={(next) => updateFeature('openDevToolsOnStart', !!next)}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? '启动时加载 RAG 模型' : 'Load RAG on startup'}
+            description={language === 'zh' ? '打开工作区后自动构建/刷新语义索引（可能占用 CPU/磁盘）' : 'Auto build/refresh semantic index after opening a workspace (may use CPU/disk).'}
+          >
+            <Switch
+              checked={config?.features?.loadRagOnStart !== false}
+              label={language === 'zh' ? '启动时加载 RAG' : 'Load RAG on startup'}
+              onChange={(next) => updateFeature('loadRagOnStart', !!next)}
+            />
+          </SettingRow>
+
+          <SettingRow
+            title={language === 'zh' ? '启动时打开 Welcome' : 'Open Welcome on startup'}
+            description={language === 'zh' ? '开启后不自动恢复上次工作区（仍可从最近打开进入）' : 'When enabled, do not auto-restore last workspace (still accessible from Recent).'}
+          >
+            <Switch
+              checked={config?.features?.openWelcomeOnStart === true}
+              label={language === 'zh' ? '启动时打开 Welcome' : 'Open Welcome on startup'}
+              onChange={(next) => updateFeature('openWelcomeOnStart', !!next)}
             />
           </SettingRow>
         </SectionCard>
@@ -1138,6 +1189,12 @@ function ConfigPanel({
         placeholder: 'Ctrl+Shift+P',
       },
       {
+        id: 'app.toggleConsole',
+        title: language === 'zh' ? '打开控制台（DevTools）' : 'Toggle console (DevTools)',
+        description: language === 'zh' ? '打开/关闭开发者工具（默认 Alt+Shift+I）' : 'Open/close DevTools (default Alt+Shift+I).',
+        placeholder: 'Alt+Shift+I',
+      },
+      {
         id: 'editor.openEditors',
         title: language === 'zh' ? '编辑器：打开编辑器导航 (edt)' : 'Editor: Open editor navigation (edt)',
         description: language === 'zh' ? '在当前编辑器组打开“已打开的编辑器”列表（默认 Ctrl+E）' : 'Open “open editors” list for current group (default Ctrl+E).',
@@ -1171,7 +1228,7 @@ function ConfigPanel({
 
         <div className="settings-group-title">{language === 'zh' ? '全局' : 'Global'}</div>
         <SectionCard>
-          {rows.slice(0, 3).map((r) => (
+          {rows.slice(0, 4).map((r) => (
             <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
               <input
                 type="text"
@@ -1187,7 +1244,7 @@ function ConfigPanel({
 
         <div className="settings-group-title">{language === 'zh' ? '编辑器（AI）' : 'Editor (AI)'}</div>
         <SectionCard>
-          {rows.slice(3).map((r) => (
+          {rows.slice(4).map((r) => (
             <SettingRow key={r.id} title={r.title} description={r.description || undefined}>
               <input
                 type="text"
@@ -1215,6 +1272,8 @@ function ConfigPanel({
   const page =
     activeTab === 'app'
       ? renderAppPage()
+      : activeTab === 'developer'
+        ? renderDeveloperPage()
       : activeTab === 'appearance'
         ? renderAppearancePage()
         : activeTab === 'editor'

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import styles from './WelcomeEditor.module.css';
+import { copyToClipboard } from '../../utils/appAlgorithms';
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -17,17 +18,6 @@ function getProjectDisplayName(proj) {
 function getProjectSecondary(proj) {
   if (!proj) return '';
   return proj.fsPath || proj.pathLabel || '';
-}
-
-async function copyToClipboard(text) {
-  const value = String(text || '');
-  if (!value) return false;
-  try {
-    await navigator.clipboard.writeText(value);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function ActionButton({ icon, label, hint, disabled, onClick, autoFocus, dataAction }) {

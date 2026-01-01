@@ -170,6 +170,31 @@ function registerIpcHandlers() {
     return { ok: true, maximized: !!win?.isMaximized?.() };
   });
 
+  ipcMain.handle('window:openDevTools', (event) => {
+    const win = getWindowFromEvent(event);
+    if (!win?.webContents) return { ok: false, error: 'window not found' };
+    try {
+      if (!win.webContents.isDevToolsOpened()) {
+        win.webContents.openDevTools({ mode: 'right' });
+      }
+      return { ok: true, opened: win.webContents.isDevToolsOpened() };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('window:toggleDevTools', (event) => {
+    const win = getWindowFromEvent(event);
+    if (!win?.webContents) return { ok: false, error: 'window not found' };
+    try {
+      if (win.webContents.isDevToolsOpened()) win.webContents.closeDevTools();
+      else win.webContents.openDevTools({ mode: 'right' });
+      return { ok: true, opened: win.webContents.isDevToolsOpened() };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
   ipcMain.handle('window:applySnapLayout', (event, payload) => {
     const win = getWindowFromEvent(event);
     if (!win) return { ok: false, error: 'window not found' };
@@ -251,7 +276,8 @@ function registerIpcHandlers() {
   ipcMain.handle('window:openNewWindow', async (_event, payload) => {
     const openFile = payload && payload.openFile ? String(payload.openFile) : '';
     const openMode = payload && payload.openMode ? String(payload.openMode) : '';
-    const workspaceFsPath = payload && payload.workspaceFsPath ? String(payload.workspaceFsPath) : '';
+    const workspaceFsPath = '';
+    const newWindow = !openFile;
 
     const win = new BrowserWindow({
       width: 1400,
@@ -272,6 +298,7 @@ function registerIpcHandlers() {
         if (openFile) url.searchParams.set('openFile', openFile);
         if (openMode) url.searchParams.set('openMode', openMode);
         if (workspaceFsPath) url.searchParams.set('workspaceFsPath', workspaceFsPath);
+        if (newWindow) url.searchParams.set('newWindow', '1');
         await win.loadURL(url.toString());
       } else {
         const indexPath = path.join(__dirname, '../../frontend/dist/index.html');
@@ -280,6 +307,7 @@ function registerIpcHandlers() {
             ...(openFile ? { openFile } : {}),
             ...(openMode ? { openMode } : {}),
             ...(workspaceFsPath ? { workspaceFsPath } : {}),
+            ...(newWindow ? { newWindow: '1' } : {}),
           },
         });
       }

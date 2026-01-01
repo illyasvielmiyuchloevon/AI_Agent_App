@@ -1,18 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-
-const getIconClass = (fileName) => {
-    if (!fileName) return 'codicon-file';
-    const lower = fileName.toLowerCase();
-    if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'codicon-file-code';
-    if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'codicon-file-code';
-    if (lower.endsWith('.css') || lower.endsWith('.scss')) return 'codicon-paintcan';
-    if (lower.endsWith('.html')) return 'codicon-file-code';
-    if (lower.endsWith('.json')) return 'codicon-json';
-    if (lower.endsWith('.md')) return 'codicon-markdown';
-    if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.svg')) return 'codicon-file-media';
-    return 'codicon-file';
-};
+import { getSearchResultIconClass } from '../utils/appAlgorithms';
 
 function SearchPanel({
     onSearch,
@@ -197,7 +185,7 @@ function SearchPanel({
                 {!isSearching && searchResults && searchResults.map((res, idx) => (
                     <div key={idx} className="search-result-item" style={{ padding: '6px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border-subtle)' }} onClick={() => onOpenFile(res.path)}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                        <i className={`codicon ${getIconClass(res.path)}`} style={{ fontSize: '12px' }} />
+                        <i className={`codicon ${getSearchResultIconClass(res.path)}`} style={{ fontSize: '12px' }} />
                         <span style={{ fontWeight: '500', fontSize: '12px', color: 'var(--text-highlight)' }}>{res.path.split('/').pop()}</span>
                         <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: 'auto' }}>{res.path}</span>
                         </div>

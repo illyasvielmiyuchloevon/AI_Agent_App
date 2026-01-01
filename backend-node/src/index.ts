@@ -22,6 +22,7 @@ app.use(async (req, res, next) => {
   const body = req.body && typeof req.body === "object" ? req.body : null;
   const headerId = req.headers["x-workspace-id"];
   const headerRoot = req.headers["x-workspace-root"] || req.headers["x-project-root"];
+  const ragLoadHeader = req.headers["x-rag-load-on-start"];
   const bodyWorkspaceId = body && typeof (body as any).workspaceId === "string" ? String((body as any).workspaceId) : "";
   const bodyWorkspaceRoot = body && typeof (body as any).workspaceRoot === "string" ? String((body as any).workspaceRoot) : "";
 
@@ -49,7 +50,10 @@ app.use(async (req, res, next) => {
     const llmConfig = body && typeof (body as any).llmConfig === "object"
       ? (body as any).llmConfig
       : (body && typeof (body as any).settings?.llmConfig === "object" ? (body as any).settings.llmConfig : undefined);
-    aiEngine.ensureWorkspaceIndex(rootPath, llmConfig);
+    const ragLoadOnStartValue = Array.isArray(ragLoadHeader) ? String(ragLoadHeader[0] || "") : (typeof ragLoadHeader === "string" ? ragLoadHeader : "");
+    const ragLoadOnStartLower = String(ragLoadOnStartValue || "").trim().toLowerCase();
+    const loadRagOnStart = !(ragLoadOnStartLower === "0" || ragLoadOnStartLower === "false" || ragLoadOnStartLower === "no");
+    aiEngine.ensureWorkspaceIndex(rootPath, llmConfig, { loadRagOnStart });
     workspaceContext.run({ id: handle.descriptor.id, root: rootPath }, () => next());
   } catch (e) {
     res.status(400).json({ detail: (e as any)?.message || "Failed to open workspace" });

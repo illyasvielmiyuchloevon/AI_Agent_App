@@ -65,7 +65,7 @@ function createWindow() {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     // DevTools can be noisy (e.g. Autofill CDP domain mismatch). Only auto-open when explicitly requested.
     if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
-      win.webContents.openDevTools({ mode: 'detach' });
+      win.webContents.openDevTools({ mode: 'right' });
       win.webContents.once('devtools-opened', () => {
         const devtools = win.webContents.devToolsWebContents;
         if (!devtools) return;

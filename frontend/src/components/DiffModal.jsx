@@ -1,65 +1,6 @@
 import React, { Suspense, useMemo, useRef, useEffect, useCallback, useState } from 'react';
-
-const MonacoDiffEditor = React.lazy(() =>
-  import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
-);
-
-const LANG_MAP = {
-  js: 'javascript',
-  jsx: 'javascript',
-  ts: 'typescript',
-  tsx: 'typescript',
-  css: 'css',
-  html: 'html',
-  json: 'json',
-  md: 'markdown',
-  py: 'python',
-};
-
-const inferLanguage = (path = '') => {
-  const ext = path.split('.').pop();
-  return LANG_MAP[ext] || 'plaintext';
-};
-
-const ManagedDiffEditor = (props) => {
-  const modelRef = useRef({ original: null, modified: null });
-  const onMount = useCallback((editor, monaco) => {
-    const model = editor?.getModel?.();
-    modelRef.current = {
-      original: model?.original || null,
-      modified: model?.modified || null,
-    };
-    if (typeof props.onMount === 'function') {
-      props.onMount(editor, monaco);
-    }
-  }, [props]);
-
-  useEffect(() => () => {
-    const { original, modified } = modelRef.current;
-    setTimeout(() => {
-      try {
-        if (original && typeof original.isDisposed === 'function' && !original.isDisposed()) {
-          original.dispose();
-        }
-        if (modified && typeof modified.isDisposed === 'function' && !modified.isDisposed()) {
-          modified.dispose();
-        }
-      } catch {
-        // ignore
-      }
-    }, 0);
-  }, []);
-
-  const { onMount: _ignore, ...rest } = props;
-  return (
-    <MonacoDiffEditor
-      {...rest}
-      onMount={onMount}
-      keepCurrentOriginalModel={true}
-      keepCurrentModifiedModel={true}
-    />
-  );
-};
+import { inferMonacoLanguage } from '../utils/appAlgorithms';
+import ManagedDiffEditor from './ManagedDiffEditor';
 
 class EditorErrorBoundary extends React.Component {
   constructor(props) {
@@ -125,7 +66,7 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace, di
     }
   }, []);
 
-  const language = useMemo(() => inferLanguage(path || ''), [path]);
+  const language = useMemo(() => inferMonacoLanguage(path || ''), [path]);
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
     return theme === 'dark' ? 'vs-dark' : 'vs';
@@ -310,7 +251,7 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace, di
 
 const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDiffInWorkspace, onCloseModal }) => {
     const [expanded, setExpanded] = useState(true);
-    const language = useMemo(() => inferLanguage(file.path || ''), [file.path]);
+    const language = useMemo(() => inferMonacoLanguage(file.path || ''), [file.path]);
     
     // Lazy load logic: only render editor when expanded
     return (

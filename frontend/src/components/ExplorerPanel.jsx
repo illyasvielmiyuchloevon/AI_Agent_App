@@ -1,24 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GitDriver } from '../utils/gitDriver';
-
-const EXT_ICONS = {
-  js: 'codicon-file-code',
-  jsx: 'codicon-file-code',
-  ts: 'codicon-file-code',
-  tsx: 'codicon-file-code',
-  html: 'codicon-code',
-  css: 'codicon-symbol-color',
-  json: 'codicon-json',
-  md: 'codicon-markdown',
-  txt: 'codicon-file-text',
-  py: 'codicon-symbol-keyword',
-};
-
-const getIconClass = (path) => {
-  const ext = path.split('.').pop();
-  return EXT_ICONS[ext] || 'codicon-file';
-};
+import { getFileIconClass } from '../utils/appAlgorithms';
 
 const buildFolderTree = (entries = []) => {
   const root = { path: '', name: '', type: 'dir', children: [] };
@@ -140,7 +123,7 @@ const TreeRow = React.memo(({ index, style, data }) => {
             style={{ color: 'var(--muted)' }}
           />
         ) : (
-          <i className={`codicon ${getIconClass(node.path)}`} aria-hidden style={{ color: gitColor || 'inherit' }} />
+          <i className={`codicon ${getFileIconClass(node.path)}`} aria-hidden style={{ color: gitColor || 'inherit' }} />
         )}
       </span>
       <span title={node.path} className="tree-label" style={{ color: gitColor || 'inherit' }}>

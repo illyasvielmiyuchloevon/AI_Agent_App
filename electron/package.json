@@ -5,7 +5,7 @@
   "description": "Electron shell for AI Agent App",
   "scripts": {
     "dev": "concurrently \"npm --prefix ../frontend run dev\" \"npm run start:electron\"",
-    "start:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:4173 electron .",
+    "start:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:4173 ELECTRON_OPEN_DEVTOOLS=1 electron .",
     "build": "npm --prefix ../frontend run build && electron-builder",
     "test": "node --test",
     "lint": "echo \"No lint configured for electron shell\""

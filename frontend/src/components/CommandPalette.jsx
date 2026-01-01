@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { pluginsService } from '../workbench/services/pluginsService';
 import { outputService } from '../workbench/services/outputService';
+import { getFileIconClass } from '../utils/appAlgorithms';
 
 const CommandPalette = ({
     isOpen,
@@ -177,23 +178,6 @@ const CommandPalette = ({
         symbolState.text,
     ]);
 
-    const getFileIcon = (path) => {
-        const ext = String(path || '').split('.').pop()?.toLowerCase();
-        const map = {
-            js: 'codicon-file-code',
-            jsx: 'codicon-file-code',
-            ts: 'codicon-file-code',
-            tsx: 'codicon-file-code',
-            html: 'codicon-code',
-            css: 'codicon-symbol-color',
-            json: 'codicon-json',
-            md: 'codicon-markdown',
-            txt: 'codicon-file-text',
-            py: 'codicon-symbol-keyword',
-        };
-        return map[ext] || 'codicon-file';
-    };
-
     const filteredItems = useMemo(() => {
         if (symbolState.mode) return symbolItems;
         const items = [];
@@ -224,7 +208,7 @@ const CommandPalette = ({
                         label: p.split('/').pop(),
                         description: p,
                         action: () => onOpenFile?.(p, { groupId, mode: 'persistent' }),
-                        icon: getFileIcon(p),
+                        icon: getFileIconClass(p),
                         closeAction: () => onCloseEditor?.(p, { groupId }),
                         isActive: active && p === active,
                     });

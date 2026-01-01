@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
-const { LspManager } = require('../LspManager');
+const { WorkspaceFileWatchHub } = require('../watch/WorkspaceFileWatchHub');
 const { toFileUri } = require('../util/uri');
 const {
   normalizePositionEncoding,
@@ -44,7 +44,7 @@ test('convertSemanticTokensData converts token start/length between encodings', 
 });
 
 test('watched files matching supports RelativePattern baseUri (multi-root)', () => {
-  const manager = new LspManager();
+  const hub = new WorkspaceFileWatchHub({ notifyDidChangeWatchedFiles: () => {} });
   const root1 = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-root1-'));
   const root2 = fs.mkdtempSync(path.join(os.tmpdir(), 'lsp-root2-'));
   const fileInRoot2 = path.join(root2, 'src', 'a.ts');
@@ -52,6 +52,5 @@ test('watched files matching supports RelativePattern baseUri (multi-root)', () 
   const watchers = [
     { globPattern: { baseUri: toFileUri(root2), pattern: '**/*.ts' }, kind: 7 }, // create/change/delete
   ];
-  assert.equal(manager._matchesWatchedFiles(watchers, [root1, root2], fileInRoot2, 2), true);
+  assert.equal(hub._matchesWatchedFiles(watchers, [root1, root2], fileInRoot2, 2), true);
 });
-

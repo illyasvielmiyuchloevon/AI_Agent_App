@@ -391,15 +391,18 @@ export class AiEngine {
     this.configStore.startWatching();
   }
 
-  ensureWorkspaceIndex(rootPath: string, llmConfig?: Record<string, unknown>) {
+  ensureWorkspaceIndex(rootPath: string, llmConfig?: Record<string, unknown>, opts?: { loadRagOnStart?: boolean }) {
     const root = path.resolve(String(rootPath || ''));
     const baseCfg = this.configStore.get();
     const cfg = mergeRuntimeConfig(baseCfg, llmConfig);
     const embeddingModel = cfg.defaultModels?.embeddings || 'text-embedding-3-small';
     const idx = this.getOrCreateRagIndex(root);
     idx.setRuntimeConfig(cfg);
-    idx.startWatching();
-    idx.kickoffInitialRefresh(cfg, embeddingModel);
+    const loadRagOnStart = opts?.loadRagOnStart !== false;
+    if (loadRagOnStart) {
+      idx.startWatching();
+      idx.kickoffInitialRefresh(cfg, embeddingModel);
+    }
   }
 
   notifyWorkspaceFileChanged(rootPath: string, relPath: string, llmConfig?: Record<string, unknown>) {

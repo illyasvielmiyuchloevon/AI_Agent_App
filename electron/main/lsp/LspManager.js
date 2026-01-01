@@ -1,50 +1,15 @@
-const fs = require('fs');
 const path = require('path');
-const chokidar = require('chokidar');
-const minimatchPkg = require('minimatch');
-const minimatch =
-  (typeof minimatchPkg === 'function' && minimatchPkg) ||
-  minimatchPkg?.minimatch ||
-  minimatchPkg?.default;
 const { CancellationTokenSource } = require('./jsonrpc/Cancellation');
 const { DocumentStore } = require('./DocumentStore');
+const { DocumentSync } = require('./DocumentSync');
 const { LspServerProcess } = require('./LspServerProcess');
-const { toFileUri, fromFileUri } = require('./util/uri');
-const { debounce } = require('./util/debounce');
+const { toFileUri } = require('./util/uri');
+const { serverKey, normalizeWorkspace, inferWorkspaceFromRootFsPath } = require('./util/workspace');
+const { mergeDynamicCapabilities } = require('./capabilities/mergeDynamicCapabilities');
+const { mapClientToServer, mapServerToClient } = require('./uri/uriMapper');
+const { WorkspaceFileWatchHub } = require('./watch/WorkspaceFileWatchHub');
 const { getByPath } = require('./util/objectPath');
-const { offsetAt } = require('./util/position');
-const { convertPosition, convertRange, convertFoldingRange, convertSemanticTokensData, normalizePositionEncoding } = require('./util/positionEncoding');
-
-function serverKey({ workspaceId, rootKey, languageId, serverConfigId }) {
-  const wid = String(workspaceId);
-  const root = String(rootKey || '');
-  const lang = String(languageId);
-  const cfg = String(serverConfigId);
-  return `${wid}::${root}::${lang}::${cfg}`;
-}
-
-function normalizeWorkspace(workspace) {
-  const rootUri = String(workspace?.rootUri || '');
-  const workspaceId = String(workspace?.workspaceId || '');
-  const folders = Array.isArray(workspace?.folders) ? workspace.folders : [];
-  let rootFsPath = String(workspace?.rootFsPath || '').trim();
-  if (!rootFsPath && rootUri && rootUri.startsWith('file://')) {
-    rootFsPath = fromFileUri(rootUri);
-  }
-  return { workspaceId, rootUri, folders, rootFsPath };
-}
-
-function inferWorkspaceFromRootFsPath({ workspaceId, rootFsPath }) {
-  const p = String(rootFsPath || '').trim();
-  if (!p) return { workspaceId: String(workspaceId || ''), rootUri: '', folders: [] };
-  const uri = toFileUri(p);
-  return {
-    workspaceId: String(workspaceId || ''),
-    rootUri: uri,
-    folders: [{ name: path.basename(p), uri }],
-    rootFsPath: p,
-  };
-}
+const { convertPosition, convertRange, convertFoldingRange, convertSemanticTokensData } = require('./util/positionEncoding');
 
 class LspManager {
   constructor({ logger, onDiagnostics, onLog, onProgress, onServerStatus, getConfiguration, applyWorkspaceEdit, onCapabilitiesChanged } = {}) {
@@ -61,67 +26,18 @@ class LspManager {
     this.pendingByToken = new Map(); // token -> CancellationTokenSource
     this.workspaceSettings = new Map(); // workspaceId -> settings object
 
-    // didChangeWatchedFiles support (per workspace watcher, per server globs)
-    this.watchedFilesRegs = new Map(); // serverId -> { watchers, registrationsById }
-    this.workspaceFileWatchers = new Map(); // workspaceId -> { watcher, rootsFsPaths, serverIds:Set, queueByServer:Map }
-    if (typeof minimatch !== 'function') throw new Error('minimatch dependency is not available');
-  }
+    this.watchHub = new WorkspaceFileWatchHub({
+      logger: this.logger,
+      notifyDidChangeWatchedFiles: (serverId, changes) => {
+        const s = this._getServer(serverId);
+        s.proc.sendNotification('workspace/didChangeWatchedFiles', { changes });
+      },
+    });
 
-  _mergeDynamicCapabilities(baseCaps, regsByMethod) {
-    const base = (baseCaps && typeof baseCaps === 'object') ? baseCaps : {};
-    const regs = regsByMethod;
-    if (!regs || !(regs instanceof Map) || regs.size === 0) return base;
-
-    const firstOptions = (method) => {
-      const map = regs.get(method);
-      if (!map || !(map instanceof Map)) return null;
-      for (const r of map.values()) return r?.registerOptions ?? true;
-      return null;
-    };
-
-    const merged = { ...base };
-
-    const setBoolOrOptions = (key, method) => {
-      const opt = firstOptions(method);
-      if (!opt) return;
-      merged[key] = opt === true ? true : opt;
-    };
-
-    setBoolOrOptions('completionProvider', 'textDocument/completion');
-    setBoolOrOptions('hoverProvider', 'textDocument/hover');
-    setBoolOrOptions('definitionProvider', 'textDocument/definition');
-    setBoolOrOptions('referencesProvider', 'textDocument/references');
-    setBoolOrOptions('signatureHelpProvider', 'textDocument/signatureHelp');
-    setBoolOrOptions('documentSymbolProvider', 'textDocument/documentSymbol');
-    setBoolOrOptions('renameProvider', 'textDocument/rename');
-    setBoolOrOptions('documentFormattingProvider', 'textDocument/formatting');
-    setBoolOrOptions('documentRangeFormattingProvider', 'textDocument/rangeFormatting');
-    setBoolOrOptions('codeActionProvider', 'textDocument/codeAction');
-    setBoolOrOptions('foldingRangeProvider', 'textDocument/foldingRange');
-    setBoolOrOptions('implementationProvider', 'textDocument/implementation');
-    setBoolOrOptions('typeDefinitionProvider', 'textDocument/typeDefinition');
-    setBoolOrOptions('callHierarchyProvider', 'textDocument/callHierarchy');
-    setBoolOrOptions('inlayHintProvider', 'textDocument/inlayHint');
-    setBoolOrOptions('semanticTokensProvider', 'textDocument/semanticTokens');
-    setBoolOrOptions('workspaceSymbolProvider', 'workspace/symbol');
-
-    // executeCommandProvider: union commands across regs (best effort)
-    try {
-      const map = regs.get('workspace/executeCommand');
-      if (map && map instanceof Map && map.size) {
-        const commands = new Set(Array.isArray(base?.executeCommandProvider?.commands) ? base.executeCommandProvider.commands : []);
-        for (const r of map.values()) {
-          const opts = r?.registerOptions;
-          const list = Array.isArray(opts?.commands) ? opts.commands : [];
-          for (const c of list) commands.add(String(c));
-        }
-        merged.executeCommandProvider = { ...(base.executeCommandProvider || {}), commands: Array.from(commands) };
-      }
-    } catch {
-      // ignore
-    }
-
-    return merged;
+    this.documentSync = new DocumentSync({
+      logger: this.logger,
+      mapClientUriToServerUri: (state, clientUri) => this._mapClientUriToServerUri(state, clientUri),
+    });
   }
 
   _effectiveServerCapabilities(state) {
@@ -129,7 +45,7 @@ class LspManager {
     if (!s) return {};
     const base = (s.proc?.serverCapabilities && typeof s.proc.serverCapabilities === 'object') ? s.proc.serverCapabilities : {};
     const regsByMethod = s.dynamicRegistrations?.byMethod;
-    return this._mergeDynamicCapabilities(base, regsByMethod);
+    return mergeDynamicCapabilities(base, regsByMethod);
   }
 
   async _applyWorkspaceEditFromServer(state, params) {
@@ -164,165 +80,20 @@ class LspManager {
     }
   }
 
-  _normalizePathForCompare(p) {
-    const s = String(p || '');
-    if (!s) return '';
-    const norm = s.replace(/[\\\/]+$/, '');
-    return process.platform === 'win32' ? norm.toLowerCase() : norm;
-  }
-
-  _workspaceFolderRootsFsPaths(workspace) {
-    const ws = workspace || {};
-    const roots = [];
-    const rootFsPath = String(ws.rootFsPath || '').trim();
-    if (rootFsPath) roots.push(rootFsPath);
-    const folders = Array.isArray(ws.folders) ? ws.folders : [];
-    for (const f of folders) {
-      const uri = typeof f?.uri === 'string' ? f.uri : '';
-      if (!uri) continue;
-      const fsPath = fromFileUri(uri);
-      if (fsPath) roots.push(fsPath);
-    }
-    const seen = new Set();
-    return roots
-      .map((x) => String(x || '').trim())
-      .filter(Boolean)
-      .filter((x) => {
-        const key = this._normalizePathForCompare(x);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }
-
-  _pickContainingRoot(roots, fsPath) {
-    const p = this._normalizePathForCompare(fsPath);
-    if (!p) return '';
-    let best = '';
-    for (const r of Array.isArray(roots) ? roots : []) {
-      const root = this._normalizePathForCompare(r);
-      if (!root) continue;
-      if (!p.startsWith(root)) continue;
-      if (!best || root.length > best.length) best = r;
-    }
-    return best;
-  }
-
   async _mapClientUriToServerUri(state, clientUri) {
-    const s = state;
-    const u = String(clientUri || '');
-    if (!s || !u) return u;
-    if (!u.startsWith('file://')) return u;
-    if (s.uriMap?.clientToServer?.has(u)) return s.uriMap.clientToServer.get(u);
-
-    const fsPath = fromFileUri(u);
-    const baseRoot = String(s.workspace?.rootFsPath || '').trim();
-    if (!fsPath || !baseRoot) return u;
-
-    const normFs = this._normalizePathForCompare(fsPath);
-    const normBase = this._normalizePathForCompare(baseRoot);
-    if (!normFs.startsWith(normBase)) return u;
-
-    const rel = path.relative(baseRoot, fsPath);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return u;
-
-    const roots = this._workspaceFolderRootsFsPaths(s.workspace);
-    let chosenFsPath = '';
-    for (const root of roots) {
-      const candidate = path.join(root, rel);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const st = await fs.promises.stat(candidate);
-        if (st?.isFile?.() || st?.isFIFO?.() || st?.isSymbolicLink?.() || st) {
-          chosenFsPath = candidate;
-          break;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (!chosenFsPath && roots[0]) chosenFsPath = path.join(roots[0], rel);
-    if (!chosenFsPath) return u;
-
-    const serverUri = toFileUri(chosenFsPath) || u;
-    if (!s.uriMap) s.uriMap = { clientToServer: new Map(), serverToClient: new Map() };
-    s.uriMap.clientToServer.set(u, serverUri);
-    s.uriMap.serverToClient.set(serverUri, u);
-    return serverUri;
+    return mapClientToServer(state, clientUri);
   }
 
   _mapServerUriToClientUri(state, serverUri) {
-    const s = state;
-    const u = String(serverUri || '');
-    if (!s || !u) return u;
-    if (!u.startsWith('file://')) return u;
-    if (s.uriMap?.serverToClient?.has(u)) return s.uriMap.serverToClient.get(u);
-
-    const fsPath = fromFileUri(u);
-    const baseRoot = String(s.workspace?.rootFsPath || '').trim();
-    if (!fsPath || !baseRoot) return u;
-
-    const roots = this._workspaceFolderRootsFsPaths(s.workspace);
-    const containing = this._pickContainingRoot(roots, fsPath);
-    if (!containing) return u;
-
-    const rel = path.relative(containing, fsPath);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return u;
-    const clientFsPath = path.join(baseRoot, rel);
-    const clientUri = toFileUri(clientFsPath) || u;
-
-    if (!s.uriMap) s.uriMap = { clientToServer: new Map(), serverToClient: new Map() };
-    s.uriMap.serverToClient.set(u, clientUri);
-    s.uriMap.clientToServer.set(clientUri, u);
-    return clientUri;
-  }
-
-  _applyIncrementalChangeUtf16(text, change) {
-    if (!change || typeof change.text !== 'string') return text;
-    if (!change.range) return String(change.text || '');
-    const start = offsetAt(text, change.range.start);
-    const end = offsetAt(text, change.range.end);
-    return String(text || '').slice(0, start) + change.text + String(text || '').slice(end);
+    return mapServerToClient(state, serverUri);
   }
 
   _serverPositionEncoding(state) {
-    return normalizePositionEncoding(state?.proc?.positionEncoding || 'utf-16');
+    return this.documentSync.serverPositionEncoding(state);
   }
 
   async _getTextForServerUri(state, serverUri) {
-    const u = String(serverUri || '');
-    if (!state || !u) return '';
-    const open = state.store?.get?.(u);
-    if (open && typeof open.text === 'string') return open.text;
-    if (!u.startsWith('file://')) return '';
-    const fsPath = fromFileUri(u);
-    if (!fsPath) return '';
-    try {
-      return await fs.promises.readFile(fsPath, 'utf8');
-    } catch {
-      return '';
-    }
-  }
-
-  _convertContentChanges(textBefore, contentChanges, fromEncoding, toEncoding) {
-    const fromEnc = normalizePositionEncoding(fromEncoding);
-    const toEnc = normalizePositionEncoding(toEncoding);
-    const changes = Array.isArray(contentChanges) ? contentChanges : [];
-    if (fromEnc === toEnc) return changes;
-    let text = String(textBefore || '');
-    const out = [];
-    for (const ch of changes) {
-      if (!ch || typeof ch !== 'object') continue;
-      if (!ch.range) {
-        out.push({ ...ch });
-        text = String(ch.text || '');
-        continue;
-      }
-      const convertedRange = convertRange(text, ch.range, fromEnc, toEnc);
-      out.push({ ...ch, range: convertedRange });
-      text = this._applyIncrementalChangeUtf16(text, ch);
-    }
-    return out;
+    return await this.documentSync.getTextForServerUri(state, serverUri);
   }
 
   _convertTextEdit(text, edit, fromEncoding, toEncoding) {
@@ -505,28 +276,28 @@ class LspManager {
     return { ...p, files: mapped };
   }
 
-  async willCreateFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
+  async _runWorkspaceWillFileOperation(workspaceId, kind, method, params, { timeoutMs = 3000, cancelToken } = {}) {
     const wid = String(workspaceId || '').trim();
     if (!wid) return { ok: false, results: [] };
 
     const results = [];
     for (const [serverId, state] of this.servers.entries()) {
       if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'willCreateFiles')) continue;
+      if (!this._supportsWorkspaceFileOperation(state, kind)) continue;
 
       await state.proc.startAndInitialize();
-      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willCreateFiles', params);
+      const serverParams = await this._mapWorkspaceFileOperationParams(state, kind, params);
 
       const cts = cancelToken ? new CancellationTokenSource() : null;
       if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
       try {
         // eslint-disable-next-line no-await-in-loop
-        const edit = await state.proc.sendRequest('workspace/willCreateFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
+        const edit = await state.proc.sendRequest(method, serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
         let applied = false;
         let failureReason;
         if (edit && this.externalApplyWorkspaceEdit) {
           // eslint-disable-next-line no-await-in-loop
-          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willCreateFiles', edit });
+          const res = await this._applyWorkspaceEditFromServer(state, { label: method, edit });
           applied = !!res?.applied;
           failureReason = res?.failureReason;
         }
@@ -539,132 +310,48 @@ class LspManager {
     }
 
     return { ok: true, results };
+  }
+
+  async _runWorkspaceDidFileOperation(workspaceId, kind, method, params) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return { ok: false };
+
+    for (const [serverId, state] of this.servers.entries()) {
+      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
+      if (!this._supportsWorkspaceFileOperation(state, kind)) continue;
+      try {
+        await state.proc.startAndInitialize();
+        const serverParams = await this._mapWorkspaceFileOperationParams(state, kind, params);
+        state.proc.sendNotification(method, serverParams);
+      } catch (err) {
+        this.logger?.exception?.(`${method} notify failed`, err, { serverId });
+      }
+    }
+    return { ok: true };
+  }
+
+  async willCreateFiles(workspaceId, params, options) {
+    return await this._runWorkspaceWillFileOperation(workspaceId, 'willCreateFiles', 'workspace/willCreateFiles', params, options);
   }
 
   async didCreateFiles(workspaceId, params) {
-    const wid = String(workspaceId || '').trim();
-    if (!wid) return { ok: false };
-
-    for (const [serverId, state] of this.servers.entries()) {
-      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'didCreateFiles')) continue;
-      try {
-        await state.proc.startAndInitialize();
-        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didCreateFiles', params);
-        state.proc.sendNotification('workspace/didCreateFiles', serverParams);
-      } catch (err) {
-        this.logger?.exception?.('workspace/didCreateFiles notify failed', err, { serverId });
-      }
-    }
-    return { ok: true };
+    return await this._runWorkspaceDidFileOperation(workspaceId, 'didCreateFiles', 'workspace/didCreateFiles', params);
   }
 
   async willRenameFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
-    const wid = String(workspaceId || '').trim();
-    if (!wid) return { ok: false, results: [] };
-
-    const results = [];
-    for (const [serverId, state] of this.servers.entries()) {
-      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'willRenameFiles')) continue;
-
-      await state.proc.startAndInitialize();
-      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willRenameFiles', params);
-
-      const cts = cancelToken ? new CancellationTokenSource() : null;
-      if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const edit = await state.proc.sendRequest('workspace/willRenameFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
-        let applied = false;
-        let failureReason;
-        if (edit && this.externalApplyWorkspaceEdit) {
-          // eslint-disable-next-line no-await-in-loop
-          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willRenameFiles', edit });
-          applied = !!res?.applied;
-          failureReason = res?.failureReason;
-        }
-        results.push({ serverId, ok: true, applied, failureReason, hasEdit: !!edit });
-      } catch (err) {
-        results.push({ serverId, ok: false, error: err?.message || String(err) });
-      } finally {
-        if (cancelToken) this.pendingByToken.delete(String(cancelToken));
-      }
-    }
-
-    return { ok: true, results };
+    return await this._runWorkspaceWillFileOperation(workspaceId, 'willRenameFiles', 'workspace/willRenameFiles', params, { timeoutMs, cancelToken });
   }
 
   async didRenameFiles(workspaceId, params) {
-    const wid = String(workspaceId || '').trim();
-    if (!wid) return { ok: false };
-
-    for (const [serverId, state] of this.servers.entries()) {
-      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'didRenameFiles')) continue;
-      try {
-        await state.proc.startAndInitialize();
-        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didRenameFiles', params);
-        state.proc.sendNotification('workspace/didRenameFiles', serverParams);
-      } catch (err) {
-        this.logger?.exception?.('workspace/didRenameFiles notify failed', err, { serverId });
-      }
-    }
-    return { ok: true };
+    return await this._runWorkspaceDidFileOperation(workspaceId, 'didRenameFiles', 'workspace/didRenameFiles', params);
   }
 
   async willDeleteFiles(workspaceId, params, { timeoutMs = 3000, cancelToken } = {}) {
-    const wid = String(workspaceId || '').trim();
-    if (!wid) return { ok: false, results: [] };
-
-    const results = [];
-    for (const [serverId, state] of this.servers.entries()) {
-      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'willDeleteFiles')) continue;
-
-      await state.proc.startAndInitialize();
-      const serverParams = await this._mapWorkspaceFileOperationParams(state, 'willDeleteFiles', params);
-
-      const cts = cancelToken ? new CancellationTokenSource() : null;
-      if (cts && cancelToken) this.trackPendingToken(cancelToken, cts);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const edit = await state.proc.sendRequest('workspace/willDeleteFiles', serverParams, { timeoutMs, cancelToken: cts?.token }).catch(() => null);
-        let applied = false;
-        let failureReason;
-        if (edit && this.externalApplyWorkspaceEdit) {
-          // eslint-disable-next-line no-await-in-loop
-          const res = await this._applyWorkspaceEditFromServer(state, { label: 'workspace/willDeleteFiles', edit });
-          applied = !!res?.applied;
-          failureReason = res?.failureReason;
-        }
-        results.push({ serverId, ok: true, applied, failureReason, hasEdit: !!edit });
-      } catch (err) {
-        results.push({ serverId, ok: false, error: err?.message || String(err) });
-      } finally {
-        if (cancelToken) this.pendingByToken.delete(String(cancelToken));
-      }
-    }
-
-    return { ok: true, results };
+    return await this._runWorkspaceWillFileOperation(workspaceId, 'willDeleteFiles', 'workspace/willDeleteFiles', params, { timeoutMs, cancelToken });
   }
 
   async didDeleteFiles(workspaceId, params) {
-    const wid = String(workspaceId || '').trim();
-    if (!wid) return { ok: false };
-
-    for (const [serverId, state] of this.servers.entries()) {
-      if (String(state?.workspace?.workspaceId || '') !== wid) continue;
-      if (!this._supportsWorkspaceFileOperation(state, 'didDeleteFiles')) continue;
-      try {
-        await state.proc.startAndInitialize();
-        const serverParams = await this._mapWorkspaceFileOperationParams(state, 'didDeleteFiles', params);
-        state.proc.sendNotification('workspace/didDeleteFiles', serverParams);
-      } catch (err) {
-        this.logger?.exception?.('workspace/didDeleteFiles notify failed', err, { serverId });
-      }
-    }
-    return { ok: true };
+    return await this._runWorkspaceDidFileOperation(workspaceId, 'didDeleteFiles', 'workspace/didDeleteFiles', params);
   }
 
   async ensureServer({ workspaceId, languageId, serverConfig, workspace }) {
@@ -788,7 +475,7 @@ class LspManager {
     const serverUri = String(payload?.uri || '');
     const clientUri = this._mapServerUriToClientUri(s, serverUri);
     const text = s.store.get(serverUri)?.text || '';
-    const enc = normalizePositionEncoding(s.proc?.positionEncoding || 'utf-16');
+    const enc = this._serverPositionEncoding(s);
 
     const diags = (Array.isArray(payload?.diagnostics) ? payload.diagnostics : []).map((d) => {
       if (!d || typeof d !== 'object') return null;
@@ -854,16 +541,7 @@ class LspManager {
       try {
         await s.proc.startAndInitialize();
         s.restart.attempts = 0;
-        for (const doc of s.store.list()) {
-          s.proc.sendNotification('textDocument/didOpen', {
-            textDocument: {
-              uri: doc.uri,
-              languageId: doc.languageId,
-              version: doc.version,
-              text: doc.text,
-            },
-          });
-        }
+        this.documentSync.reopenAll(s);
       } catch (err) {
         this.logger?.exception?.('restart failed', err, { serverId });
         this._scheduleRestart(serverId);
@@ -876,15 +554,9 @@ class LspManager {
     const s = this.servers.get(sid);
     if (!s) return;
 
-    // watched files
     try {
-      const w = this.workspaceFileWatchers.get(String(s.workspace.workspaceId || ''));
-      if (w) {
-        w.serverIds.delete(sid);
-        try { w.queueByServer?.delete?.(sid); } catch {}
-      }
+      this.watchHub?.disposeServer?.(sid);
     } catch {}
-    this.watchedFilesRegs.delete(sid);
 
     // generic registrations
     try {
@@ -915,51 +587,22 @@ class LspManager {
 
   async openDocument(serverId, doc) {
     const s = this._getServer(serverId);
-    await s.proc.startAndInitialize();
-    const clientUri = String(doc?.uri || '');
-    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
-    const serverDoc = { ...doc, uri: serverUri };
-    s.store.open(serverDoc);
-    s.proc.sendNotification('textDocument/didOpen', { textDocument: serverDoc });
+    return await this.documentSync.openDocument(s, doc);
   }
 
   async changeDocument(serverId, change) {
     const s = this._getServer(serverId);
-    await s.proc.startAndInitialize();
-    const clientUri = String(change?.uri || '');
-    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
-    const beforeText = s.store.get(serverUri)?.text || '';
-    const res = s.store.applyChange({ ...change, uri: serverUri });
-    if (!res.ok && res.reason === 'not_open' && change?.text) {
-      s.store.open({ uri: serverUri, languageId: change.languageId || s.serverConfig.languageId, version: change.version, text: change.text });
-      s.proc.sendNotification('textDocument/didOpen', { textDocument: s.store.get(serverUri) });
-      return;
-    }
-    const serverEnc = this._serverPositionEncoding(s);
-    const contentChanges = this._convertContentChanges(beforeText, change?.contentChanges || [], 'utf-16', serverEnc);
-    s.proc.sendNotification('textDocument/didChange', {
-      textDocument: { uri: serverUri, version: change.version },
-      contentChanges,
-    });
+    return await this.documentSync.changeDocument(s, change);
   }
 
   async closeDocument(serverId, uri) {
     const s = this._getServer(serverId);
-    await s.proc.startAndInitialize();
-    const clientUri = String(uri || '');
-    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
-    s.store.close(serverUri);
-    s.proc.sendNotification('textDocument/didClose', { textDocument: { uri: String(serverUri) } });
+    return await this.documentSync.closeDocument(s, uri);
   }
 
   async saveDocument(serverId, params) {
     const s = this._getServer(serverId);
-    await s.proc.startAndInitialize();
-    const clientUri = String(params?.uri || params?.textDocument?.uri || '');
-    const serverUri = await this._mapClientUriToServerUri(s, clientUri);
-    const version = Number(params?.version || params?.textDocument?.version || 0) || undefined;
-    const text = typeof params?.text === 'string' ? params.text : undefined;
-    s.proc.sendNotification('textDocument/didSave', { textDocument: { uri: serverUri, version }, text });
+    return await this.documentSync.saveDocument(s, params);
   }
 
   async completion(serverId, params, { timeoutMs = 2000, cancelToken } = {}) {
@@ -1925,6 +1568,7 @@ class LspManager {
     } catch (err) {
       this.logger?.exception?.('shutdownServer failed', err, { serverId: key });
     } finally {
+      try { this._clearDynamicRegistrations(key); } catch {}
       this.servers.delete(key);
     }
   }
@@ -1933,112 +1577,6 @@ class LspManager {
     for (const id of Array.from(this.servers.keys())) {
       await this.shutdownServer(id);
     }
-  }
-
-  _ensureWorkspaceWatcher(workspaceId, rootsFsPaths) {
-    const wid = String(workspaceId || '').trim();
-    const roots = Array.isArray(rootsFsPaths) ? rootsFsPaths.map((x) => String(x || '').trim()).filter(Boolean) : [];
-    if (!wid || roots.length === 0) return null;
-    if (this.workspaceFileWatchers.has(wid)) return this.workspaceFileWatchers.get(wid);
-
-    const ignored = (p) => {
-      const s = String(p || '');
-      if (s.includes(`${path.sep}.git${path.sep}`)) return true;
-      if (s.includes(`${path.sep}node_modules${path.sep}`)) return true;
-      if (s.includes(`${path.sep}.aichat${path.sep}`)) return true;
-      if (s.includes(`${path.sep}dist${path.sep}`)) return true;
-      return false;
-    };
-
-    const watcher = chokidar.watch(roots, {
-      ignoreInitial: true,
-      ignored,
-      persistent: true,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    });
-
-    const entry = { watcher, rootsFsPaths: roots, serverIds: new Set(), queueByServer: new Map() };
-
-    const onFs = (type, filePath) => {
-      const abs = String(filePath || '');
-      if (!abs) return;
-      const uri = toFileUri(abs);
-      if (!uri) return;
-      const eventType = type === 'add' ? 1 : (type === 'change' ? 2 : 3);
-      this._enqueueWatchedFileChange(wid, uri, eventType, abs);
-    };
-
-    watcher.on('add', (p) => onFs('add', p));
-    watcher.on('change', (p) => onFs('change', p));
-    watcher.on('unlink', (p) => onFs('unlink', p));
-    watcher.on('error', (err) => this.logger?.exception?.('file watcher error', err, { workspaceId: wid }));
-
-    this.workspaceFileWatchers.set(wid, entry);
-    return entry;
-  }
-
-  _enqueueWatchedFileChange(workspaceId, uri, type, absPath) {
-    const entry = this.workspaceFileWatchers.get(String(workspaceId));
-    if (!entry) return;
-
-    for (const serverId of Array.from(entry.serverIds)) {
-      const reg = this.watchedFilesRegs.get(serverId);
-      if (!reg || !Array.isArray(reg.watchers) || reg.watchers.length === 0) continue;
-      if (!this._matchesWatchedFiles(reg.watchers, entry.rootsFsPaths, absPath, type)) continue;
-
-      if (!entry.queueByServer.has(serverId)) {
-        const queue = new Map(); // uri -> type
-        const flush = debounce(() => {
-          const changes = Array.from(queue.entries()).map(([u, t]) => ({ uri: u, type: t }));
-          queue.clear();
-          if (!changes.length) return;
-          try {
-            const s = this._getServer(serverId);
-            s.proc.sendNotification('workspace/didChangeWatchedFiles', { changes });
-          } catch (err) {
-            this.logger?.exception?.('didChangeWatchedFiles notify failed', err, { serverId });
-          }
-        }, 200);
-        entry.queueByServer.set(serverId, { queue, flush });
-      }
-
-      const q = entry.queueByServer.get(serverId);
-      q.queue.set(uri, type);
-      q.flush();
-    }
-  }
-
-  _matchesWatchedFiles(watchers, rootsFsPaths, absPath, type) {
-    const abs = String(absPath || '').trim();
-    if (!abs) return false;
-    const roots = Array.isArray(rootsFsPaths) ? rootsFsPaths.map((x) => String(x || '').trim()).filter(Boolean) : [];
-    if (roots.length === 0) return false;
-    const eventMask = type === 1 ? 1 : (type === 2 ? 2 : 4);
-
-    for (const w of watchers) {
-      const gp = w?.globPattern;
-      const globPattern = typeof gp === 'string' ? gp : (typeof gp?.pattern === 'string' ? gp.pattern : '');
-      if (!globPattern) continue;
-      const kind = Number(w?.kind || 0);
-      if (kind && (kind & eventMask) === 0) continue;
-
-      let baseFsPath = '';
-      if (gp && typeof gp === 'object' && typeof gp.baseUri === 'string' && gp.baseUri.startsWith('file://')) {
-        baseFsPath = fromFileUri(gp.baseUri);
-      }
-      if (!baseFsPath) baseFsPath = this._pickContainingRoot(roots, abs);
-      if (!baseFsPath) continue;
-
-      const relNative = path.relative(baseFsPath, abs);
-      if (!relNative || relNative.startsWith('..') || path.isAbsolute(relNative)) continue;
-      const rel = relNative.split(path.sep).join('/');
-      try {
-        if (minimatch(rel, globPattern, { dot: true, nocase: process.platform === 'win32' })) return true;
-      } catch {
-        // ignore invalid patterns
-      }
-    }
-    return false;
   }
 
   _onRegisterCapability({ serverId, id, method, registerOptions }) {
@@ -2069,18 +1607,10 @@ class LspManager {
 
     if (m !== 'workspace/didChangeWatchedFiles') return;
 
-    const watchers = Array.isArray(registerOptions?.watchers) ? registerOptions.watchers : [];
-    const current = this.watchedFilesRegs.get(serverId) || { watchers: [], registrationsById: new Map() };
-    current.registrationsById.set(String(id || ''), { watchers });
-    current.watchers = Array.from(current.registrationsById.values()).flatMap((x) => x.watchers || []);
-    this.watchedFilesRegs.set(serverId, current);
-
     try {
       const s = this._getServer(serverId);
-      const wid = String(s.workspace.workspaceId || '');
-      const roots = this._workspaceFolderRootsFsPaths(s.workspace);
-      const w = this._ensureWorkspaceWatcher(wid, roots);
-      if (w) w.serverIds.add(serverId);
+      const watchers = Array.isArray(registerOptions?.watchers) ? registerOptions.watchers : [];
+      this.watchHub?.register?.(serverId, s.workspace, { registrationId: String(id || ''), watchers });
     } catch {
       // ignore
     }
@@ -2112,25 +1642,8 @@ class LspManager {
 
     if (m !== 'workspace/didChangeWatchedFiles') return;
 
-    const current = this.watchedFilesRegs.get(serverId);
-    if (!current) return;
-    current.registrationsById.delete(String(id || ''));
-    current.watchers = Array.from(current.registrationsById.values()).flatMap((x) => x.watchers || []);
-    if (current.registrationsById.size === 0) this.watchedFilesRegs.delete(serverId);
-
-    // Best-effort detach server from workspace watcher.
     try {
-      const s = this._getServer(serverId);
-      const wid = String(s.workspace.workspaceId || '');
-      const w = this.workspaceFileWatchers.get(wid);
-      if (w) {
-        w.serverIds.delete(serverId);
-        try { w.queueByServer?.delete?.(String(serverId)); } catch {}
-      }
-      if (w && w.serverIds.size === 0) {
-        w.watcher.close().catch?.(() => {});
-        this.workspaceFileWatchers.delete(wid);
-      }
+      this.watchHub?.unregister?.(serverId, String(id || ''));
     } catch {
       // ignore
     }
