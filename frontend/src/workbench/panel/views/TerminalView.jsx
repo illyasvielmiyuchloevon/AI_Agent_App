@@ -8,80 +8,27 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import { readJson, writeJson } from '../../terminal/terminalStorage';
+import {
+  DEFAULT_INTEGRATED_SETTINGS,
+  normalizeIntegratedOverrides,
+  normalizeIntegratedSettings,
+} from '../../terminal/terminalSettings';
+import { useTerminalConnection } from '../../terminal/useTerminalConnection';
+import { useXtermInstances } from '../../terminal/useXtermInstances';
+import TerminalContextMenu from './terminal/TerminalContextMenu';
+import TerminalFindBar from './terminal/TerminalFindBar';
+import TerminalSplitLayout from './terminal/TerminalSplitLayout';
+import TerminalTabs from './terminal/TerminalTabs';
 
 const DEFAULT_PROFILE = 'cmd';
 const USER_SETTINGS_KEY = 'terminal:settings:user';
-
-const DEFAULT_INTEGRATED_SETTINGS = {
-  fontFamily: 'Consolas, ui-monospace, SFMono-Regular, Menlo, Monaco, "Liberation Mono", "Courier New", monospace',
-  fontSize: 13,
-  lineHeight: 1.2,
-  cursorBlink: true,
-  cursorStyle: 'block',
-  scrollback: 4000,
-  convertEol: true,
-};
 
 const computeLabel = (base, existing) => {
   const name = String(base || DEFAULT_PROFILE) || DEFAULT_PROFILE;
   const count = (existing || []).filter((t) => (t.title || '') === name).length;
   return count > 0 ? `${name} (${count + 1})` : name;
-};
-
-const WINDOW_ID_KEY = 'ai-agent:windowId';
-const getWindowId = () => {
-  if (typeof window === 'undefined') return '';
-  try {
-    const existing = sessionStorage.getItem(WINDOW_ID_KEY);
-    if (existing) return existing;
-    const id = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-    sessionStorage.setItem(WINDOW_ID_KEY, id);
-    return id;
-  } catch {
-    return '';
-  }
-};
-
-const getWsUrl = (workspaceRoot = '') => {
-  if (typeof window === 'undefined') return '';
-  const proto = window.location.protocol;
-  const root = String(workspaceRoot || '').trim();
-  const clientId = getWindowId();
-  const qs = (() => {
-    const params = new URLSearchParams();
-    if (root) params.set('workspaceRoot', root);
-    if (clientId) params.set('clientId', clientId);
-    const s = params.toString();
-    return s ? `?${s}` : '';
-  })();
-  if (proto === 'file:' || window.location.origin === 'null') {
-    return `ws://127.0.0.1:8000/terminal/ws${qs}`;
-  }
-  const wsProto = proto === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${window.location.host}/api/terminal/ws${qs}`;
-};
-
-const getPingUrl = () => {
-  if (typeof window === 'undefined') return '';
-  const proto = window.location.protocol;
-  if (proto === 'file:' || window.location.origin === 'null') {
-    return 'http://127.0.0.1:8000/sessions';
-  }
-  return '/api/sessions';
-};
-
-const getTerminalStateUrl = () => {
-  if (typeof window === 'undefined') return '';
-  const proto = window.location.protocol;
-  if (proto === 'file:' || window.location.origin === 'null') {
-    return 'http://127.0.0.1:8000/terminal/state';
-  }
-  return '/api/terminal/state';
 };
 
 const readCssVar = (name, fallback) => {
@@ -94,32 +41,6 @@ const readCssVar = (name, fallback) => {
 };
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
-const clampInt = (value, min, max) => {
-  const n = typeof value === 'string' ? Number.parseInt(value, 10) : (typeof value === 'number' ? value : NaN);
-  if (!Number.isFinite(n)) return min;
-  return clamp(Math.floor(n), min, max);
-};
-const clampNumber = (value, min, max) => {
-  const n = typeof value === 'string' ? Number(value) : (typeof value === 'number' ? value : NaN);
-  if (!Number.isFinite(n)) return min;
-  return clamp(n, min, max);
-};
-
-const readJson = (key, fallback) => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-};
-
-const writeJson = (key, value) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
-};
 
 function TerminalView({
   workspacePath = '',
@@ -129,15 +50,15 @@ function TerminalView({
   autoConnect = true,
   isResizing = false,
 }, ref) {
-  const wsRef = useRef(null);
-  const wsUrlRef = useRef('');
+  const sendRef = useRef(() => false);
+  const createTerminalRef = useRef(async () => null);
+  const persistMetaRef = useRef(() => {});
+  const updateTerminalTitleRef = useRef(() => {});
+  const openFindRef = useRef(() => {});
   const pendingCreateRef = useRef(new Map());
-  const instanceRef = useRef(new Map()); // id -> { term, fit, search }
-  const containerRef = useRef(new Map()); // id -> HTMLElement
   const resizeObsRef = useRef(null);
   const fitRafRef = useRef(0);
   const mainPaneRef = useRef(null);
-  const connectLoopRef = useRef({ running: false, timer: 0, abort: null });
   const findInputRef = useRef(null);
   const splitDragRef = useRef({ active: false, raf: 0, pending: 0 });
   const splitResizingRef = useRef(false);
@@ -149,11 +70,11 @@ function TerminalView({
   const closeActivePaneRef = useRef(() => {});
   const focusPaneDeltaRef = useRef(() => {});
 
-  const [connected, setConnected] = useState(false);
   const [listed, setListed] = useState(false);
   const [terminals, setTerminals] = useState([]);
   const [activeId, setActiveId] = useState('');
   const [scrollLock, setScrollLock] = useState(false);
+  const scrollLockRef = useRef(false);
   const isResizingRef = useRef(false);
   const [themeTick, setThemeTick] = useState(0);
   const [split, setSplit] = useState({ enabled: false, orientation: 'vertical', ids: [], size: 0.5 });
@@ -184,45 +105,12 @@ function TerminalView({
   const metaKey = useMemo(() => `${storageBase}:meta`, [storageBase]);
   const settingsKey = useMemo(() => `${storageBase}:settings`, [storageBase]);
 
-  const normalizeIntegratedOverrides = useCallback((raw) => {
-    const src = raw && typeof raw === 'object' ? raw : {};
-    const next = {};
-    if (typeof src.fontFamily === 'string') next.fontFamily = String(src.fontFamily || '').trim();
-    if (src.fontSize != null) next.fontSize = clampInt(src.fontSize, 9, 24);
-    if (src.lineHeight != null) next.lineHeight = clampNumber(src.lineHeight, 1, 2);
-    if (typeof src.cursorBlink === 'boolean') next.cursorBlink = !!src.cursorBlink;
-    if (typeof src.cursorStyle === 'string') {
-      const v = String(src.cursorStyle || '').toLowerCase();
-      if (v === 'bar' || v === 'underline' || v === 'block') next.cursorStyle = v;
-    }
-    if (src.scrollback != null) next.scrollback = clampInt(src.scrollback, 100, 100000);
-    if (typeof src.convertEol === 'boolean') next.convertEol = !!src.convertEol;
-    if (typeof next.fontFamily === 'string' && !next.fontFamily) delete next.fontFamily;
-    return next;
-  }, []);
-
-  const normalizeIntegratedSettings = useCallback((raw) => {
-    const src = raw && typeof raw === 'object' ? raw : {};
-    const next = { ...DEFAULT_INTEGRATED_SETTINGS };
-    if (typeof src.fontFamily === 'string') next.fontFamily = String(src.fontFamily || '').trim() || next.fontFamily;
-    if (src.fontSize != null) next.fontSize = clampInt(src.fontSize, 9, 24);
-    if (src.lineHeight != null) next.lineHeight = clampNumber(src.lineHeight, 1, 2);
-    if (typeof src.cursorBlink === 'boolean') next.cursorBlink = !!src.cursorBlink;
-    if (typeof src.cursorStyle === 'string') {
-      const v = String(src.cursorStyle || '').toLowerCase();
-      next.cursorStyle = (v === 'bar' || v === 'underline' || v === 'block') ? v : next.cursorStyle;
-    }
-    if (src.scrollback != null) next.scrollback = clampInt(src.scrollback, 100, 100000);
-    if (typeof src.convertEol === 'boolean') next.convertEol = !!src.convertEol;
-    return next;
-  }, []);
-
   const [userIntegratedSettings, setUserIntegratedSettings] = useState(() => normalizeIntegratedOverrides(readJson(USER_SETTINGS_KEY, null)));
   const [workspaceIntegratedSettings, setWorkspaceIntegratedSettings] = useState(() => normalizeIntegratedOverrides(readJson(settingsKey, null)));
 
   useEffect(() => {
     setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(readJson(settingsKey, null)));
-  }, [normalizeIntegratedOverrides, settingsKey]);
+  }, [settingsKey]);
 
   useEffect(() => {
     writeJson(USER_SETTINGS_KEY, userIntegratedSettings);
@@ -236,7 +124,7 @@ function TerminalView({
     const user = userIntegratedSettings && typeof userIntegratedSettings === 'object' ? userIntegratedSettings : {};
     const ws = workspaceIntegratedSettings && typeof workspaceIntegratedSettings === 'object' ? workspaceIntegratedSettings : {};
     return normalizeIntegratedSettings({ ...DEFAULT_INTEGRATED_SETTINGS, ...user, ...ws });
-  }, [normalizeIntegratedSettings, userIntegratedSettings, workspaceIntegratedSettings]);
+  }, [userIntegratedSettings, workspaceIntegratedSettings]);
 
   useEffect(() => {
     const onSettingsChanged = (e) => {
@@ -268,7 +156,7 @@ function TerminalView({
 
     window.addEventListener('workbench:terminalSettingsChanged', onSettingsChanged);
     return () => window.removeEventListener('workbench:terminalSettingsChanged', onSettingsChanged);
-  }, [normalizeIntegratedOverrides, onTerminalUiChange]);
+  }, [onTerminalUiChange]);
 
   const writeClipboard = useCallback(async (text) => {
     const value = String(text || '');
@@ -344,6 +232,10 @@ function TerminalView({
   }, [activeId]);
 
   useEffect(() => {
+    scrollLockRef.current = !!scrollLock;
+  }, [scrollLock]);
+
+  useEffect(() => {
     splitIdsRef.current = split.enabled ? (Array.isArray(split.ids) ? split.ids : []) : [];
   }, [split.enabled, split.ids]);
 
@@ -407,85 +299,6 @@ function TerminalView({
   }, [prefsKey, split.orientation, split.size]);
 
   useEffect(() => {
-    const url = getTerminalStateUrl();
-    if (!url || !workspacePath) return undefined;
-    const ctl = new AbortController();
-    fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-workspace-root': String(workspacePath || ''),
-      },
-      signal: ctl.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!data || typeof data !== 'object') return;
-        const splitState = data.split && typeof data.split === 'object' ? data.split : null;
-        if (splitState) {
-          setSplit((prev) => ({
-            ...prev,
-            enabled: !!splitState.enabled,
-            orientation: splitState.orientation === 'horizontal' ? 'horizontal' : 'vertical',
-            size: typeof splitState.size === 'number' ? clamp(splitState.size, 0.1, 0.9) : prev.size,
-            ids: Array.isArray(splitState.ids) ? splitState.ids.map((x) => String(x || '')).filter(Boolean) : prev.ids,
-          }));
-        }
-        const prof = data.profiles && typeof data.profiles === 'object' ? data.profiles : null;
-        const envText = prof?.envText && typeof prof.envText === 'object' ? prof.envText : null;
-        if (envText) {
-          setProfileEnvText((prev) => ({
-            ...(prev || { cmd: '', powershell: '', bash: '' }),
-            cmd: typeof envText.cmd === 'string' ? envText.cmd : (prev?.cmd || ''),
-            powershell: typeof envText.powershell === 'string' ? envText.powershell : (prev?.powershell || ''),
-            bash: typeof envText.bash === 'string' ? envText.bash : (prev?.bash || ''),
-          }));
-        }
-        const defaultProfile = typeof prof?.defaultProfile === 'string' ? String(prof.defaultProfile || '') : '';
-        if (defaultProfile) onTerminalUiChange?.({ profile: defaultProfile });
-
-        const settings = data.settings && typeof data.settings === 'object' ? data.settings : null;
-        const integrated = settings?.integrated && typeof settings.integrated === 'object' ? settings.integrated : null;
-        if (integrated) setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(integrated));
-      })
-      .catch(() => {});
-    return () => {
-      try { ctl.abort(); } catch {}
-    };
-  }, [workspacePath]);
-
-  useEffect(() => {
-    const url = getTerminalStateUrl();
-    if (!url || !workspacePath) return undefined;
-    const t = window.setTimeout(() => {
-      fetch(url, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-workspace-root': String(workspacePath || ''),
-        },
-        body: JSON.stringify({
-          split: {
-            enabled: !!split.enabled,
-            orientation: split.orientation === 'horizontal' ? 'horizontal' : 'vertical',
-            size: clamp(split.size, 0.1, 0.9),
-            ids: Array.isArray(split.ids) ? split.ids : [],
-          },
-          profiles: {
-            envText: profileEnvText,
-            defaultProfile: String(terminalUi?.profile || DEFAULT_PROFILE),
-          },
-          settings: {
-            integrated: workspaceIntegratedSettings,
-          },
-          updatedAt: Date.now(),
-        }),
-      }).catch(() => {});
-    }, 500);
-    return () => window.clearTimeout(t);
-  }, [profileEnvText, split.enabled, split.ids, split.orientation, split.size, terminalUi?.profile, workspaceIntegratedSettings, workspacePath]);
-
-  useEffect(() => {
     if (typeof window === 'undefined' || typeof MutationObserver === 'undefined') return undefined;
     const el = document.documentElement;
     if (!el) return undefined;
@@ -496,74 +309,91 @@ function TerminalView({
     };
   }, []);
 
-  useEffect(() => {
-    instanceRef.current.forEach((inst) => {
-      // @xterm/xterm does not expose `setOption`; update via the `options` bag.
-      try { inst.term.options.theme = theme; } catch {}
-      try { inst.term.refresh(0, Math.max(0, inst.term.rows - 1)); } catch {}
-    });
-  }, [theme]);
+  const onRemoteState = useCallback((data) => {
+    const splitState = data.split && typeof data.split === 'object' ? data.split : null;
+    if (splitState) {
+      setSplit((prev) => ({
+        ...prev,
+        enabled: !!splitState.enabled,
+        orientation: splitState.orientation === 'horizontal' ? 'horizontal' : 'vertical',
+        size: typeof splitState.size === 'number' ? clamp(splitState.size, 0.1, 0.9) : prev.size,
+        ids: Array.isArray(splitState.ids) ? splitState.ids.map((x) => String(x || '')).filter(Boolean) : prev.ids,
+      }));
+    }
 
-  useEffect(() => {
-    instanceRef.current.forEach((inst) => {
-      try { inst.term.options.fontFamily = integratedSettings.fontFamily; } catch {}
-      try { inst.term.options.fontSize = integratedSettings.fontSize; } catch {}
-      try { inst.term.options.lineHeight = integratedSettings.lineHeight; } catch {}
-      try { inst.term.options.cursorBlink = integratedSettings.cursorBlink; } catch {}
-      try { inst.term.options.cursorStyle = integratedSettings.cursorStyle; } catch {}
-      try { inst.term.options.scrollback = integratedSettings.scrollback; } catch {}
-      try { inst.term.options.convertEol = integratedSettings.convertEol; } catch {}
-      try { inst.term.refresh(0, Math.max(0, inst.term.rows - 1)); } catch {}
-    });
-  }, [
-    integratedSettings.convertEol,
-    integratedSettings.cursorBlink,
-    integratedSettings.cursorStyle,
-    integratedSettings.fontFamily,
-    integratedSettings.fontSize,
-    integratedSettings.lineHeight,
-    integratedSettings.scrollback,
+    const prof = data.profiles && typeof data.profiles === 'object' ? data.profiles : null;
+    const envText = prof?.envText && typeof prof.envText === 'object' ? prof.envText : null;
+    if (envText) {
+      setProfileEnvText((prev) => ({
+        ...(prev || { cmd: '', powershell: '', bash: '' }),
+        cmd: typeof envText.cmd === 'string' ? envText.cmd : (prev?.cmd || ''),
+        powershell: typeof envText.powershell === 'string' ? envText.powershell : (prev?.powershell || ''),
+        bash: typeof envText.bash === 'string' ? envText.bash : (prev?.bash || ''),
+      }));
+    }
+
+    const defaultProfile = typeof prof?.defaultProfile === 'string' ? String(prof.defaultProfile || '') : '';
+    if (defaultProfile) onTerminalUiChange?.({ profile: defaultProfile });
+
+    const settings = data.settings && typeof data.settings === 'object' ? data.settings : null;
+    const integrated = settings?.integrated && typeof settings.integrated === 'object' ? settings.integrated : null;
+    if (integrated) setWorkspaceIntegratedSettings(normalizeIntegratedOverrides(integrated));
+  }, [onTerminalUiChange]);
+
+  const stateSyncPayload = useMemo(() => ({
+    split: {
+      enabled: !!split.enabled,
+      orientation: split.orientation === 'horizontal' ? 'horizontal' : 'vertical',
+      size: clamp(split.size, 0.1, 0.9),
+      ids: Array.isArray(split.ids) ? split.ids : [],
+    },
+    profiles: {
+      envText: profileEnvText,
+      defaultProfile: String(terminalUi?.profile || DEFAULT_PROFILE),
+    },
+    settings: {
+      integrated: workspaceIntegratedSettings,
+    },
+  }), [
+    profileEnvText,
+    split.enabled,
+    split.ids,
+    split.orientation,
+    split.size,
+    terminalUi?.profile,
+    workspaceIntegratedSettings,
   ]);
 
-  const emitState = useCallback((next) => {
-    onStateChange?.(next);
-  }, [onStateChange]);
-
-  useEffect(() => {
-    emitState({ connected, listed, terminals, activeId, scrollLock, split });
-  }, [connected, listed, terminals, activeId, scrollLock, split, emitState]);
-
-  const send = useCallback((msg) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    try {
-      ws.send(JSON.stringify(msg));
-      return true;
-    } catch {
-      return false;
-    }
+  const onFindResults = useCallback((_id, ev) => {
+    setFind((prev) => (prev.open ? { ...prev, resultIndex: ev.resultIndex, resultCount: ev.resultCount } : prev));
   }, []);
 
-  const resetClientState = useCallback(() => {
-    pendingCreateRef.current.clear();
-    activeIdRef.current = '';
-    splitIdsRef.current = [];
-    terminalsRef.current = [];
-
-    setTerminals([]);
-    setActiveId('');
-    setListed(false);
-    setScrollLock(false);
-    setSplit({ enabled: false, orientation: 'vertical', ids: [], size: 0.5 });
-
-    for (const [id, inst] of Array.from(instanceRef.current.entries())) {
-      try { inst?.resultsDispose?.dispose?.(); } catch {}
-      try { inst?.search?.dispose?.(); } catch {}
-      try { inst?.term?.dispose?.(); } catch {}
-      instanceRef.current.delete(id);
-    }
-    containerRef.current.clear();
-  }, []);
+  const {
+    getInstance: getXtermInstance,
+    setContainer: setXtermContainer,
+    ensureXterm: ensureXtermInstance,
+    openToContainerIfReady: openXtermIfReady,
+    disposeXterm: disposeXtermInstance,
+    resetAll: resetAllXterms,
+    fitAndResize: fitAndResizeXterms,
+  } = useXtermInstances({
+    integratedSettings,
+    theme,
+    getActiveId: () => String(activeIdRef.current || ''),
+    send: (msg) => sendRef.current(msg),
+    openExternal,
+    onFindResults,
+    onOpenFind: (id) => openFindRef.current(id),
+    onCreateTerminal: (profile) => createTerminalRef.current(profile),
+    getTerminalProfile: () => String(terminalUi?.profile || DEFAULT_PROFILE),
+    onSplitAddPane: (orientation) => splitAddPaneRef.current?.(orientation),
+    onCloseActivePane: () => closeActivePaneRef.current?.(),
+    onFocusPaneDelta: (delta) => focusPaneDeltaRef.current?.(delta),
+    readClipboard,
+    writeClipboard,
+    onPersistMeta: (id, patch) => persistMetaRef.current(id, patch),
+    onUpdateTerminalTitle: (id, title) => updateTerminalTitleRef.current(id, title),
+  });
 
   const getPersistedMeta = useCallback((id) => {
     const all = readJson(metaKey, {});
@@ -582,36 +412,210 @@ function TerminalView({
     writeJson(metaKey, nextAll);
   }, [metaKey]);
 
+  persistMetaRef.current = persistMeta;
+
+  const updateTerminalTitle = useCallback((id, title) => {
+    const key = String(id || '');
+    const nextTitle = String(title || '').trim();
+    if (!key || !nextTitle) return;
+    setTerminals((prev) => {
+      const items = Array.isArray(prev) ? prev : [];
+      if (!items.some((t) => t.id === key)) return prev;
+      const others = items.filter((t) => t.id !== key);
+      const label = computeLabel(nextTitle, others);
+      return items.map((t) => (t.id === key ? { ...t, title: nextTitle, label } : t));
+    });
+  }, []);
+
+  updateTerminalTitleRef.current = updateTerminalTitle;
+
+  const fitVisible = useCallback(() => {
+    const ids = split.enabled ? (Array.isArray(split.ids) ? split.ids : []) : (activeId ? [activeId] : []);
+    fitAndResizeXterms(ids);
+  }, [activeId, fitAndResizeXterms, split.enabled, split.ids]);
+
+  const resetClientState = useCallback(() => {
+    pendingCreateRef.current.clear();
+    activeIdRef.current = '';
+    splitIdsRef.current = [];
+    terminalsRef.current = [];
+
+    setTerminals([]);
+    setActiveId('');
+    setListed(false);
+    setScrollLock(false);
+    setSplit({ enabled: false, orientation: 'vertical', ids: [], size: 0.5 });
+    resetAllXterms();
+  }, [resetAllXterms]);
+
+  const handleServerMessage = useCallback((msg) => {
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'created') {
+      const meta = {
+        id: String(msg.id || ''),
+        pid: Number(msg.pid || 0),
+        title: String(msg.title || DEFAULT_PROFILE),
+        profile: String(msg.profile || DEFAULT_PROFILE),
+        cwd: String(msg.cwd || ''),
+      };
+      if (!meta.id) return;
+      setListed(true);
+      const persisted = getPersistedMeta(meta.id);
+      if (persisted?.title) meta.title = String(persisted.title);
+      setTerminals((prev) => {
+        if (prev.some((t) => t.id === meta.id)) return prev;
+        const next = { ...meta, label: computeLabel(meta.title, prev) };
+        return [...prev, next];
+      });
+      setActiveId(meta.id);
+      ensureXtermInstance(meta);
+      const resolve = pendingCreateRef.current.get(String(msg.requestId || ''));
+      if (resolve) {
+        pendingCreateRef.current.delete(String(msg.requestId || ''));
+        resolve(meta);
+      }
+      return;
+    }
+
+    if (msg.type === 'list' && Array.isArray(msg.terminals)) {
+      setListed(true);
+      const items = msg.terminals
+        .map((t) => ({
+          id: String(t.id || ''),
+          pid: Number(t.pid || 0),
+          title: String(t.title || DEFAULT_PROFILE),
+          profile: String(t.profile || DEFAULT_PROFILE),
+          cwd: String(t.cwd || ''),
+        }))
+        .filter((t) => t.id);
+      items.forEach((t) => {
+        const persisted = getPersistedMeta(t.id);
+        if (persisted?.title) t.title = String(persisted.title);
+      });
+      setTerminals((prev) => {
+        const order = new Map((Array.isArray(prev) ? prev : []).map((t, idx) => [t.id, idx]));
+        const next = items.map((t, idx) => ({ ...t, label: `${t.title || t.profile || DEFAULT_PROFILE} (${idx + 1})` }));
+        next.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
+        return next;
+      });
+      setActiveId((prev) => prev || items[0]?.id || '');
+      items.forEach(ensureXtermInstance);
+      return;
+    }
+
+    if (msg.type === 'data') {
+      const id = String(msg.id || '');
+      const data = typeof msg.data === 'string' ? msg.data : String(msg.data || '');
+      const inst = getXtermInstance(id);
+      if (!inst?.term) return;
+
+      const preserve = !!scrollLockRef.current && id === String(activeIdRef.current || '');
+      let anchor = 0;
+      if (preserve) {
+        try {
+          const buf = inst.term.buffer.active;
+          anchor = buf.baseY + buf.viewportY;
+        } catch {
+          anchor = 0;
+        }
+      }
+      inst.term.write(data, () => {
+        if (!preserve) return;
+        try {
+          const buf = inst.term.buffer.active;
+          const max = buf.baseY + buf.length - 1;
+          inst.term.scrollToLine(clamp(anchor, 0, max));
+        } catch {}
+      });
+      return;
+    }
+
+    if (msg.type === 'exit') {
+      const id = String(msg.id || '');
+      const inst = getXtermInstance(id);
+      if (inst?.term) {
+        inst.term.write(`\r\n[process exited with code ${Number(msg.exitCode || 0)}]\r\n`);
+      }
+      return;
+    }
+
+    if (msg.type === 'disposed') {
+      const id = String(msg.id || '');
+      setTerminals((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        setActiveId((prevActive) => {
+          if (prevActive !== id) return prevActive;
+          return next[0]?.id || '';
+        });
+        return next;
+      });
+      disposeXtermInstance(id);
+      return;
+    }
+
+    if (msg.type === 'hello') return;
+  }, [disposeXtermInstance, ensureXtermInstance, getPersistedMeta, getXtermInstance]);
+
+  const { connected, send } = useTerminalConnection({
+    workspacePath,
+    autoConnect,
+    onMessage: handleServerMessage,
+    onReset: resetClientState,
+    onOpen: ({ send: sendNow }) => {
+      setListed(false);
+      sendNow({ type: 'list', requestId: 'boot' });
+    },
+    onClose: () => {
+      setListed(false);
+    },
+    stateSync: {
+      enabled: !!workspacePath,
+      payload: stateSyncPayload,
+      onRemoteState,
+    },
+  });
+
+  sendRef.current = send;
+
+  const emitState = useCallback((next) => {
+    onStateChange?.(next);
+  }, [onStateChange]);
+
+  useEffect(() => {
+    emitState({ connected, listed, terminals, activeId, scrollLock, split });
+  }, [connected, listed, terminals, activeId, scrollLock, split, emitState]);
+
   const copySelectionActive = useCallback(() => {
     const id = String(activeId || '');
     if (!id) return;
-    const inst = instanceRef.current.get(id);
+    const inst = getXtermInstance(id);
     if (!inst?.term?.hasSelection?.() || !inst.term.hasSelection()) return;
     try { writeClipboard(inst.term.getSelection()); } catch {}
-  }, [activeId, writeClipboard]);
+  }, [activeId, getXtermInstance, writeClipboard]);
 
   const pasteFromClipboardActive = useCallback(() => {
     const id = String(activeId || '');
     if (!id) return;
-    const inst = instanceRef.current.get(id);
+    const inst = getXtermInstance(id);
     if (!inst?.term) return;
     readClipboard().then((text) => {
       const value = String(text || '');
       if (!value) return;
       try { inst.term.paste(value); } catch {}
     });
-  }, [activeId, readClipboard]);
+  }, [activeId, getXtermInstance, readClipboard]);
 
   const clearActive = useCallback(() => {
     const id = String(activeId || '');
     if (!id) return;
-    const inst = instanceRef.current.get(id);
+    const inst = getXtermInstance(id);
     if (!inst?.term) return;
     const meta = terminals.find((t) => t.id === id);
     const profile = String(meta?.profile || meta?.title || DEFAULT_PROFILE).toLowerCase();
     const cmd = profile.includes('bash') ? 'clear\r' : 'cls\r';
     try { inst.term.paste(cmd); } catch {}
-  }, [activeId, terminals]);
+  }, [activeId, getXtermInstance, terminals]);
 
   const findDecorations = useMemo(() => (isDark ? ({
     matchBackground: '#264f78',
@@ -635,16 +639,18 @@ function TerminalView({
     setFind((prev) => ({ ...prev, open: true }));
   }, [activeId]);
 
+  openFindRef.current = openFind;
+
   const closeFind = useCallback(() => {
     setFind((prev) => ({ ...prev, open: false, resultIndex: 0, resultCount: 0 }));
     try {
-      const inst = instanceRef.current.get(String(activeId || ''));
+      const inst = getXtermInstance(String(activeId || ''));
       inst?.search?.clearDecorations?.();
     } catch {}
-  }, [activeId]);
+  }, [activeId, getXtermInstance]);
 
   const runFind = useCallback((direction = 'next') => {
-    const inst = instanceRef.current.get(String(activeId || ''));
+    const inst = getXtermInstance(String(activeId || ''));
     if (!inst?.search) return false;
     const q = String(find.query || '');
     if (!q) return false;
@@ -661,7 +667,7 @@ function TerminalView({
     } catch {
       return false;
     }
-  }, [activeId, find.caseSensitive, find.query, find.regex, find.wholeWord, findDecorations]);
+  }, [activeId, find.caseSensitive, find.query, find.regex, find.wholeWord, findDecorations, getXtermInstance]);
 
   useEffect(() => {
     if (!find.open) return;
@@ -704,135 +710,6 @@ function TerminalView({
     };
   }, [renameOpen]);
 
-  const ensureXterm = useCallback((meta) => {
-    if (!meta?.id) return;
-    if (instanceRef.current.has(meta.id)) return;
-
-    const term = new Terminal({
-      fontFamily: integratedSettings.fontFamily,
-      fontSize: integratedSettings.fontSize,
-      lineHeight: integratedSettings.lineHeight,
-      cursorBlink: integratedSettings.cursorBlink,
-      cursorStyle: integratedSettings.cursorStyle,
-      convertEol: integratedSettings.convertEol,
-      theme,
-      scrollback: integratedSettings.scrollback,
-      allowProposedApi: true,
-    });
-    const fit = new FitAddon();
-    const search = new SearchAddon();
-    term.loadAddon(fit);
-    term.loadAddon(search);
-    term.loadAddon(new WebLinksAddon((event, uri) => {
-      try { event?.preventDefault?.(); } catch {}
-      openExternal(uri);
-    }));
-
-    const resultsDispose = search.onDidChangeResults((ev) => {
-      try {
-        if (activeIdRef.current !== meta.id) return;
-        setFind((prev) => (prev.open ? { ...prev, resultIndex: ev.resultIndex, resultCount: ev.resultCount } : prev));
-      } catch {}
-    });
-
-    term.onData((data) => {
-      send({ type: 'input', id: meta.id, data });
-    });
-
-    term.attachCustomKeyEventHandler((ev) => {
-      try {
-        const key = String(ev?.key || '').toLowerCase();
-        const ctrlOrCmd = !!(ev?.ctrlKey || ev?.metaKey);
-        if (ctrlOrCmd && ev.shiftKey && !ev.altKey && (ev.code === 'Backquote' || key === '`')) {
-          createTerminal(String(terminalUi?.profile || DEFAULT_PROFILE)).catch(() => {});
-          return false;
-        }
-        if (ctrlOrCmd && !ev.altKey && key === 'f') {
-          openFind(meta.id);
-          return false;
-        }
-        if (ctrlOrCmd && ev.shiftKey && !ev.altKey && key === '5') {
-          splitAddPaneRef.current?.('vertical');
-          return false;
-        }
-        if (ctrlOrCmd && ev.shiftKey && !ev.altKey && key === '6') {
-          splitAddPaneRef.current?.('horizontal');
-          return false;
-        }
-        if (ctrlOrCmd && ev.shiftKey && !ev.altKey && key === 'w') {
-          closeActivePaneRef.current?.();
-          return false;
-        }
-        if (ctrlOrCmd && ev.altKey && (key === 'arrowright' || key === 'arrowdown')) {
-          focusPaneDeltaRef.current?.(1);
-          return false;
-        }
-        if (ctrlOrCmd && ev.altKey && (key === 'arrowleft' || key === 'arrowup')) {
-          focusPaneDeltaRef.current?.(-1);
-          return false;
-        }
-        if (ctrlOrCmd && !ev.altKey && key === 'c' && !ev.shiftKey) {
-          if (term.hasSelection()) {
-            writeClipboard(term.getSelection());
-            return false;
-          }
-          return true;
-        }
-        if (ctrlOrCmd && !ev.altKey && key === 'c' && ev.shiftKey) {
-          if (term.hasSelection()) writeClipboard(term.getSelection());
-          return false;
-        }
-        if (ev?.ctrlKey && key === 'insert') {
-          if (term.hasSelection()) writeClipboard(term.getSelection());
-          return false;
-        }
-        if ((ctrlOrCmd && !ev.altKey && key === 'v') || (ev?.shiftKey && key === 'insert')) {
-          readClipboard().then((text) => {
-            const value = String(text || '');
-            if (!value) return;
-            try { term.paste(value); } catch {}
-          });
-          return false;
-        }
-      } catch {}
-      return true;
-    });
-
-    term.onTitleChange((title) => {
-      const nextTitle = String(title || '').trim();
-      if (!nextTitle) return;
-      persistMeta(meta.id, { title: nextTitle });
-      setTerminals((prev) => prev.map((t) => (t.id === meta.id ? { ...t, title: nextTitle } : t)));
-    });
-
-    instanceRef.current.set(meta.id, { term, fit, search, resultsDispose });
-  }, [integratedSettings, openExternal, openFind, persistMeta, readClipboard, send, theme, writeClipboard]);
-
-  const openToContainerIfReady = useCallback((id) => {
-    const inst = instanceRef.current.get(id);
-    const el = containerRef.current.get(id);
-    if (!inst || !el) return;
-    if (el.dataset.xtermOpened === '1') return;
-    el.dataset.xtermOpened = '1';
-    inst.term.open(el);
-    try {
-      inst.fit.fit();
-    } catch {}
-    send({ type: 'resize', id, cols: inst.term.cols, rows: inst.term.rows });
-  }, [send]);
-
-  const fitActive = useCallback(() => {
-    const ids = split.enabled ? (Array.isArray(split.ids) ? split.ids : []) : (activeId ? [activeId] : []);
-    for (const id of ids) {
-      const inst = instanceRef.current.get(id);
-      if (!inst) continue;
-      try {
-        inst.fit.fit();
-        send({ type: 'resize', id, cols: inst.term.cols, rows: inst.term.rows });
-      } catch {}
-    }
-  }, [activeId, send, split.enabled, split.ids]);
-
   const createTerminal = useCallback(async (profile = DEFAULT_PROFILE) => {
     const reqId = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const ok = send({
@@ -856,6 +733,8 @@ function TerminalView({
       });
     });
   }, [getEnvForProfile, send, workspacePath]);
+
+  createTerminalRef.current = createTerminal;
 
   const disposeTerminal = useCallback((id) => {
     const target = String(id || '');
@@ -1049,12 +928,12 @@ function TerminalView({
       const ratio = clamp(splitDragRef.current.pending || split.size, 0.1, 0.9);
       setSplit((prev) => ({ ...prev, size: ratio }));
       if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
-      fitRafRef.current = requestAnimationFrame(() => fitActive());
+      fitRafRef.current = requestAnimationFrame(() => fitVisible());
     };
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-  }, [fitActive, split.enabled, split.orientation, split.size]);
+  }, [fitVisible, split.enabled, split.orientation, split.size]);
 
   useImperativeHandle(ref, () => ({
     createTerminal,
@@ -1079,7 +958,7 @@ function TerminalView({
     copySelection: copySelectionActive,
     pasteFromClipboard: pasteFromClipboardActive,
     focus: () => {
-      const inst = instanceRef.current.get(activeId);
+      const inst = getXtermInstance(activeId);
       inst?.term?.focus?.();
     },
     getState: () => ({ connected, terminals, activeId, scrollLock, split }),
@@ -1105,257 +984,9 @@ function TerminalView({
     toggleScrollLock,
     toggleSplit,
     toggleSplitOrientation,
+    getXtermInstance,
     send,
   ]);
-
-  useEffect(() => {
-    const url = getWsUrl(workspacePath);
-    if (!url) return;
-
-    if (!autoConnect) return;
-
-    if (connectLoopRef.current.running && wsUrlRef.current && wsUrlRef.current !== url) {
-      try { window.clearTimeout(connectLoopRef.current.timer); } catch {}
-      connectLoopRef.current.timer = 0;
-      try { connectLoopRef.current.abort?.abort?.(); } catch {}
-      connectLoopRef.current.abort = null;
-      connectLoopRef.current.running = false;
-    }
-
-    if (wsRef.current && wsUrlRef.current === url) return;
-
-    if (wsRef.current && wsUrlRef.current && wsUrlRef.current !== url) {
-      const ws = wsRef.current;
-      wsRef.current = null;
-      try { ws?.close?.(); } catch {}
-      wsUrlRef.current = '';
-      resetClientState();
-    }
-
-    if (connectLoopRef.current.running) return;
-    connectLoopRef.current.running = true;
-    wsUrlRef.current = url;
-
-    const pingUrl = getPingUrl();
-    let cancelled = false;
-
-    const clearTimer = () => {
-      if (connectLoopRef.current.timer) window.clearTimeout(connectLoopRef.current.timer);
-      connectLoopRef.current.timer = 0;
-    };
-
-    const abortPing = () => {
-      const ctl = connectLoopRef.current.abort;
-      connectLoopRef.current.abort = null;
-      try { ctl?.abort?.(); } catch {}
-    };
-
-    const schedule = (ms) => {
-      clearTimer();
-      connectLoopRef.current.timer = window.setTimeout(() => tick(), ms);
-    };
-
-    const tryPing = async () => {
-      abortPing();
-      if (!pingUrl) return false;
-      const ctl = new AbortController();
-      connectLoopRef.current.abort = ctl;
-      const t = window.setTimeout(() => ctl.abort(), 500);
-      try {
-        const res = await fetch(pingUrl, { method: 'GET', signal: ctl.signal });
-        return !!res?.ok;
-      } catch {
-        return false;
-      } finally {
-        window.clearTimeout(t);
-        if (connectLoopRef.current.abort === ctl) connectLoopRef.current.abort = null;
-      }
-    };
-
-    const openWs = () => {
-      if (cancelled) return;
-      if (wsRef.current) return;
-
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-      setConnected(false);
-      setListed(false);
-
-      ws.onopen = () => {
-        setConnected(true);
-        send({ type: 'list', requestId: 'boot' });
-      };
-
-      ws.onclose = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-        setConnected(false);
-        setListed(false);
-      };
-
-      ws.onerror = () => {
-        if (wsRef.current === ws) wsRef.current = null;
-        setConnected(false);
-        setListed(false);
-      };
-
-      ws.onmessage = (ev) => {
-        let msg;
-        try {
-          msg = JSON.parse(String(ev.data || ''));
-        } catch {
-          return;
-        }
-        if (!msg || typeof msg !== 'object') return;
-
-        if (msg.type === 'created') {
-          const meta = {
-            id: String(msg.id || ''),
-            pid: Number(msg.pid || 0),
-            title: String(msg.title || DEFAULT_PROFILE),
-            profile: String(msg.profile || DEFAULT_PROFILE),
-            cwd: String(msg.cwd || ''),
-          };
-          if (!meta.id) return;
-          setListed(true);
-          const persisted = getPersistedMeta(meta.id);
-          if (persisted?.title) meta.title = String(persisted.title);
-          setTerminals((prev) => {
-            if (prev.some((t) => t.id === meta.id)) return prev;
-            const next = { ...meta, label: computeLabel(meta.title, prev) };
-            return [...prev, next];
-          });
-          setActiveId(meta.id);
-          ensureXterm(meta);
-          const resolve = pendingCreateRef.current.get(String(msg.requestId || ''));
-          if (resolve) {
-            pendingCreateRef.current.delete(String(msg.requestId || ''));
-            resolve(meta);
-          }
-          return;
-        }
-
-        if (msg.type === 'list' && Array.isArray(msg.terminals)) {
-          setListed(true);
-          const items = msg.terminals
-            .map((t) => ({
-              id: String(t.id || ''),
-              pid: Number(t.pid || 0),
-              title: String(t.title || DEFAULT_PROFILE),
-              profile: String(t.profile || DEFAULT_PROFILE),
-              cwd: String(t.cwd || ''),
-            }))
-            .filter((t) => t.id);
-          items.forEach((t) => {
-            const persisted = getPersistedMeta(t.id);
-            if (persisted?.title) t.title = String(persisted.title);
-          });
-          setTerminals((prev) => {
-            const order = new Map((Array.isArray(prev) ? prev : []).map((t, idx) => [t.id, idx]));
-            const next = items.map((t, idx) => ({ ...t, label: `${t.title || t.profile || DEFAULT_PROFILE} (${idx + 1})` }));
-            next.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
-            return next;
-          });
-          setActiveId((prev) => prev || items[0]?.id || '');
-          items.forEach(ensureXterm);
-          return;
-        }
-
-        if (msg.type === 'data') {
-          const id = String(msg.id || '');
-          const data = typeof msg.data === 'string' ? msg.data : String(msg.data || '');
-          const inst = instanceRef.current.get(id);
-          if (!inst) return;
-          const preserve = scrollLock && id === activeId;
-          let anchor = 0;
-          if (preserve) {
-            try {
-              const buf = inst.term.buffer.active;
-              anchor = buf.baseY + buf.viewportY;
-            } catch {
-              anchor = 0;
-            }
-          }
-          inst.term.write(data, () => {
-            if (!preserve) return;
-            try {
-              const buf = inst.term.buffer.active;
-              const max = buf.baseY + buf.length - 1;
-              inst.term.scrollToLine(clamp(anchor, 0, max));
-            } catch {}
-          });
-          return;
-        }
-
-        if (msg.type === 'exit') {
-          const id = String(msg.id || '');
-          const inst = instanceRef.current.get(id);
-          if (inst) {
-            inst.term.write(`\r\n[process exited with code ${Number(msg.exitCode || 0)}]\r\n`);
-          }
-          return;
-        }
-
-        if (msg.type === 'disposed') {
-          const id = String(msg.id || '');
-          setTerminals((prev) => {
-            const next = prev.filter((t) => t.id !== id);
-            setActiveId((prevActive) => {
-              if (prevActive !== id) return prevActive;
-              return next[0]?.id || '';
-            });
-            return next;
-          });
-          const inst = instanceRef.current.get(id);
-          if (inst) {
-            try { inst.resultsDispose?.dispose?.(); } catch {}
-            try { inst.search?.dispose?.(); } catch {}
-            try { inst.term.dispose(); } catch {}
-            instanceRef.current.delete(id);
-          }
-          containerRef.current.delete(id);
-          return;
-        }
-      };
-    };
-
-    const tick = async () => {
-      if (cancelled) return;
-      if (wsRef.current) return;
-      const ok = await tryPing();
-      if (cancelled) return;
-      if (ok) {
-        connectLoopRef.current.running = false;
-        clearTimer();
-        abortPing();
-        openWs();
-        return;
-      }
-      schedule(1200);
-    };
-
-    setConnected(false);
-    tick();
-
-    return () => {
-      cancelled = true;
-      connectLoopRef.current.running = false;
-      clearTimer();
-      abortPing();
-    };
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnect, createTerminal, ensureXterm, resetClientState, send, workspacePath]);
-
-  useEffect(() => () => {
-    const ws = wsRef.current;
-    wsRef.current = null;
-    wsUrlRef.current = '';
-    try { window.clearTimeout(connectLoopRef.current.timer); } catch {}
-    connectLoopRef.current.timer = 0;
-    try { connectLoopRef.current.abort?.abort?.(); } catch {}
-    connectLoopRef.current.abort = null;
-    try { ws?.close?.(); } catch {}
-  }, []);
 
   useLayoutEffect(() => {
     if (resizeObsRef.current) {
@@ -1368,35 +999,35 @@ function TerminalView({
     const obs = new ResizeObserver(() => {
       if (isResizingRef.current || splitResizingRef.current) return;
       if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
-      fitRafRef.current = requestAnimationFrame(() => fitActive());
+      fitRafRef.current = requestAnimationFrame(() => fitVisible());
     });
     obs.observe(root);
     resizeObsRef.current = obs;
     return () => {
       try { obs.disconnect(); } catch {}
     };
-  }, [fitActive]);
+  }, [fitVisible]);
 
   useEffect(() => {
     isResizingRef.current = !!isResizing;
     if (isResizing) return;
     if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
-    fitRafRef.current = requestAnimationFrame(() => fitActive());
-  }, [fitActive, isResizing]);
+    fitRafRef.current = requestAnimationFrame(() => fitVisible());
+  }, [fitVisible, isResizing]);
 
   useEffect(() => {
     if (isResizingRef.current) return;
     if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
-    fitRafRef.current = requestAnimationFrame(() => fitActive());
-  }, [fitActive, split.enabled, split.ids, split.orientation]);
+    fitRafRef.current = requestAnimationFrame(() => fitVisible());
+  }, [fitVisible, split.enabled, split.ids, split.orientation]);
 
   useEffect(() => {
     if (!activeId) return;
-    openToContainerIfReady(activeId);
-    fitActive();
-    const inst = instanceRef.current.get(activeId);
+    openXtermIfReady(activeId);
+    fitVisible();
+    const inst = getXtermInstance(activeId);
     inst?.term?.focus?.();
-  }, [activeId, fitActive, openToContainerIfReady]);
+  }, [activeId, fitVisible, getXtermInstance, openXtermIfReady]);
 
   const activeMeta = useMemo(() => terminals.find((t) => t.id === activeId) || null, [terminals, activeId]);
   const showSideList = terminals.length > 1;
@@ -1433,159 +1064,48 @@ function TerminalView({
 
   return (
     <div className={`vscode-terminal-shell ${showSideList ? 'multi' : 'single'}`}>
-      <div
-        className={`vscode-terminal-main ${gridClass}`}
-        ref={mainPaneRef}
-        style={(() => {
-          if (isTwoPaneSplit) return { '--terminal-split': splitPct };
-          if (!split.enabled) return undefined;
-          const n = splitIds.length || 1;
-          if (split.orientation === 'horizontal') {
-            return { gridTemplateColumns: 'minmax(0, 1fr)', gridTemplateRows: `repeat(${n}, minmax(0, 1fr))` };
-          }
-          return { gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` };
-        })()}
+      <TerminalSplitLayout
+        mainPaneRef={mainPaneRef}
+        gridClass={gridClass}
+        split={split}
+        splitIds={splitIds}
+        isTwoPaneSplit={isTwoPaneSplit}
+        leftId={leftId}
+        rightId={rightId}
+        splitPct={splitPct}
+        terminals={terminals}
+        activeId={activeId}
+        onActivate={setActiveId}
+        onContextMenu={(e, terminalId) => {
+          e.preventDefault();
+          setActiveId(terminalId);
+          setCtxMenu({ x: e.clientX, y: e.clientY, id: terminalId });
+        }}
+        onSplitterPointerDown={onSplitterPointerDown}
+        setXtermContainer={setXtermContainer}
       >
-        {terminals.map((t) => (
-          <div
-            key={t.id}
-            className={`vscode-terminal-instance ${t.id === activeId ? 'active' : ''}`}
-            style={(() => {
-              if (!split.enabled) return { display: t.id === activeId ? 'block' : 'none' };
-              if (isTwoPaneSplit) {
-                if (t.id === leftId) return split.orientation === 'horizontal' ? { display: 'block', gridRow: 1, gridColumn: 1 } : { display: 'block', gridRow: 1, gridColumn: 1 };
-                if (t.id === rightId) return split.orientation === 'horizontal' ? { display: 'block', gridRow: 3, gridColumn: 1 } : { display: 'block', gridRow: 1, gridColumn: 3 };
-                return { display: 'none' };
-              }
-              const idx = splitIds.indexOf(t.id);
-              if (idx < 0) return { display: 'none' };
-              if (split.orientation === 'horizontal') return { display: 'block', gridRow: idx + 1, gridColumn: 1 };
-              return { display: 'block', gridRow: 1, gridColumn: idx + 1 };
-            })()}
-            onPointerDown={() => setActiveId(t.id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setActiveId(t.id);
-              setCtxMenu({ x: e.clientX, y: e.clientY, id: t.id });
-            }}
-            ref={(el) => {
-              if (!el) return;
-              containerRef.current.set(t.id, el);
-              openToContainerIfReady(t.id);
-            }}
-            aria-label={`terminal-${t.title || t.id}`}
-          />
-        ))}
-
-        {isTwoPaneSplit ? (
-          <div
-            className={`vscode-terminal-splitter ${split.orientation === 'horizontal' ? 'h' : 'v'}`}
-            onPointerDown={onSplitterPointerDown}
-            role="separator"
-            aria-orientation={split.orientation === 'horizontal' ? 'horizontal' : 'vertical'}
-            aria-label="Resize split panes"
-          />
-        ) : null}
-
-        {find.open ? (
-          <div className="vscode-terminal-find" role="dialog" aria-label="Find in Terminal">
-            <span className="codicon codicon-search" aria-hidden />
-            <input
-              ref={findInputRef}
-              className="vscode-terminal-find-input"
-              value={find.query}
-              placeholder="查找"
-              onChange={(e) => setFind((prev) => ({ ...prev, query: e.target.value }))}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  closeFind();
-                  return;
-                }
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  runFind(e.shiftKey ? 'prev' : 'next');
-                }
-              }}
-            />
-            <button
-              type="button"
-              className={`bottom-panel-icon-btn ${find.caseSensitive ? 'active' : ''}`}
-              title="大小写敏感"
-              onClick={() => setFind((prev) => ({ ...prev, caseSensitive: !prev.caseSensitive }))}
-            >
-              <span className="codicon codicon-case-sensitive" aria-hidden />
-            </button>
-            <button
-              type="button"
-              className={`bottom-panel-icon-btn ${find.wholeWord ? 'active' : ''}`}
-              title="全词匹配"
-              onClick={() => setFind((prev) => ({ ...prev, wholeWord: !prev.wholeWord }))}
-            >
-              <span className="codicon codicon-whole-word" aria-hidden />
-            </button>
-            <button
-              type="button"
-              className={`bottom-panel-icon-btn ${find.regex ? 'active' : ''}`}
-              title="正则"
-              onClick={() => setFind((prev) => ({ ...prev, regex: !prev.regex }))}
-            >
-              <span className="codicon codicon-regex" aria-hidden />
-            </button>
-            <div className="vscode-terminal-find-count" aria-label="Match count">
-              {find.resultCount ? `${Math.max(1, find.resultIndex + 1)}/${find.resultCount}` : '0/0'}
-            </div>
-            <button type="button" className="bottom-panel-icon-btn" title="上一个" onClick={() => runFind('prev')}>
-              <span className="codicon codicon-chevron-up" aria-hidden />
-            </button>
-            <button type="button" className="bottom-panel-icon-btn" title="下一个" onClick={() => runFind('next')}>
-              <span className="codicon codicon-chevron-down" aria-hidden />
-            </button>
-            <button type="button" className="bottom-panel-icon-btn" title="关闭" onClick={closeFind}>
-              <span className="codicon codicon-close" aria-hidden />
-            </button>
-          </div>
-        ) : null}
-
-        {ctxMenu ? (
-          <div
-            className="vscode-terminal-context"
-            style={{ left: ctxMenu.x, top: ctxMenu.y }}
-            role="menu"
-            aria-label="Terminal context menu"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { copySelectionActive(); setCtxMenu(null); }}>
-              复制
-            </button>
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { pasteFromClipboardActive(); setCtxMenu(null); }}>
-              粘贴
-            </button>
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { clearActive(); setCtxMenu(null); }}>
-              清空
-            </button>
-            <div className="vscode-terminal-context-sep" aria-hidden />
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { splitAddPane('vertical'); setCtxMenu(null); }}>
-              向右分屏
-            </button>
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { splitAddPane('horizontal'); setCtxMenu(null); }}>
-              向下分屏
-            </button>
-            <button type="button" className="vscode-terminal-context-item" disabled={!split.enabled} onClick={() => { closeActivePane(); setCtxMenu(null); }}>
-              关闭当前分屏
-            </button>
-            <div className="vscode-terminal-context-sep" aria-hidden />
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { renameActive(); setCtxMenu(null); }}>
-              重命名…
-            </button>
-            <button type="button" className="vscode-terminal-context-item" onClick={() => { openFind(activeId); setCtxMenu(null); }}>
-              查找…
-            </button>
-            <button type="button" className="vscode-terminal-context-item danger" onClick={() => { killActive(); setCtxMenu(null); }}>
-              终止终端
-            </button>
-          </div>
-        ) : null}
+        <TerminalFindBar
+          open={find.open}
+          find={find}
+          findInputRef={findInputRef}
+          setFind={setFind}
+          closeFind={closeFind}
+          runFind={runFind}
+        />
+        <TerminalContextMenu
+          ctxMenu={ctxMenu}
+          splitEnabled={split.enabled}
+          onClose={() => setCtxMenu(null)}
+          onCopy={copySelectionActive}
+          onPaste={pasteFromClipboardActive}
+          onClear={clearActive}
+          onSplitVertical={() => splitAddPane('vertical')}
+          onSplitHorizontal={() => splitAddPane('horizontal')}
+          onClosePane={closeActivePane}
+          onRename={renameActive}
+          onFind={() => openFind(activeId)}
+          onKill={killActive}
+        />
 
         {renameOpen ? (
           <div className="vscode-terminal-modal-backdrop" onMouseDown={() => setRenameOpen(false)}>
@@ -1636,68 +1156,19 @@ function TerminalView({
             <div className="panel-empty-subtitle">Profile: {DEFAULT_PROFILE}</div>
           </div>
         ) : null}
-      </div>
+      </TerminalSplitLayout>
 
-      {showSideList ? (
-        <div className="vscode-terminal-side" aria-label="Terminal List">
-          <div className="vscode-terminal-side-header">
-            <div className="vscode-terminal-side-title">TERMINALS</div>
-            <div className="vscode-terminal-side-sub">{activeMeta?.cwd ? activeMeta.cwd : ''}</div>
-          </div>
-          <div className="vscode-terminal-list">
-            {terminals.map((t, idx) => (
-              // codicons: terminal, terminal-bash, terminal-powershell, terminal-cmd
-              <div
-                key={t.id}
-                className={`vscode-terminal-item ${t.id === activeId ? 'active' : ''}`}
-                onDragOver={(e) => {
-                  if (!dragTerminalId || dragTerminalId === t.id) return;
-                  e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (!dragTerminalId || dragTerminalId === t.id) return;
-                  moveTerminalInList(dragTerminalId, t.id);
-                  setDragTerminalId('');
-                }}
-              >
-                <button
-                  type="button"
-                  className="vscode-terminal-item-main"
-                  onClick={() => setActiveId(t.id)}
-                  draggable
-                  onDragStart={() => setDragTerminalId(t.id)}
-                  onDragEnd={() => setDragTerminalId('')}
-                  title={t.cwd || t.title}
-                >
-                  <span
-                    className={`codicon ${
-                      String(t.profile || '').toLowerCase().includes('powershell') ? 'codicon-terminal-powershell'
-                        : (String(t.profile || '').toLowerCase().includes('bash') ? 'codicon-terminal-bash'
-                          : (String(t.profile || '').toLowerCase().includes('cmd') ? 'codicon-terminal-cmd' : 'codicon-terminal'))
-                    }`}
-                    aria-hidden
-                  />
-                  <span className="vscode-terminal-item-title">{t.title || t.label || t.profile || `terminal-${idx + 1}`}</span>
-                </button>
-                <button
-                  type="button"
-                  className="vscode-terminal-item-close"
-                  title="删除终端"
-                  aria-label="删除终端"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    disposeTerminal(t.id);
-                  }}
-                >
-                  <span className="codicon codicon-close" aria-hidden />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <TerminalTabs
+        show={showSideList}
+        terminals={terminals}
+        activeId={activeId}
+        activeCwd={activeMeta?.cwd ? activeMeta.cwd : ''}
+        dragTerminalId={dragTerminalId}
+        setDragTerminalId={setDragTerminalId}
+        onActivate={setActiveId}
+        onMove={moveTerminalInList}
+        onDispose={disposeTerminal}
+      />
     </div>
   );
 }
