@@ -7,6 +7,7 @@ function SessionDrawer({
     onDeleteSession,
     onRenameSession,
     onCreateSession,
+    setActiveSidebarPanel,
     width,
     collapsed,
     isResizing = false
@@ -51,10 +52,10 @@ function SessionDrawer({
                         <div className="explorer-actions">
                             <button
                                 onClick={onCreateSession}
-                                className="ghost-btn tiny"
+                                className="explorer-action-btn"
                                 title="新建会话"
                             >
-                                +
+                                <span className="codicon codicon-add" aria-hidden />
                             </button>
                         </div>
                     </header>
@@ -65,7 +66,10 @@ function SessionDrawer({
                         {sessions.map(session => (
                             <div 
                                 key={session.id}
-                                onClick={() => onSelectSession(session.id)}
+                                onClick={() => {
+                                    onSelectSession(session.id);
+                                    if (setActiveSidebarPanel) setActiveSidebarPanel('chat');
+                                }}
                                 className={`session-item${currentSessionId === session.id ? ' active' : ''}`}
                             >
                                     <div className="session-item-main">
@@ -92,8 +96,7 @@ function SessionDrawer({
                                     ) : (
                                         <div 
                                             className="session-item-title"
-                                            onDoubleClick={(e) => { e.stopPropagation(); startEdit(session); }}
-                                            title="双击重命名"
+                                            title={session.title || 'Untitled'}
                                         >
                                             {session.title || 'Untitled'}
                                         </div>

@@ -40,14 +40,6 @@ const SearchIcon = () => (
   </svg>
 );
 
-const PlusIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="7.5" />
-    <line x1="12" y1="9" x2="12" y2="15" />
-    <line x1="9" y1="12" x2="15" y2="12" />
-  </svg>
-);
-
 const SettingsIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3" />
@@ -60,7 +52,6 @@ function NavSidebar({
     sidebarCollapsed,
     explorerOpen,
     onSelectSidebar,
-    onCreateSession,
     onToggleConfig,
     apiStatus,
     gitBadgeCount = 0,
@@ -114,14 +105,6 @@ function NavSidebar({
                     <span className="activity-badge">{gitBadgeCount}</span>
                 )}
             </button>
-            <button 
-                className="activity-item ghost" 
-                onClick={onCreateSession} 
-                title={t('newSession')} 
-            >
-                <PlusIcon />
-            </button>
-
             <div className="activity-spacer" />
 
             <button 

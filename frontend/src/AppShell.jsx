@@ -311,7 +311,6 @@ function AppShell({
           sidebarCollapsed={sidebarCollapsed}
           explorerOpen={!sidebarCollapsed && activeSidebarPanel === 'explorer'}
           onSelectSidebar={handleSidebarTabChange}
-          onCreateSession={createSession}
           onToggleConfig={() => {
             if (uiDisplayPreferences.settings === 'editor') {
               handleOpenConfigInEditor();
@@ -342,6 +341,7 @@ function AppShell({
               onDeleteSession={deleteSession}
               onRenameSession={renameSession}
               onCreateSession={createSession}
+              setActiveSidebarPanel={setActiveSidebarPanel}
               width={sidebarWidth}
               collapsed={sidebarCollapsed}
               isResizing={activeResizeTarget === 'sidebar'}
