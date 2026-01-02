@@ -421,7 +421,12 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
 
   ipcMain.handle('lsp:foldingRange', async (event, serverId, params, options) => {
     ensureSenderSubscribed(event);
-    return manager.foldingRange(serverId, params, options || {});
+    try {
+      return await manager.foldingRange(serverId, params, options || {});
+    } catch (err) {
+      if (isCancelledError(err)) return [];
+      throw err;
+    }
   });
 
   ipcMain.handle('lsp:typeDefinition', async (event, serverId, params, options) => {
