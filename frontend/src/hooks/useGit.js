@@ -322,27 +322,67 @@ export function useGit({
   }, [backendWorkspaceRoot, isMissingPathError, openDiffModal, openDiffTabInWorkspace, openFile, setDiffModal, shouldHidePath, uiDiffMode, workspaceDriver]);
 
   const openBatchDiffs = useCallback(async (files, type = 'unstaged') => {
-    if (!backendWorkspaceRoot || !workspaceDriver || !files || files.length === 0) return;
+    if (!backendWorkspaceRoot || !files || files.length === 0) return;
+    if (type !== 'staged' && !workspaceDriver) return;
     try {
+      const safeGetFileContent = async (rev, path) => {
+        try {
+          const res = await GitDriver.getFileContent(backendWorkspaceRoot, rev, path);
+          return typeof res === 'string' ? res : (res == null ? '' : String(res));
+        } catch {
+          return '';
+        }
+      };
+
+      const safeReadWorkspaceFile = async (path) => {
+        if (!workspaceDriver) return '';
+        try {
+          const fileData = await workspaceDriver.readFile(path);
+          return fileData?.content || '';
+        } catch (err) {
+          if (isMissingPathError?.(err)) return '';
+          return '';
+        }
+      };
+
       const diffs = await Promise.all(files.map(async (file) => {
-        const path = file.path;
+        const path = typeof file === 'string' ? String(file) : String(file?.path || '');
+        if (!path) return null;
         if (shouldHidePath?.(path)) return null;
+
+        const statusRaw = typeof file === 'object' && file
+          ? (type === 'staged' ? (file.index || file.status) : (file.working_dir || file.status))
+          : '';
+        const status = String(statusRaw || '').trim();
+
         let before = '';
         let after = '';
+
         if (type === 'staged') {
-          before = await GitDriver.getFileContent(backendWorkspaceRoot, 'HEAD', path);
-          after = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
+          if (status === 'A') {
+            before = '';
+            after = await safeGetFileContent(':0', path);
+          } else if (status === 'D') {
+            before = await safeGetFileContent('HEAD', path);
+            after = '';
+          } else {
+            before = await safeGetFileContent('HEAD', path);
+            after = await safeGetFileContent(':0', path);
+          }
         } else {
-          before = await GitDriver.getFileContent(backendWorkspaceRoot, ':0', path);
-          try {
-            const fileData = await workspaceDriver.readFile(path);
-            after = fileData.content || '';
-          } catch (err) {
-            if (isMissingPathError?.(err)) after = '';
-            else throw err;
+          if (status === '?' || status === 'A') {
+            before = '';
+            after = await safeReadWorkspaceFile(path);
+          } else if (status === 'D') {
+            before = await safeGetFileContent(':0', path);
+            after = '';
+          } else {
+            before = await safeGetFileContent(':0', path);
+            after = await safeReadWorkspaceFile(path);
           }
         }
-        return { path, before, after };
+
+        return { path, before, after, status: status || undefined };
       }));
       const validDiffs = diffs.filter(Boolean);
       if (!validDiffs.length) return;

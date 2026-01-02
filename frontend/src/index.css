@@ -5764,7 +5764,7 @@ select.settings-control optgroup {
 }
 
 .sc-action-btn:hover {
-  background: var(--surface-hover);
+  background: var(--surface-hover-2);
 }
 
 .sc-input-area {
@@ -5814,7 +5814,7 @@ select.settings-control optgroup {
 
 .sc-ai-btn:hover {
   opacity: 1;
-  background: var(--surface-hover);
+  background: var(--surface-hover-2);
   transform: scale(1.1);
 }
 
@@ -5990,7 +5990,7 @@ select.settings-control optgroup {
 }
 
 .sc-item-btn:hover {
-  background: var(--surface-hover);
+  background: var(--surface-hover-2);
   color: var(--text);
 }
 
@@ -6222,7 +6222,7 @@ select.settings-control optgroup {
 }
 
 .sc-commit-status-btn:hover {
-  background: var(--surface-hover);
+  background: var(--surface-hover-2);
 }
 
 .sc-commit-buttons {
@@ -6245,16 +6245,25 @@ select.settings-control optgroup {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 10px;
-  height: 28px;
+  padding: 0 12px;
+  height: 34px;
   border-radius: 6px 0 0 6px;
   border: none;
   background: var(--accent);
   color: #fff;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   gap: 6px;
+}
+
+.sc-commit-button-group {
+  display: flex;
+  width: 100%;
+}
+
+.sc-commit-button-group .sc-commit-primary {
+  flex: 1;
 }
 
 .sc-commit-primary.sc-commit-primary-full {
@@ -6277,13 +6286,20 @@ select.settings-control optgroup {
 
 .sc-commit-dropdown {
   width: 24px;
-  height: 28px;
+  height: 34px;
   border-radius: 0 6px 6px 0;
   border: none;
-  border-left: 1px solid rgba(0, 0, 0, 0.1);
+  border-left: 1px solid rgba(255, 255, 255, 0.22);
   background: var(--accent);
   color: #fff;
   cursor: pointer;
+}
+
+.sc-commit-dropdown:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  border-left-color: rgba(0, 0, 0, 0.08);
 }
 
 .sc-commit-primary:not(:disabled):hover,
@@ -6462,16 +6478,18 @@ select.settings-control optgroup {
 }
 
 .sc-status-pill {
-  min-width: 20px;
+  width: 20px;
   height: 18px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  font-size: 11px;
-  font-weight: 600;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-left: 8px;
+  letter-spacing: 0.2px;
 }
 
 .sc-file-item.selected {

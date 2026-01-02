@@ -11,13 +11,15 @@ export default function UnstagedSection({
   FileItem,
   onStage,
   onDiscard,
-  onDiscardAll,
   onOpenFile,
   onDiff,
   selectedFile,
   onSelectFile,
-  onStageAll,
+  canDiscardAll,
   onDiscardAllClick,
+  canOpenChangesDiff,
+  onOpenChangesDiff,
+  onStageAll,
 }) {
   return (
     <div
@@ -44,6 +46,38 @@ export default function UnstagedSection({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (onDiscardAllClick) onDiscardAllClick();
+            }}
+            disabled={!canDiscardAll}
+            title="放弃所有更改"
+            aria-label="放弃所有更改"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 14 4 9l5-5" />
+              <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
+            </svg>
+          </button>
+          <button
+            className="sc-action-btn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onOpenChangesDiff) onOpenChangesDiff();
+            }}
+            disabled={!canOpenChangesDiff}
+            title="打开更改的diff"
+            aria-label="打开更改的diff"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="3" width="6" height="18" rx="1" />
+              <rect x="14" y="3" width="6" height="18" rx="1" />
+            </svg>
+          </button>
+          <button
+            className="sc-action-btn"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
               onStageAll();
             }}
             disabled={changes.length === 0}
@@ -53,22 +87,6 @@ export default function UnstagedSection({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-          <button
-            className="sc-action-btn"
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDiscardAllClick();
-            }}
-            disabled={changes.length === 0 || !onDiscardAll}
-            title="全部丢弃更改"
-            aria-label="全部丢弃更改"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 14 4 9l5-5" />
-              <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
             </svg>
           </button>
         </div>
@@ -98,4 +116,3 @@ export default function UnstagedSection({
     </div>
   );
 }
-

@@ -195,14 +195,14 @@ app.whenReady().then(() => {
       hasHead = false;
     }
 
-    const isAll = files === '.' || files === undefined || files === null;
+    const isAll = files === '.' || files === undefined || files === null || (Array.isArray(files) && files.length === 1 && files[0] === '.');
     const targetList = isAll ? stagedFiles : stagedFiles.filter(p => new Set(Array.isArray(files) ? files : [files]).has(p));
 
     if (targetList.length === 0) {
       return { success: true };
     }
 
-    if (files === '.') {
+    if (isAll) {
       if (hasHead) {
         await git.reset(['HEAD']);
       } else {

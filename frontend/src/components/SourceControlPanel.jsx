@@ -461,6 +461,8 @@ const SourceControlPanel = ({
                     onDiff={onDiff}
                     selectedFile={selectedFile}
                     onSelectFile={setSelectedFile}
+                    canDiscardAll={totalChanges > 0 && !!onDiscardAll}
+                    onDiscardAllClick={handleDiscardAllClick}
                     onUnstageAll={handleUnstageAllClick}
                     onViewAll={() => {
                         if (onOpenBatchDiffs) onOpenBatchDiffs(staged, 'staged');
@@ -482,13 +484,17 @@ const SourceControlPanel = ({
                     FileItem={FileItem}
                     onStage={onStage}
                     onDiscard={onDiscard}
-                    onDiscardAll={onDiscardAll}
                     onOpenFile={onOpenFile}
                     onDiff={onDiff}
                     selectedFile={selectedFile}
                     onSelectFile={setSelectedFile}
-                    onStageAll={handleStageAllClick}
+                    canDiscardAll={totalChanges > 0 && !!onDiscardAll}
                     onDiscardAllClick={handleDiscardAllClick}
+                    canOpenChangesDiff={changes.length > 0 && !!onOpenBatchDiffs}
+                    onOpenChangesDiff={() => {
+                        if (onOpenBatchDiffs) onOpenBatchDiffs(changes, 'unstaged');
+                    }}
+                    onStageAll={handleStageAllClick}
                 />
             );
         }
@@ -620,54 +626,29 @@ const SourceControlPanel = ({
                         </div>
                     </div>
                     <div className="sc-commit-actions-row sc-commit-actions-row-full">
-                        <button
-                            className="sc-commit-primary sc-commit-primary-full"
-                            onClick={handleCommit}
-                            disabled={!canCommit}
-                            type="button"
-                        >
-                            Commit
-                        </button>
-                    </div>
-                    <div className="sc-bulk-actions-bar">
-                        <button
-                            className="sc-action-btn"
-                            type="button"
-                            onClick={handleStageAllClick}
-                            disabled={changes.length === 0}
-                            title="全部暂存"
-                            aria-label="全部暂存"
-                        >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <line x1="12" y1="5" x2="12" y2="19" />
-                                <line x1="5" y1="12" x2="19" y2="12" />
-                            </svg>
-                        </button>
-                        <button
-                            className="sc-action-btn"
-                            type="button"
-                            onClick={handleUnstageAllClick}
-                            disabled={staged.length === 0}
-                            title="取消全部暂存"
-                            aria-label="取消全部暂存"
-                        >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <line x1="5" y1="12" x2="19" y2="12" />
-                            </svg>
-                        </button>
-                        <button
-                            className="sc-action-btn"
-                            type="button"
-                            onClick={handleDiscardAllClick}
-                            disabled={totalChanges === 0 || !onDiscardAll}
-                            title="全部丢弃更改"
-                            aria-label="全部丢弃更改"
-                        >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M9 14 4 9l5-5" />
-                                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" />
-                            </svg>
-                        </button>
+                        <div className="sc-commit-button-group">
+                            <button
+                                className="sc-commit-primary"
+                                onClick={handleCommit}
+                                disabled={!canCommit}
+                                type="button"
+                                title="提交"
+                                aria-label="提交"
+                            >
+                                <span className="codicon codicon-check" aria-hidden />
+                                提交
+                            </button>
+                            <button
+                                className="sc-commit-dropdown"
+                                onClick={handleCommit}
+                                disabled={!canCommit}
+                                type="button"
+                                title="提交"
+                                aria-label="提交"
+                            >
+                                <span className="codicon codicon-chevron-down" aria-hidden />
+                            </button>
+                        </div>
                     </div>
                 </div>
 
