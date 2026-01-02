@@ -61,6 +61,18 @@ const CommandPalette = ({
         }
     }, []);
 
+    const appendIdeBusOutput = useCallback((text) => {
+        const s = text == null ? '' : String(text);
+        if (!s) return;
+        outputService.append('IdeBus', s, { label: 'IDE Bus' });
+    }, []);
+
+    const runIdeBusRequest = useCallback(async (method, params) => {
+        const bus = globalThis?.window?.electronAPI?.ideBus;
+        if (!bus?.request) throw new Error('ideBus not available');
+        return await bus.request(method, params);
+    }, []);
+
     useEffect(() => {
         if (!isOpen) return;
         loadIdeCommands();
@@ -345,6 +357,179 @@ const CommandPalette = ({
                 description: '显示当前组已打开的编辑器',
                 action: () => setQuery('edt '),
                 icon: 'codicon-list-selection',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-stats',
+                label: 'IDE Bus: Show RPC Stats',
+                description: 'Print telemetry/getRpcStats to Output',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/getRpcStats');
+                        const items = Array.isArray(res?.items) ? res.items : [];
+                        const config = res?.config || null;
+                        const top = items.slice(0, 60);
+                        const header = `[idebus] rpc stats (${items.length} methods)`;
+                        appendIdeBusOutput(header);
+                        if (config) appendIdeBusOutput(`[idebus] trace config: ${JSON.stringify(config)}`);
+                        if (top.length) {
+                            appendIdeBusOutput(JSON.stringify(top, null, 2));
+                        } else {
+                            appendIdeBusOutput('[idebus] no stats yet');
+                        }
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] getRpcStats failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-graph',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-reset-stats',
+                label: 'IDE Bus: Reset RPC Stats',
+                description: 'Clear aggregated RPC telemetry',
+                action: async () => {
+                    try {
+                        await runIdeBusRequest('telemetry/resetRpcStats');
+                        appendIdeBusOutput('[idebus] rpc stats reset');
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] resetRpcStats failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-clear-all',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-trace-off',
+                label: 'IDE Bus: Trace Mode Off',
+                description: 'Disable RPC trace output',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', { mode: 'off' });
+                        appendIdeBusOutput(`[idebus] trace mode=off`);
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] set trace mode failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-debug-stop',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-trace-slow',
+                label: 'IDE Bus: Trace Mode Slow',
+                description: 'Log slow/errors based on thresholds',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', { mode: 'slow' });
+                        appendIdeBusOutput(`[idebus] trace mode=slow`);
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] set trace mode failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-dashboard',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-trace-all',
+                label: 'IDE Bus: Trace Mode All (sampled)',
+                description: 'Sample and log all RPCs',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', { mode: 'all' });
+                        appendIdeBusOutput(`[idebus] trace mode=all`);
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] set trace mode failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-record',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-trace-sample-5',
+                label: 'IDE Bus: Set Sample Rate 5%',
+                description: 'telemetry/setRpcTraceConfig sampleRate=0.05',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', { sampleRate: 0.05 });
+                        appendIdeBusOutput(`[idebus] sampleRate=0.05`);
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] set sample rate failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-settings-gear',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-trace-slowms-200',
+                label: 'IDE Bus: Set Slow Default 200ms',
+                description: 'telemetry/setRpcTraceConfig slowDefaultMs=200',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', { slowDefaultMs: 200 });
+                        appendIdeBusOutput(`[idebus] slowDefaultMs=200`);
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] set slow default failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-clock',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-show-trace-config',
+                label: 'IDE Bus: Show Trace Config',
+                description: 'telemetry/getRpcTraceConfig',
+                action: async () => {
+                    try {
+                        const res = await runIdeBusRequest('telemetry/getRpcTraceConfig');
+                        if (res?.config) {
+                            appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config, null, 2)}`);
+                        } else {
+                            appendIdeBusOutput('[idebus] no trace config returned');
+                        }
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] getRpcTraceConfig failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-settings-gear',
+            });
+
+            pushIfMatch({
+                type: 'action',
+                id: 'idebus-set-trace-config-json',
+                label: 'IDE Bus: Set Trace Config (JSON)…',
+                description: 'Edit telemetry/setRpcTraceConfig payload as JSON',
+                action: async () => {
+                    try {
+                        const current = await runIdeBusRequest('telemetry/getRpcTraceConfig').catch(() => null);
+                        const initial = current?.config && typeof current.config === 'object' ? current.config : { mode: 'slow', sampleRate: 0.05, slowDefaultMs: 200 };
+                        const text = globalThis.prompt?.('IDE Bus trace config (JSON)', JSON.stringify(initial, null, 2));
+                        if (text == null) return;
+                        const parsed = JSON.parse(String(text));
+                        if (!parsed || typeof parsed !== 'object') {
+                            appendIdeBusOutput('[idebus] invalid JSON: expected an object');
+                            return;
+                        }
+                        const res = await runIdeBusRequest('telemetry/setRpcTraceConfig', parsed);
+                        appendIdeBusOutput('[idebus] trace config updated');
+                        if (res?.config) appendIdeBusOutput(`[idebus] ${JSON.stringify(res.config, null, 2)}`);
+                    } catch (err) {
+                        appendIdeBusOutput(`[idebus] setRpcTraceConfig failed: ${err?.message || String(err)}`);
+                    }
+                },
+                icon: 'codicon-edit',
             });
 
             if (aiInvoker && typeof aiInvoker.run === 'function') {

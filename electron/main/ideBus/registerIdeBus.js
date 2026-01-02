@@ -37,7 +37,7 @@ class IpcMainTransport {
   }
 }
 
-function registerIdeBus({ ipcMain, workspaceService, recentStore } = {}) {
+function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService } = {}) {
   if (!ipcMain) throw new Error('registerIdeBus: ipcMain is required');
 
   const connections = new Map();
@@ -332,6 +332,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore } = {}) {
         await workspaceService?.start?.({ fsPath });
       } catch {}
       const recent = recentStore?.touch ? recentStore.touch({ id, fsPath, name }) : null;
+      try { await extensionHostService?.restart?.('workspace/open'); } catch {}
       return { ok: true, recent };
     });
 
@@ -348,6 +349,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore } = {}) {
       try {
         recentStore?.setTrustedByFsPath?.(fsPath, trusted);
       } catch {}
+      try { await extensionHostService?.restart?.('workspace/setTrust'); } catch {}
       return { ok: true, fsPath, trusted };
     });
 
@@ -355,6 +357,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore } = {}) {
       try {
         await workspaceService?.stop?.();
       } catch {}
+      try { await extensionHostService?.restart?.('workspace/close'); } catch {}
       return { ok: true };
     });
 
@@ -596,4 +599,3 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore } = {}) {
 }
 
 module.exports = { registerIdeBus };
-

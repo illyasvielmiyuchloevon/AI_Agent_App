@@ -24,6 +24,9 @@ class ExtensionHostService {
     this._restartTimer = null;
     this._restartDelayMs = 750;
     this._restartHistory = [];
+    this._spawnInFlight = null;
+    this._spawnRequested = false;
+    this._spawnReason = '';
   }
 
   get ready() {
@@ -31,9 +34,38 @@ class ExtensionHostService {
   }
 
   start() {
-    if (this._ready) return this._ready;
-    this._ready = this._spawnOnce();
+    if (!this._ready) this._ready = this._ensureSpawn('start');
     return this._ready;
+  }
+
+  restart(reason) {
+    this._restartDelayMs = 750;
+    return this._ensureSpawn(reason || 'restart');
+  }
+
+  _ensureSpawn(reason) {
+    this._spawnRequested = true;
+    this._spawnReason = String(reason || '');
+    if (this._spawnInFlight) return this._spawnInFlight;
+
+    this._spawnInFlight = (async () => {
+      while (this._spawnRequested) {
+        this._spawnRequested = false;
+        const r = this._spawnReason;
+        try {
+          await this._spawnOnce(r);
+        } catch (err) {
+          try { this.logger?.warn?.('extension host spawn failed', { reason: String(r || ''), message: err?.message || String(err) }); } catch {}
+          this._scheduleRestart('spawn-failed');
+          break;
+        }
+      }
+    })()
+      .finally(() => {
+        this._spawnInFlight = null;
+      });
+
+    return this._spawnInFlight;
   }
 
   _getWorkspaceFsPath() {
@@ -74,22 +106,28 @@ class ExtensionHostService {
     this._restartDelayMs = Math.min(30_000, Math.round(this._restartDelayMs * 1.7));
     this._restartTimer = setTimeout(() => {
       this._restartTimer = null;
-      this._spawnOnce().catch(() => {});
+      this._ensureSpawn(`scheduled:${String(reason || '')}`).catch(() => {});
     }, delay);
   }
 
   async _spawnOnce() {
     try {
-      try { this.connection?.dispose?.(); } catch {}
-      try { this.transport?.close?.(); } catch {}
-      if (this.connection) commandsService.unregisterAllFromOwner(this.connection);
+      const oldConn = this.connection;
+      const oldTransport = this.transport;
+      this.connection = null;
+      this.transport = null;
+      if (oldConn) {
+        try { commandsService.unregisterAllFromOwner(oldConn); } catch {}
+        try { oldConn.dispose?.(); } catch {}
+      }
+      try { oldTransport?.close?.(); } catch {}
     } catch {}
 
     const entry = path.join(__dirname, 'extensionHostMain.js');
     const t = new StdioTransport({
       command: process.execPath,
       args: [entry],
-      env: { ELECTRON_RUN_AS_NODE: '1' },
+      env: { ELECTRON_RUN_AS_NODE: '1', IDE_WORKSPACE_ROOT: this._getWorkspaceFsPath() },
       cwd: app.getAppPath(),
       logger: this.logger,
     });
@@ -99,7 +137,12 @@ class ExtensionHostService {
     const conn = new JsonRpcConnection(t, { logger: this.logger, name: 'extHost:main:stdio', traceMeta: true });
     this.connection = conn;
 
+    try {
+      conn.sendNotification('workspace/setRoot', { fsPath: this._getWorkspaceFsPath() });
+    } catch {}
+
     const onClose = () => {
+      if (conn !== this.connection) return;
       try { commandsService.unregisterAllFromOwner(conn); } catch {}
       broadcastToRenderers('commands/changed', { ts: Date.now() });
       this._scheduleRestart('close');
@@ -109,6 +152,7 @@ class ExtensionHostService {
     try {
       if (t.proc) {
         t.proc.once('exit', (code, signal) => {
+          if (conn !== this.connection) return;
           try { this.logger?.warn?.('extension host exited', { code, signal }); } catch {}
           this._scheduleRestart('exit');
         });

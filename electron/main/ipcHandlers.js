@@ -21,7 +21,7 @@ const extensionHostService = new ExtensionHostService({ workspaceService, recent
 function registerIpcHandlers() {
   const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
-  registerIdeBus({ ipcMain, workspaceService, recentStore });
+  registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService });
   extensionHostService.start().catch(() => {});
 
   const getWindowFromEvent = (event) => {
@@ -144,6 +144,7 @@ function registerIpcHandlers() {
       // ignore lifecycle errors (placeholder service)
     }
     const recent = recentStore.touch({ id, fsPath, name });
+    try { await extensionHostService.restart('workspace:open'); } catch {}
     return { ok: true, recent };
   });
 
@@ -153,6 +154,7 @@ function registerIpcHandlers() {
     } catch {
       // ignore lifecycle errors
     }
+    try { await extensionHostService.restart('workspace:close'); } catch {}
     return { ok: true };
   });
 

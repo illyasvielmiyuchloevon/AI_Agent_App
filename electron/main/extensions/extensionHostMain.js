@@ -1,5 +1,7 @@
 const path = require('path');
 const Module = require('module');
+const fs = require('node:fs');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const { MessageReader } = require('../lsp/transport/MessageReader');
 const { MessageWriter } = require('../lsp/transport/MessageWriter');
 const { JsonRpcConnection } = require('../lsp/jsonrpc/JsonRpcConnection');
@@ -78,6 +80,7 @@ const connection = new JsonRpcConnection(transport, { name: 'extHost:stdio', tra
 const commandHandlers = new Map();
 const commandTitles = new Map();
 const extensions = new Map();
+let workspaceRootFsPath = process.env.IDE_WORKSPACE_ROOT ? String(process.env.IDE_WORKSPACE_ROOT) : '';
 
 const normalizeUri = (u) => {
   if (!u) return '';
@@ -98,6 +101,100 @@ const sendOutput = (channelId, text, label) => {
 };
 
 const makeVscodeApi = () => {
+  const getPathValue = (obj, rawPath) => {
+    const p = String(rawPath || '').trim();
+    if (!p) return undefined;
+    const parts = p.split('.').filter(Boolean);
+    let cur = obj;
+    for (const key of parts) {
+      if (!cur || typeof cur !== 'object') return undefined;
+      if (Object.prototype.hasOwnProperty.call(cur, key)) cur = cur[key];
+      else return undefined;
+    }
+    return cur;
+  };
+
+  const getConfigValue = (cfg, rawKey) => {
+    const k = String(rawKey || '').trim();
+    if (!k) return undefined;
+    const nested = getPathValue(cfg, k);
+    if (nested !== undefined) return nested;
+    if (cfg && typeof cfg === 'object' && Object.prototype.hasOwnProperty.call(cfg, k)) return cfg[k];
+    return undefined;
+  };
+
+  const readWorkspaceSettingsSync = () => {
+    const root = String(workspaceRootFsPath || '').trim();
+    if (!root) return {};
+    const settingsPath = path.join(root, '.vscode', 'settings.json');
+    try {
+      const raw = fs.readFileSync(settingsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const toFsPath = (input) => {
+    if (!input) return '';
+    if (typeof input === 'string') {
+      const s = input.trim();
+      if (!s) return '';
+      if (s.startsWith('file:')) {
+        try {
+          return fileURLToPath(s);
+        } catch {
+          return '';
+        }
+      }
+      return s;
+    }
+    if (typeof input.toString === 'function') return toFsPath(String(input.toString()));
+    if (typeof input.fsPath === 'string') return String(input.fsPath);
+    return '';
+  };
+
+  const toUriString = (input) => {
+    const s = String(input || '').trim();
+    if (!s) return '';
+    if (s.startsWith('file:')) return s;
+    try {
+      return pathToFileURL(s).toString();
+    } catch {
+      return '';
+    }
+  };
+
+  const isUnderRoot = (root, candidate) => {
+    const r = String(root || '').trim();
+    const c = String(candidate || '').trim();
+    if (!r || !c) return false;
+    const norm = (p) => {
+      const s = p.replace(/[\\\/]+$/, '');
+      return process.platform === 'win32' ? s.toLowerCase() : s;
+    };
+    const rr = norm(path.resolve(r));
+    const cc = norm(path.resolve(c));
+    if (cc === rr) return true;
+    const sep = process.platform === 'win32' ? '\\' : path.sep;
+    return cc.startsWith(rr + sep);
+  };
+
+  class TextDocument {
+    constructor({ uri, fileName, languageId, version, text } = {}) {
+      this.uri = uri;
+      this.fileName = fileName ? String(fileName) : (uri ? String(uri.toString()) : '');
+      this.isUntitled = false;
+      this.languageId = languageId ? String(languageId) : '';
+      this.version = Number.isFinite(version) ? version : 1;
+      this._text = text == null ? '' : String(text);
+    }
+    getText() {
+      return this._text;
+    }
+  }
+
   class Disposable {
     constructor(fn) {
       this._fn = typeof fn === 'function' ? fn : null;
@@ -216,7 +313,54 @@ const makeVscodeApi = () => {
     },
   };
 
-  return { commands, window, languages, Disposable, Uri, DiagnosticSeverity };
+  const workspace = {
+    getConfiguration(section, scope) {
+      const sec = section == null ? '' : String(section);
+      const baseKey = sec ? sec : '';
+      const cfg = readWorkspaceSettingsSync();
+
+      const api = {
+        get(key, defaultValue) {
+          const full = baseKey && key != null ? `${baseKey}.${String(key)}` : (baseKey || String(key || ''));
+          const v = getConfigValue(cfg, full);
+          return v === undefined ? defaultValue : v;
+        },
+        has(key) {
+          const full = baseKey && key != null ? `${baseKey}.${String(key)}` : (baseKey || String(key || ''));
+          return getConfigValue(cfg, full) !== undefined;
+        },
+        inspect(key) {
+          const full = baseKey && key != null ? `${baseKey}.${String(key)}` : (baseKey || String(key || ''));
+          const v = getConfigValue(cfg, full);
+          return {
+            key: full,
+            defaultValue: undefined,
+            globalValue: undefined,
+            workspaceValue: v,
+            workspaceFolderValue: undefined,
+          };
+        },
+        async update() {
+          throw new Error('workspace.getConfiguration().update is not supported');
+        },
+      };
+      return api;
+    },
+    async openTextDocument(uriOrFileName) {
+      const root = String(workspaceRootFsPath || '').trim();
+      const raw = uriOrFileName == null ? '' : uriOrFileName;
+      const fsPathRaw = toFsPath(raw);
+      const resolved = path.isAbsolute(fsPathRaw) ? fsPathRaw : (root ? path.join(root, fsPathRaw) : fsPathRaw);
+      const fsPath = resolved ? path.resolve(resolved) : '';
+      if (!fsPath) throw new Error('openTextDocument: invalid input');
+      if (root && path.isAbsolute(fsPath) && !isUnderRoot(root, fsPath)) throw new Error('openTextDocument: out of workspace');
+      const text = await fs.promises.readFile(fsPath, 'utf8');
+      const uri = Uri.parse(toUriString(fsPath));
+      return new TextDocument({ uri, fileName: fsPath, languageId: '', version: 1, text });
+    },
+  };
+
+  return { commands, window, workspace, languages, Disposable, Uri, DiagnosticSeverity };
 };
 
 const vscodeApi = makeVscodeApi();
@@ -234,6 +378,11 @@ const installVscodeModule = () => {
 };
 
 installVscodeModule();
+
+connection.onNotification('workspace/setRoot', (params) => {
+  const fsPath = params?.fsPath ? String(params.fsPath) : '';
+  workspaceRootFsPath = fsPath;
+});
 
 connection.onRequest('initialize', async () => {
   return { ok: true };

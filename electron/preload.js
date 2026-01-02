@@ -1,5 +1,108 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const { JsonRpcConnection } = require('./main/lsp/jsonrpc/JsonRpcConnection');
+
+class JsonRpcConnection {
+  constructor(transport, { name } = {}) {
+    this.transport = transport;
+    this.name = name ? String(name) : '';
+    this.nextId = 1;
+    this.pending = new Map();
+    this.notificationHandlers = new Map();
+
+    transport.onMessage((msg) => this._onMessage(msg));
+    transport.onClose?.(() => this._onClose());
+  }
+
+  _onClose() {
+    for (const entry of this.pending.values()) {
+      try { clearTimeout(entry.timer); } catch {}
+      try { entry.reject(new Error('connection closed')); } catch {}
+    }
+    this.pending.clear();
+  }
+
+  _onMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+
+    const id = msg.id;
+    if (id != null) {
+      const entry = this.pending.get(id);
+      if (!entry) return;
+      this.pending.delete(id);
+      try { clearTimeout(entry.timer); } catch {}
+
+      if (msg.error) {
+        const message = msg?.error?.message != null ? String(msg.error.message) : 'request failed';
+        const err = new Error(message);
+        err.code = msg?.error?.code;
+        err.data = msg?.error?.data;
+        entry.reject(err);
+        return;
+      }
+      entry.resolve(msg.result);
+      return;
+    }
+
+    const method = msg.method ? String(msg.method) : '';
+    if (!method) return;
+    const set = this.notificationHandlers.get(method);
+    if (!set || set.size === 0) return;
+    for (const handler of Array.from(set)) {
+      try {
+        handler(msg.params);
+      } catch {}
+    }
+  }
+
+  sendRequest(method, params, options) {
+    const id = this.nextId++;
+    const timeoutMs = options && typeof options === 'object' ? Number(options.timeoutMs) : 0;
+
+    return new Promise((resolve, reject) => {
+      const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            this.pending.delete(id);
+            reject(new Error('request timeout'));
+          }, timeoutMs)
+        : null;
+
+      this.pending.set(id, { resolve, reject, timer });
+      this.transport.send({
+        jsonrpc: '2.0',
+        id,
+        method: String(method || ''),
+        ...(params === undefined ? {} : { params }),
+      });
+    });
+  }
+
+  sendNotification(method, params) {
+    this.transport.send({
+      jsonrpc: '2.0',
+      method: String(method || ''),
+      ...(params === undefined ? {} : { params }),
+    });
+  }
+
+  onNotification(method, handler) {
+    const m = String(method || '');
+    if (!m || typeof handler !== 'function') return () => {};
+    const set = this.notificationHandlers.get(m) || new Set();
+    set.add(handler);
+    this.notificationHandlers.set(m, set);
+    return () => {
+      const cur = this.notificationHandlers.get(m);
+      if (!cur) return;
+      cur.delete(handler);
+      if (cur.size === 0) this.notificationHandlers.delete(m);
+    };
+  }
+
+  dispose() {
+    try { this.transport.close?.(); } catch {}
+    this.notificationHandlers.clear();
+    this._onClose();
+  }
+}
 
 class IpcRendererTransport {
   constructor() {
