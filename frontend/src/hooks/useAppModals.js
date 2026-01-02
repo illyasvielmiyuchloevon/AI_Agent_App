@@ -38,9 +38,17 @@ export function useAppModals({
 
   const handleOpenDiffInWorkspace = useCallback((diff) => {
     const openInEditor = openDiffTabInWorkspaceRef?.current;
-    if (typeof openInEditor !== 'function') return;
-    openInEditor(diff);
-    setDiffModal(null);
+    if (typeof openInEditor !== 'function') {
+      alert('当前无法在编辑器中打开 Diff（工作区未就绪）');
+      return;
+    }
+    try {
+      openInEditor(diff);
+      setDiffModal(null);
+    } catch (e) {
+      console.warn('openDiffTabInWorkspace failed, fallback to modal', e);
+      setDiffModal(diff);
+    }
   }, [openDiffTabInWorkspaceRef]);
 
   const fetchDiffSnapshot = useCallback(async ({ diffId, path } = {}) => {
@@ -79,9 +87,15 @@ export function useAppModals({
       if (uiDiffMode === 'editor') {
         const openInEditor = openDiffTabInWorkspaceRef?.current;
         if (typeof openInEditor === 'function') {
-          openInEditor(diff);
+          try {
+            openInEditor(diff);
+            setDiffModal(null);
+            return;
+          } catch (e) {
+            console.warn('openDiffTabInWorkspace failed, fallback to modal', e);
+          }
         }
-        setDiffModal(null);
+        openDiffModal(diff);
       } else {
         openDiffModal(diff);
       }

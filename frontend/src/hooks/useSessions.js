@@ -3,6 +3,7 @@ import { SESSION_STORAGE_KEY } from '../utils/appPersistence';
 import { buildLineDiffBlocks, safeDiffStat, shouldHidePath } from '../utils/appAlgorithms';
 
 const resolveNextValue = (prev, next) => (typeof next === 'function' ? next(prev) : next);
+const TASK_REVIEW_STORAGE_PREFIX = 'ai_agent_task_review_v1:';
 
 const initialState = {
   sessions: [],
@@ -101,6 +102,41 @@ export function useSessions({
   const streamBufferRef = useRef('');
   const toolRunSyncTimerRef = useRef(null);
   const taskSnapshotRef = useRef(null);
+
+  const taskReviewStorageKey = useCallback((sessionId) => `${TASK_REVIEW_STORAGE_PREFIX}${String(sessionId || '')}`, []);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    let restored = null;
+    try {
+      const raw = localStorage.getItem(taskReviewStorageKey(currentSessionId));
+      if (raw) restored = JSON.parse(raw);
+    } catch {
+      restored = null;
+    }
+    if (restored && typeof restored === 'object' && Array.isArray(restored.files)) {
+      setTaskReview(restored);
+    } else {
+      setTaskReview({ taskId: null, files: [], status: 'idle', expanded: false });
+    }
+  }, [currentSessionId, setTaskReview, taskReviewStorageKey]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const key = taskReviewStorageKey(currentSessionId);
+    const files = Array.isArray(taskReview?.files) ? taskReview.files : [];
+    const shouldClear = !taskReview || (taskReview.status === 'idle' && files.length === 0);
+    if (shouldClear) {
+      try { localStorage.removeItem(key); } catch {}
+      return;
+    }
+    try {
+      const raw = JSON.stringify(taskReview);
+      if (raw.length > 1_500_000) return;
+      localStorage.setItem(key, raw);
+    } catch {
+    }
+  }, [currentSessionId, taskReview, taskReviewStorageKey]);
 
   const emitSessionsUpdated = useCallback((detail = {}) => {
     const payload = { timestamp: Date.now(), ...detail };
@@ -785,6 +821,7 @@ export function useSessions({
         console.log('[CREATE] 收到响应，更新 UI...', newSession.id);
         setSessions((prev) => [newSession, ...prev]);
         setCurrentSessionId(newSession.id);
+        setTaskReview({ taskId: null, files: [], status: 'idle', expanded: false });
         setMessages([]);
         setToolRuns({});
         setSidebarCollapsed?.(false);
@@ -802,6 +839,7 @@ export function useSessions({
   const deleteSession = useCallback(async (id) => {
     if (!confirm('Are you sure you want to delete this chat?')) return;
     dispatch({ type: 'deleteSessionLocal', id });
+    try { localStorage.removeItem(taskReviewStorageKey(id)); } catch {}
 
     try {
       await projectFetch?.(`/api/sessions/${id}`, { method: 'DELETE' });
