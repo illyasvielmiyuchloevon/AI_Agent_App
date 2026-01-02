@@ -54,6 +54,108 @@ export function AppShellContainer({
   layout,
   prefs,
 }) {
+  React.useEffect(() => {
+    const bus = globalThis?.window?.electronAPI?.ideBus;
+    if (!bus?.onNotification || !bus?.request) return undefined;
+
+    const disposeInput = bus.onNotification('window/showInputBoxRequest', (payload) => {
+      const requestId = String(payload?.requestId || '').trim();
+      if (!requestId) return;
+      const title = payload?.title ? String(payload.title) : 'Input';
+      const prompt = payload?.prompt ? String(payload.prompt) : '';
+      const value = payload?.value != null ? String(payload.value) : '';
+      const placeHolder = payload?.placeHolder ? String(payload.placeHolder) : '';
+
+      setInputModal({
+        isOpen: true,
+        title,
+        label: prompt,
+        defaultValue: value,
+        placeholder: placeHolder,
+        confirmText: '确定',
+        icon: 'codicon-edit',
+        onConfirm: async (inputValue) => {
+          try {
+            await bus.request('window/showInputBoxResponse', { requestId, result: { canceled: false, value: String(inputValue || '') } }, { timeoutMs: 5_000 });
+          } catch {
+            // ignore
+          }
+          setInputModal((prev) => ({ ...prev, isOpen: false }));
+        },
+        onClose: async () => {
+          try {
+            await bus.request('window/showInputBoxResponse', { requestId, result: { canceled: true } }, { timeoutMs: 5_000 });
+          } catch {
+            // ignore
+          }
+          setInputModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+    });
+
+    const disposePick = bus.onNotification('window/showQuickPickRequest', (payload) => {
+      const requestId = String(payload?.requestId || '').trim();
+      if (!requestId) return;
+      const title = payload?.title ? String(payload.title) : 'Select';
+      const placeHolder = payload?.placeHolder ? String(payload.placeHolder) : '';
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized = items.map((it) => {
+        if (!it) return null;
+        if (typeof it === 'string') return { label: it, description: '' };
+        if (typeof it === 'object') return { label: String(it.label || ''), description: it.description ? String(it.description) : '' };
+        return null;
+      }).filter((x) => x?.label);
+
+      const preview = normalized.slice(0, 25).map((it, idx) => `${idx + 1}. ${it.label}${it.description ? ` — ${it.description}` : ''}`).join('\n');
+      const label = `请输入编号或标签：\n${preview}${normalized.length > 25 ? `\n… (${normalized.length} items)` : ''}`;
+
+      setInputModal({
+        isOpen: true,
+        title,
+        label,
+        defaultValue: '',
+        placeholder: placeHolder || '1',
+        confirmText: '选择',
+        icon: 'codicon-list-selection',
+        onConfirm: async (inputValue) => {
+          const raw = String(inputValue || '').trim();
+          let picked = '';
+          const n = Number(raw);
+          if (Number.isFinite(n) && n >= 1 && n <= normalized.length) picked = normalized[n - 1]?.label || '';
+          if (!picked) {
+            const lower = raw.toLowerCase();
+            const found = normalized.find((x) => String(x.label).toLowerCase() === lower);
+            picked = found ? String(found.label) : '';
+          }
+
+          try {
+            if (picked) {
+              await bus.request('window/showQuickPickResponse', { requestId, result: { canceled: false, value: picked } }, { timeoutMs: 5_000 });
+            } else {
+              await bus.request('window/showQuickPickResponse', { requestId, result: { canceled: true } }, { timeoutMs: 5_000 });
+            }
+          } catch {
+            // ignore
+          }
+          setInputModal((prev) => ({ ...prev, isOpen: false }));
+        },
+        onClose: async () => {
+          try {
+            await bus.request('window/showQuickPickResponse', { requestId, result: { canceled: true } }, { timeoutMs: 5_000 });
+          } catch {
+            // ignore
+          }
+          setInputModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+    });
+
+    return () => {
+      try { disposeInput?.(); } catch {}
+      try { disposePick?.(); } catch {}
+    };
+  }, [setInputModal]);
+
   const {
     projectMeta,
     recentProjects,

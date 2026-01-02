@@ -3,16 +3,22 @@ const { dialog, app } = require('electron');
 const { StdioTransport } = require('../lsp/transport/StdioTransport');
 const { DapConnection } = require('./DapConnection');
 
-function createDapMainService({ ipcMain, broadcast, workspaceService, recentStore, logger } = {}) {
+function createDapMainService({ ipcMain, broadcast, notify, workspaceService, recentStore, logger } = {}) {
   if (!ipcMain) throw new Error('createDapMainService: ipcMain is required');
 
   let lastActiveWebContents = null;
-  const ensureSenderSubscribed = (event) => {
+  const touchSender = (webContents) => {
     try {
-      const wc = event?.sender;
+      const wc = webContents || null;
       if (!wc) return;
       lastActiveWebContents = wc;
       broadcast?.('__subscribeWebContents', wc);
+    } catch {}
+  };
+
+  const ensureSenderSubscribed = (event) => {
+    try {
+      touchSender(event?.sender);
     } catch {}
   };
 
@@ -76,13 +82,17 @@ function createDapMainService({ ipcMain, broadcast, workspaceService, recentStor
 
   const broadcastEvent = (sessionId, event) => {
     try {
-      broadcast?.('dap:event', { sessionId, event, ts: Date.now() });
+      const payload = { sessionId, event, ts: Date.now() };
+      broadcast?.('dap:event', payload);
+      notify?.('debug/event', payload);
     } catch {}
   };
 
   const broadcastStatus = (sessionId, status, extra) => {
     try {
-      broadcast?.('dap:status', { sessionId, status, ...(extra || {}), ts: Date.now() });
+      const payload = { sessionId, status, ...(extra || {}), ts: Date.now() };
+      broadcast?.('dap:status', payload);
+      notify?.('debug/status', payload);
     } catch {}
   };
 
@@ -208,10 +218,16 @@ function createDapMainService({ ipcMain, broadcast, workspaceService, recentStor
   });
 
   return {
+    touchSender,
     startSession,
     stopSession,
     sendRequest,
-    listSessions: () => Array.from(sessions.keys()),
+    listSessions: () => Array.from(sessions.entries()).map(([id, s]) => ({
+      sessionId: id,
+      startedAt: s.startedAt,
+      name: s.name,
+      adapter: s.adapter,
+    })),
   };
 }
 

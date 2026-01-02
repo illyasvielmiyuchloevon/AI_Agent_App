@@ -4,9 +4,12 @@
   "main": "main.js",
   "description": "Electron shell for AI Agent App",
   "scripts": {
-    "dev": "concurrently \"npm --prefix ../frontend run dev\" \"npm run start:electron\"",
+    "build:preload": "node scripts/build-preload.js",
+    "dev:preload": "node scripts/build-preload.js --watch",
+    "dev": "concurrently \"npm run dev:preload\" \"npm --prefix ../frontend run dev\" \"npm run start:electron:preload\"",
     "start:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:4173 ELECTRON_OPEN_DEVTOOLS=1 electron .",
-    "build": "npm --prefix ../frontend run build && electron-builder",
+    "start:electron:preload": "npm run build:preload && npm run start:electron",
+    "build": "npm run build:preload && npm --prefix ../frontend run build && electron-builder",
     "test": "node --test",
     "lint": "echo \"No lint configured for electron shell\""
   },
@@ -22,6 +25,7 @@
       "../frontend/dist/**/*",
       "main/**/*",
       "main.js",
+      ".bundles/preload.cjs",
       "preload.js",
       "package.json"
     ],

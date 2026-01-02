@@ -2,6 +2,7 @@ const { LspManager } = require('./LspManager');
 const { createLogger } = require('./util/logger');
 const path = require('node:path');
 const { toFileUri, fromFileUri } = require('./util/uri');
+const { createApplyEditCoordinator } = require('./applyEditCoordinator');
 
 function createLspBroadcaster() {
   const subscribers = new Set();
@@ -34,19 +35,25 @@ function createLspBroadcaster() {
   return { broadcast, subscribe };
 }
 
-function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
+function createLspMainService({ ipcMain, logger, broadcast, notify, plugins } = {}) {
   if (!ipcMain) throw new Error('createLspMainService: ipcMain is required');
 
   const sink = (payload) => broadcast?.('lsp:log', payload);
   const log = logger || createLogger({ namespace: 'lsp', enabled: true, sink });
+  const notifyIdeBus = (method, params) => {
+    try {
+      notify?.(String(method || ''), params);
+    } catch {
+      // ignore
+    }
+  };
 
   const isCancelledError = (err) => String(err?.name || '') === 'CancelledError';
 
   let lastActiveWebContents = null;
 
-  const applyEditPending = new Map(); // requestId -> { resolve, timer }
   let applyEditSeq = 1;
-  const APPLY_EDIT_TIMEOUT_MS = 10_000;
+  const applyEditCoordinator = createApplyEditCoordinator({ timeoutMs: 10_000 });
 
   const requestApplyEditInRenderer = async ({ requestId, serverId, workspaceId, label, edit }) => {
     const wc = lastActiveWebContents;
@@ -54,31 +61,38 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
       return { applied: false, failureReason: 'no active renderer window for applyEdit' };
     }
 
-    return await new Promise((resolve) => {
-      const id = String(requestId || '');
-      const timer = setTimeout(() => {
-        applyEditPending.delete(id);
-        resolve({ applied: false, failureReason: `applyEdit timed out after ${APPLY_EDIT_TIMEOUT_MS}ms` });
-      }, APPLY_EDIT_TIMEOUT_MS);
-      applyEditPending.set(id, { resolve, timer });
-
-      try {
-        wc.send('lsp:applyEditRequest', { requestId: id, serverId, workspaceId, label, edit });
-      } catch (err) {
-        clearTimeout(timer);
-        applyEditPending.delete(id);
-        resolve({ applied: false, failureReason: err?.message || String(err) });
-      }
+    const id = String(requestId || '');
+    return await applyEditCoordinator.request({
+      requestId: id,
+      webContentsId: wc.id,
+      send: () => {
+        wc.send('idebus:message', { jsonrpc: '2.0', method: 'lsp/applyEditRequest', params: { requestId: id, serverId, workspaceId, label, edit } });
+      },
     });
   };
 
   const manager = new LspManager({
     logger: log,
-    onDiagnostics: (payload) => broadcast?.('lsp:diagnostics', payload),
-    onLog: (payload) => broadcast?.('lsp:log', payload),
-    onProgress: (payload) => broadcast?.('lsp:progress', payload),
-    onServerStatus: (payload) => broadcast?.('lsp:serverStatus', payload),
-    onCapabilitiesChanged: (payload) => broadcast?.('lsp:serverCapabilities', payload),
+    onDiagnostics: (payload) => {
+      broadcast?.('lsp:diagnostics', payload);
+      notifyIdeBus('lsp/diagnostics', payload);
+    },
+    onLog: (payload) => {
+      broadcast?.('lsp:log', payload);
+      notifyIdeBus('lsp/log', payload);
+    },
+    onProgress: (payload) => {
+      broadcast?.('lsp:progress', payload);
+      notifyIdeBus('lsp/progress', payload);
+    },
+    onServerStatus: (payload) => {
+      broadcast?.('lsp:serverStatus', payload);
+      notifyIdeBus('lsp/serverStatus', payload);
+    },
+    onCapabilitiesChanged: (payload) => {
+      broadcast?.('lsp:serverCapabilities', payload);
+      notifyIdeBus('lsp/serverCapabilities', payload);
+    },
     getConfiguration: async () => undefined,
     applyWorkspaceEdit: async ({ serverId, workspaceId, label, edit }) => {
       const requestId = `ae_${Date.now()}_${applyEditSeq++}`;
@@ -171,6 +185,7 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
       pluginErrorLastTsByKey.set(key, now);
     }
     try { broadcast?.('plugins:error', { ...(payload || {}), ts: now }); } catch {}
+    try { notifyIdeBus('plugins/error', { ...(payload || {}), ts: now }); } catch {}
   };
 
   ipcMain.handle('lsp:ensureServer', async (event, workspaceId, languageId, serverConfig, workspace) => {
@@ -509,15 +524,13 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
 
   ipcMain.handle('lsp:applyEditResponse', async (event, requestId, result) => {
     ensureSenderSubscribed(event);
-    const id = String(requestId || '');
-    const pending = applyEditPending.get(id);
-    if (!pending) return { ok: false };
-    applyEditPending.delete(id);
-    try { clearTimeout(pending.timer); } catch {}
+    const senderWebContentsId = event?.sender?.id || 0;
+    return applyEditCoordinator.handleResponse({ senderWebContentsId, requestId, result });
+  });
 
-    const applied = !!result?.applied;
-    const failureReason = result?.failureReason ? String(result.failureReason) : undefined;
-    pending.resolve({ applied, failureReason });
+  ipcMain.handle('lsp:shutdownWorkspace', async (event, workspaceId) => {
+    ensureSenderSubscribed(event);
+    await manager.shutdownWorkspace(workspaceId);
     return { ok: true };
   });
 
@@ -525,7 +538,7 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     return { ok: manager.cancel(token) };
   });
 
-  return { manager, logger: log };
+  return { manager, logger: log, handleApplyEditResponse: (payload) => applyEditCoordinator.handleResponse(payload) };
 }
 
 module.exports = { createLspMainService, createLspBroadcaster };

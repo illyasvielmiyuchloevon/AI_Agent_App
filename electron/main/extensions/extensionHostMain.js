@@ -1,10 +1,12 @@
 const path = require('path');
 const Module = require('module');
 const fs = require('node:fs');
-const { fileURLToPath, pathToFileURL } = require('node:url');
 const { MessageReader } = require('../lsp/transport/MessageReader');
 const { MessageWriter } = require('../lsp/transport/MessageWriter');
 const { JsonRpcConnection } = require('../lsp/jsonrpc/JsonRpcConnection');
+const { CompletionProviderRegistry } = require('./completionProviderRegistry');
+const { Disposable, Uri, TextDocument, TextEditor } = require('./vscodeTypes');
+const { singleFolderFromFsPath, diffWorkspaceFolders } = require('./workspaceFoldersModel');
 
 class ProcessTransport {
   constructor({ readable, writable } = {}) {
@@ -81,12 +83,51 @@ const commandHandlers = new Map();
 const commandTitles = new Map();
 const extensions = new Map();
 let workspaceRootFsPath = process.env.IDE_WORKSPACE_ROOT ? String(process.env.IDE_WORKSPACE_ROOT) : '';
+let workspaceSettings = {};
+const completionProviders = new CompletionProviderRegistry();
+const configurationListeners = new Set();
+const openDocumentsByUri = new Map(); // uri -> TextDocument
+const openTextDocumentListeners = new Set();
+const changeTextDocumentListeners = new Set();
+const closeTextDocumentListeners = new Set();
+const saveTextDocumentListeners = new Set();
+const activeTextEditorListeners = new Set();
+let activeTextEditor = undefined;
+const workspaceFoldersListeners = new Set();
+let workspaceFolders = singleFolderFromFsPath(workspaceRootFsPath);
+const fileSystemWatchers = new Map(); // watcherId -> { ignoreCreate, ignoreChange, ignoreDelete, create, change, del }
+
+const normalizeFolderList = (folders) => {
+  const list = Array.isArray(folders) ? folders : [];
+  const out = [];
+  for (const f of list) {
+    if (!f || typeof f !== 'object') continue;
+    const uri = f.uri instanceof Uri ? f.uri : Uri.parse(f.uri);
+    const name = f.name != null ? String(f.name) : '';
+    if (!uri || !uri.toString()) continue;
+    out.push({ uri, name: name || uri.fsPath || uri.toString(), index: 0 });
+  }
+  return out.map((f, idx) => ({ ...f, index: idx }));
+};
+
+const setWorkspaceFolders = (nextFolders) => {
+  const next = normalizeFolderList(nextFolders);
+  const { added, removed } = diffWorkspaceFolders(workspaceFolders, next);
+  workspaceFolders = next;
+  if (!added.length && !removed.length) return;
+  const evt = { added, removed };
+  for (const fn of Array.from(workspaceFoldersListeners)) {
+    try {
+      fn(evt);
+    } catch {}
+  }
+};
 
 const normalizeUri = (u) => {
   if (!u) return '';
   if (typeof u === 'string') return u;
   if (typeof u.toString === 'function') return String(u.toString());
-  if (typeof u.fsPath === 'string') return `file://${String(u.fsPath)}`;
+  if (typeof u.fsPath === 'string') return Uri.file(String(u.fsPath)).toString();
   return String(u);
 };
 
@@ -123,47 +164,17 @@ const makeVscodeApi = () => {
     return undefined;
   };
 
-  const readWorkspaceSettingsSync = () => {
-    const root = String(workspaceRootFsPath || '').trim();
-    if (!root) return {};
-    const settingsPath = path.join(root, '.vscode', 'settings.json');
-    try {
-      const raw = fs.readFileSync(settingsPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
   const toFsPath = (input) => {
     if (!input) return '';
     if (typeof input === 'string') {
       const s = input.trim();
       if (!s) return '';
-      if (s.startsWith('file:')) {
-        try {
-          return fileURLToPath(s);
-        } catch {
-          return '';
-        }
-      }
+      if (s.startsWith('file:')) return Uri.parse(s).fsPath || '';
       return s;
     }
     if (typeof input.toString === 'function') return toFsPath(String(input.toString()));
     if (typeof input.fsPath === 'string') return String(input.fsPath);
     return '';
-  };
-
-  const toUriString = (input) => {
-    const s = String(input || '').trim();
-    if (!s) return '';
-    if (s.startsWith('file:')) return s;
-    try {
-      return pathToFileURL(s).toString();
-    } catch {
-      return '';
-    }
   };
 
   const isUnderRoot = (root, candidate) => {
@@ -181,53 +192,88 @@ const makeVscodeApi = () => {
     return cc.startsWith(rr + sep);
   };
 
-  class TextDocument {
-    constructor({ uri, fileName, languageId, version, text } = {}) {
-      this.uri = uri;
-      this.fileName = fileName ? String(fileName) : (uri ? String(uri.toString()) : '');
-      this.isUntitled = false;
-      this.languageId = languageId ? String(languageId) : '';
-      this.version = Number.isFinite(version) ? version : 1;
-      this._text = text == null ? '' : String(text);
+  const pickWorkspaceFolderForPath = (fsPath) => {
+    const target = String(fsPath || '').trim();
+    if (!target) return null;
+    for (const f of workspaceFolders) {
+      const root = f?.uri?.fsPath ? String(f.uri.fsPath) : '';
+      if (root && isUnderRoot(root, target)) return f;
     }
-    getText() {
-      return this._text;
+    const fallback = workspaceFolders[0];
+    return fallback || null;
+  };
+
+  class Position {
+    constructor(line, character) {
+      this.line = Number.isFinite(line) ? line : 0;
+      this.character = Number.isFinite(character) ? character : 0;
+    }
+    isEqual(other) {
+      const o = other && typeof other === 'object' ? other : {};
+      return this.line === Number(o.line) && this.character === Number(o.character);
     }
   }
 
-  class Disposable {
-    constructor(fn) {
-      this._fn = typeof fn === 'function' ? fn : null;
-      this._disposed = false;
-    }
-    dispose() {
-      if (this._disposed) return;
-      this._disposed = true;
-      try {
-        this._fn?.();
-      } catch {}
-    }
-  }
-
-  class Uri {
-    constructor(value) {
-      this._value = String(value || '');
-    }
-    toString() {
-      return this._value;
-    }
-    static parse(value) {
-      return new Uri(value);
-    }
-    static file(fsPath) {
-      const p = String(fsPath || '');
-      if (!p) return new Uri('');
-      if (p.startsWith('file://')) return new Uri(p);
-      const normalized = p.replace(/\\/g, '/');
-      if (/^[a-zA-Z]:\//.test(normalized)) {
-        return new Uri(`file:///${normalized}`);
+  class Range {
+    constructor(a, b, c, d) {
+      if (a && typeof a === 'object' && b && typeof b === 'object') {
+        this.start = new Position(a.line, a.character);
+        this.end = new Position(b.line, b.character);
+        return;
       }
-      return new Uri(`file://${normalized.startsWith('/') ? '' : '/'}${normalized}`);
+      this.start = new Position(a, b);
+      this.end = new Position(c, d);
+    }
+    get isEmpty() {
+      return this.start.isEqual(this.end);
+    }
+  }
+
+  class WorkspaceEdit {
+    constructor() {
+      this.changes = {};
+      this.documentChanges = [];
+    }
+    _push(uri, edit) {
+      const u = normalizeUri(uri);
+      if (!u) return;
+      const list = this.changes[u] || [];
+      list.push(edit);
+      this.changes[u] = list;
+    }
+    replace(uri, range, newText) {
+      const r = range instanceof Range ? range : new Range(range?.start, range?.end);
+      this._push(uri, { range: { start: { line: r.start.line, character: r.start.character }, end: { line: r.end.line, character: r.end.character } }, newText: String(newText ?? '') });
+    }
+    insert(uri, position, newText) {
+      const p = position instanceof Position ? position : new Position(position?.line, position?.character);
+      const range = { start: { line: p.line, character: p.character }, end: { line: p.line, character: p.character } };
+      this._push(uri, { range, newText: String(newText ?? '') });
+    }
+    delete(uri, range) {
+      const r = range instanceof Range ? range : new Range(range?.start, range?.end);
+      this._push(uri, { range: { start: { line: r.start.line, character: r.start.character }, end: { line: r.end.line, character: r.end.character } }, newText: '' });
+    }
+    set(uri, edits) {
+      const u = normalizeUri(uri);
+      if (!u) return;
+      const list = Array.isArray(edits) ? edits : [];
+      this.changes[u] = list.map((e) => {
+        const rr = e?.range;
+        const r = rr instanceof Range ? rr : new Range(rr?.start, rr?.end);
+        return { range: { start: { line: r.start.line, character: r.start.character }, end: { line: r.end.line, character: r.end.character } }, newText: String(e?.newText ?? '') };
+      });
+    }
+    toJSON() {
+      return { changes: this.changes, documentChanges: this.documentChanges };
+    }
+  }
+
+  class RelativePattern {
+    constructor(base, pattern) {
+      const b = base && typeof base === 'object' && base.uri ? base.uri : base;
+      this.baseUri = b instanceof Uri ? b : Uri.file(String(b || ''));
+      this.pattern = String(pattern || '');
     }
   }
 
@@ -262,6 +308,55 @@ const makeVscodeApi = () => {
       await connection.sendRequest('window/showInformationMessage', { message: msg, items: list }).catch(() => null);
       return undefined;
     },
+    async showWarningMessage(message, ...items) {
+      const msg = `[WARN] ${String(message || '')}`;
+      const list = items.map((x) => String(x));
+      await connection.sendRequest('window/showInformationMessage', { message: msg, items: list }).catch(() => null);
+      return undefined;
+    },
+    async showErrorMessage(message, ...items) {
+      const msg = `[ERROR] ${String(message || '')}`;
+      const list = items.map((x) => String(x));
+      await connection.sendRequest('window/showInformationMessage', { message: msg, items: list }).catch(() => null);
+      return undefined;
+    },
+    async showInputBox(options) {
+      const o = options && typeof options === 'object' ? options : {};
+      const res = await connection.sendRequest('window/showInputBox', {
+        title: o.title != null ? String(o.title) : 'Input',
+        prompt: o.prompt != null ? String(o.prompt) : '',
+        value: o.value != null ? String(o.value) : '',
+        placeHolder: o.placeHolder != null ? String(o.placeHolder) : '',
+      }).catch(() => null);
+      if (res == null) return undefined;
+      return String(res);
+    },
+    async showQuickPick(items, options) {
+      const list = await Promise.resolve(items).catch(() => []);
+      const arr = Array.isArray(list) ? list : [];
+      const normalized = arr.map((it) => {
+        if (it == null) return null;
+        if (typeof it === 'string') return { label: it };
+        if (typeof it === 'object') {
+          const label = it.label != null ? String(it.label) : '';
+          if (!label) return null;
+          const description = it.description != null ? String(it.description) : '';
+          const detail = it.detail != null ? String(it.detail) : '';
+          return { label, ...(description ? { description } : {}), ...(detail ? { detail } : {}) };
+        }
+        return null;
+      }).filter(Boolean);
+
+      const o = options && typeof options === 'object' ? options : {};
+      const res = await connection.sendRequest('window/showQuickPick', {
+        title: o.title != null ? String(o.title) : 'Select',
+        placeHolder: o.placeHolder != null ? String(o.placeHolder) : '',
+        canPickMany: !!o.canPickMany,
+        items: normalized,
+      }).catch(() => null);
+      if (res == null) return undefined;
+      return String(res);
+    },
     createOutputChannel(name) {
       const channelId = String(name || 'Extension');
       const label = channelId;
@@ -281,6 +376,15 @@ const makeVscodeApi = () => {
         dispose() {},
       };
     },
+    get activeTextEditor() {
+      return activeTextEditor;
+    },
+    onDidChangeActiveTextEditor(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      activeTextEditorListeners.add(fn);
+      return new Disposable(() => activeTextEditorListeners.delete(fn));
+    },
   };
 
   const DiagnosticSeverity = {
@@ -289,6 +393,113 @@ const makeVscodeApi = () => {
     Information: 3,
     Hint: 4,
   };
+
+  const FileType = {
+    Unknown: 0,
+    File: 1,
+    Directory: 2,
+    SymbolicLink: 64,
+  };
+
+  const toGlobDto = (arg) => {
+    if (arg == null) return null;
+    if (typeof arg === 'string') return { pattern: String(arg) };
+    if (arg instanceof RelativePattern) return { baseUri: normalizeUri(arg.baseUri), pattern: String(arg.pattern || '') };
+    if (typeof arg === 'object') {
+      const pattern = arg.pattern != null ? String(arg.pattern) : (arg.glob != null ? String(arg.glob) : '');
+      const base = arg.baseUri != null ? arg.baseUri : (arg.base != null ? arg.base : (arg.baseFsPath != null ? arg.baseFsPath : ''));
+      const baseUri = base ? normalizeUri(base) : '';
+      return { ...(baseUri ? { baseUri } : {}), ...(pattern ? { pattern } : {}) };
+    }
+    return null;
+  };
+
+  const decodeBase64 = (b64) => {
+    const s = String(b64 || '');
+    if (!s) return new Uint8Array();
+    const buf = Buffer.from(s, 'base64');
+    return new Uint8Array(buf);
+  };
+
+  const encodeBase64 = (data) => {
+    if (!data) return '';
+    if (typeof data === 'string') return Buffer.from(data, 'utf8').toString('base64');
+    if (Buffer.isBuffer(data)) return data.toString('base64');
+    if (data instanceof Uint8Array) return Buffer.from(data).toString('base64');
+    try {
+      return Buffer.from(String(data), 'utf8').toString('base64');
+    } catch {
+      return '';
+    }
+  };
+
+  const createEmitter = () => {
+    const listeners = new Set();
+    return {
+      event(listener) {
+        const fn = typeof listener === 'function' ? listener : null;
+        if (!fn) return new Disposable(() => {});
+        listeners.add(fn);
+        return new Disposable(() => listeners.delete(fn));
+      },
+      fire(value) {
+        for (const fn of Array.from(listeners)) {
+          try {
+            fn(value);
+          } catch {}
+        }
+      },
+      clear() {
+        listeners.clear();
+      },
+    };
+  };
+
+  const normalizeWorkspaceEdit = (edit) => {
+    if (!edit) return null;
+    if (edit instanceof WorkspaceEdit) return edit.toJSON();
+    if (typeof edit !== 'object') return null;
+    const changes = edit.changes && typeof edit.changes === 'object' ? edit.changes : {};
+    const documentChanges = Array.isArray(edit.documentChanges) ? edit.documentChanges : undefined;
+    return { changes, ...(documentChanges ? { documentChanges } : {}) };
+  };
+
+  if (typeof TextEditor?.prototype?.edit !== 'function') {
+    // eslint-disable-next-line no-param-reassign
+    TextEditor.prototype.edit = async function (callback) {
+      const fn = typeof callback === 'function' ? callback : null;
+      const document = this?.document;
+      if (!fn || !document?.uri) return false;
+      const edits = [];
+      const normalizePos = (p) => {
+        if (!p) return { line: 0, character: 0 };
+        if (p instanceof Position) return { line: p.line, character: p.character };
+        return { line: Number(p.line) || 0, character: Number(p.character) || 0 };
+      };
+      const normalizeRange = (r) => {
+        if (!r) return { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+        if (r instanceof Range) return { start: normalizePos(r.start), end: normalizePos(r.end) };
+        return { start: normalizePos(r.start), end: normalizePos(r.end) };
+      };
+      const builder = {
+        replace(range, newText) {
+          edits.push({ range: normalizeRange(range), newText: String(newText ?? '') });
+        },
+        insert(position, newText) {
+          const p = normalizePos(position);
+          edits.push({ range: { start: p, end: p }, newText: String(newText ?? '') });
+        },
+        delete(range) {
+          edits.push({ range: normalizeRange(range), newText: '' });
+        },
+      };
+      const res = fn(builder);
+      if (res && typeof res.then === 'function') await res;
+      const we = new WorkspaceEdit();
+      we.set(document.uri.toString(), edits);
+      return await workspace.applyEdit(we);
+    };
+  }
 
   const languages = {
     createDiagnosticCollection(name) {
@@ -311,13 +522,136 @@ const makeVscodeApi = () => {
       };
       return api;
     },
+    registerCompletionItemProvider(selector, provider, ...triggerCharacters) {
+      const reg = completionProviders.register(selector, provider, triggerCharacters);
+      return new Disposable(() => reg.dispose());
+    },
   };
 
   const workspace = {
+    get workspaceFolders() {
+      return workspaceFolders;
+    },
+    onDidChangeWorkspaceFolders(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      workspaceFoldersListeners.add(fn);
+      return new Disposable(() => workspaceFoldersListeners.delete(fn));
+    },
+    get rootPath() {
+      const first = workspaceFolders[0];
+      return first?.uri?.fsPath ? String(first.uri.fsPath) : undefined;
+    },
+    getWorkspaceFolder(uri) {
+      const fsPath = toFsPath(uri);
+      if (!fsPath) return undefined;
+      return pickWorkspaceFolderForPath(fsPath) || undefined;
+    },
+    asRelativePath(pathOrUri, includeWorkspaceFolder) {
+      const fsPath = toFsPath(pathOrUri);
+      if (!fsPath) return '';
+      const folder = pickWorkspaceFolderForPath(fsPath);
+      const base = folder?.uri?.fsPath ? String(folder.uri.fsPath) : '';
+      if (!base) return fsPath.replace(/\\/g, '/');
+      let rel = path.relative(base, fsPath).replace(/\\/g, '/');
+      if (!rel || rel.startsWith('..')) rel = fsPath.replace(/\\/g, '/');
+      const manyRoots = workspaceFolders.length > 1;
+      if (manyRoots && includeWorkspaceFolder) {
+        const prefix = folder?.name ? String(folder.name) : '';
+        if (prefix) rel = `${prefix}/${rel}`;
+      }
+      return rel;
+    },
+    fs: {
+      async readFile(uri) {
+        const u = normalizeUri(uri);
+        const res = await connection.sendRequest('workspace/fsReadFile', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.readFile failed');
+        return decodeBase64(res.dataB64);
+      },
+      async writeFile(uri, content) {
+        const u = normalizeUri(uri);
+        const dataB64 = encodeBase64(content);
+        const res = await connection.sendRequest('workspace/fsWriteFile', { uri: u, dataB64 }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.writeFile failed');
+        return undefined;
+      },
+      async stat(uri) {
+        const u = normalizeUri(uri);
+        const res = await connection.sendRequest('workspace/fsStat', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.stat failed');
+        return res.stat || { type: FileType.Unknown, ctime: 0, mtime: 0, size: 0 };
+      },
+      async readDirectory(uri) {
+        const u = normalizeUri(uri);
+        const res = await connection.sendRequest('workspace/fsReadDirectory', { uri: u }, { timeoutMs: 15_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.readDirectory failed');
+        return Array.isArray(res.entries) ? res.entries : [];
+      },
+    },
+    async findFiles(include, exclude, maxResults) {
+      const inc = toGlobDto(include);
+      if (!inc || !inc.pattern) return [];
+      const exc = exclude != null ? toGlobDto(exclude) : null;
+      const res = await connection.sendRequest('workspace/findFiles', { include: inc, exclude: exc, maxResults: Number.isFinite(maxResults) ? maxResults : undefined }, { timeoutMs: 30_000 })
+        .catch((err) => ({ ok: false, error: err?.message || String(err), uris: [] }));
+      if (!res || !res.ok) return [];
+      const uris = Array.isArray(res.uris) ? res.uris : [];
+      return uris.map((u) => Uri.parse(String(u || ''))).filter((u) => u && u.toString());
+    },
+    createFileSystemWatcher(globPattern, ignoreCreateEvents, ignoreChangeEvents, ignoreDeleteEvents) {
+      const gp = toGlobDto(globPattern);
+      if (!gp || !gp.pattern) throw new Error('workspace.createFileSystemWatcher: missing globPattern');
+      const create = createEmitter();
+      const change = createEmitter();
+      const del = createEmitter();
+
+      const promise = connection.sendRequest('workspace/createFileSystemWatcher', {
+        globPattern: gp,
+        ignoreCreateEvents: !!ignoreCreateEvents,
+        ignoreChangeEvents: !!ignoreChangeEvents,
+        ignoreDeleteEvents: !!ignoreDeleteEvents,
+      }, { timeoutMs: 20_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+
+      const watcher = {
+        ignoreCreateEvents: !!ignoreCreateEvents,
+        ignoreChangeEvents: !!ignoreChangeEvents,
+        ignoreDeleteEvents: !!ignoreDeleteEvents,
+        onDidCreate: (listener) => create.event(listener),
+        onDidChange: (listener) => change.event(listener),
+        onDidDelete: (listener) => del.event(listener),
+        dispose() {
+          promise.then((res) => {
+            const watcherId = res?.watcherId ? String(res.watcherId) : '';
+            if (!watcherId) return;
+            fileSystemWatchers.delete(watcherId);
+            void connection.sendRequest('workspace/disposeFileSystemWatcher', { watcherId }, { timeoutMs: 10_000 }).catch(() => {});
+          }).catch(() => {});
+          create.clear();
+          change.clear();
+          del.clear();
+        },
+      };
+
+      promise.then((res) => {
+        const watcherId = res?.watcherId ? String(res.watcherId) : '';
+        if (!res?.ok || !watcherId) return;
+        fileSystemWatchers.set(watcherId, { ignoreCreate: !!ignoreCreateEvents, ignoreChange: !!ignoreChangeEvents, ignoreDelete: !!ignoreDeleteEvents, create, change, del });
+      }).catch(() => {});
+
+      return watcher;
+    },
+    async applyEdit(edit) {
+      const normalized = normalizeWorkspaceEdit(edit);
+      if (!normalized) return false;
+      const res = await connection.sendRequest('workspace/applyEdit', { edit: normalized }, { timeoutMs: 30_000 })
+        .catch(() => ({ ok: false, applied: false }));
+      return !!res?.ok && !!res?.applied;
+    },
     getConfiguration(section, scope) {
       const sec = section == null ? '' : String(section);
       const baseKey = sec ? sec : '';
-      const cfg = readWorkspaceSettingsSync();
+      const cfg = workspaceSettings && typeof workspaceSettings === 'object' ? workspaceSettings : {};
 
       const api = {
         get(key, defaultValue) {
@@ -346,21 +680,49 @@ const makeVscodeApi = () => {
       };
       return api;
     },
+    onDidChangeConfiguration(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      configurationListeners.add(fn);
+      return new Disposable(() => configurationListeners.delete(fn));
+    },
+    get textDocuments() {
+      return Array.from(openDocumentsByUri.values());
+    },
+    onDidOpenTextDocument(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      openTextDocumentListeners.add(fn);
+      return new Disposable(() => openTextDocumentListeners.delete(fn));
+    },
+    onDidChangeTextDocument(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      changeTextDocumentListeners.add(fn);
+      return new Disposable(() => changeTextDocumentListeners.delete(fn));
+    },
+    onDidCloseTextDocument(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      closeTextDocumentListeners.add(fn);
+      return new Disposable(() => closeTextDocumentListeners.delete(fn));
+    },
+    onDidSaveTextDocument(handler) {
+      const fn = typeof handler === 'function' ? handler : null;
+      if (!fn) return new Disposable(() => {});
+      saveTextDocumentListeners.add(fn);
+      return new Disposable(() => saveTextDocumentListeners.delete(fn));
+    },
     async openTextDocument(uriOrFileName) {
-      const root = String(workspaceRootFsPath || '').trim();
       const raw = uriOrFileName == null ? '' : uriOrFileName;
-      const fsPathRaw = toFsPath(raw);
-      const resolved = path.isAbsolute(fsPathRaw) ? fsPathRaw : (root ? path.join(root, fsPathRaw) : fsPathRaw);
-      const fsPath = resolved ? path.resolve(resolved) : '';
-      if (!fsPath) throw new Error('openTextDocument: invalid input');
-      if (root && path.isAbsolute(fsPath) && !isUnderRoot(root, fsPath)) throw new Error('openTextDocument: out of workspace');
-      const text = await fs.promises.readFile(fsPath, 'utf8');
-      const uri = Uri.parse(toUriString(fsPath));
-      return new TextDocument({ uri, fileName: fsPath, languageId: '', version: 1, text });
+      const res = await connection.sendRequest('workspace/openTextDocument', { uriOrPath: raw }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+      if (!res || !res.ok) throw new Error(res?.error || 'openTextDocument failed');
+      const uri = Uri.parse(res.uri || '');
+      return new TextDocument({ uri, fileName: res.fileName || '', languageId: res.languageId || '', version: res.version || 1, text: res.text || '' });
     },
   };
 
-  return { commands, window, workspace, languages, Disposable, Uri, DiagnosticSeverity };
+  return { commands, window, workspace, languages, Disposable, Uri, DiagnosticSeverity, FileType, RelativePattern, Position, Range, WorkspaceEdit };
 };
 
 const vscodeApi = makeVscodeApi();
@@ -382,10 +744,145 @@ installVscodeModule();
 connection.onNotification('workspace/setRoot', (params) => {
   const fsPath = params?.fsPath ? String(params.fsPath) : '';
   workspaceRootFsPath = fsPath;
+  setWorkspaceFolders(singleFolderFromFsPath(fsPath));
+});
+
+connection.onNotification('workspace/setWorkspaceFolders', (params) => {
+  const list = Array.isArray(params?.folders) ? params.folders : [];
+  const parsed = [];
+  for (const f of list) {
+    if (!f || typeof f !== 'object') continue;
+    const fsPath = f.fsPath != null ? String(f.fsPath) : '';
+    const uriStr = f.uri != null ? String(f.uri) : '';
+    const uri = fsPath ? Uri.file(fsPath) : (uriStr ? Uri.parse(uriStr) : null);
+    if (!uri || !uri.toString()) continue;
+    const name = f.name != null ? String(f.name) : (uri.fsPath ? path.basename(uri.fsPath.replace(/[\\\/]+$/, '')) : '');
+    parsed.push({ uri, name: name || 'workspace', index: 0 });
+  }
+  setWorkspaceFolders(parsed);
+  const first = parsed[0];
+  if (first?.uri?.fsPath) workspaceRootFsPath = String(first.uri.fsPath);
+});
+
+connection.onNotification('workspace/fileSystemWatcherEvent', (params) => {
+  const watcherId = params?.watcherId != null ? String(params.watcherId) : '';
+  const type = params?.type ? String(params.type) : '';
+  const uri = params?.uri ? String(params.uri) : '';
+  if (!watcherId || !type || !uri) return;
+  const w = fileSystemWatchers.get(watcherId);
+  if (!w) return;
+  const u = Uri.parse(uri);
+  if (type === 'create' && !w.ignoreCreate) w.create.fire(u);
+  else if (type === 'change' && !w.ignoreChange) w.change.fire(u);
+  else if (type === 'delete' && !w.ignoreDelete) w.del.fire(u);
+});
+
+connection.onNotification('workspace/setConfiguration', (params) => {
+  const settings = params?.settings && typeof params.settings === 'object' ? params.settings : {};
+  workspaceSettings = settings;
+  const evt = { affectsConfiguration: () => true };
+  for (const fn of Array.from(configurationListeners)) {
+    try {
+      fn(evt);
+    } catch {}
+  }
+});
+
+connection.onNotification('editor/textDocumentDidOpen', (params) => {
+  const uri = params?.uri ? String(params.uri) : '';
+  const languageId = params?.languageId ? String(params.languageId) : '';
+  const version = Number.isFinite(params?.version) ? params.version : 1;
+  const text = params?.text != null ? String(params.text) : '';
+  if (!uri) return;
+  const doc = new TextDocument({ uri: Uri.parse(uri), fileName: Uri.parse(uri).fsPath || uri, languageId, version, text });
+  openDocumentsByUri.set(uri, doc);
+  for (const fn of Array.from(openTextDocumentListeners)) {
+    try {
+      fn(doc);
+    } catch {}
+  }
+});
+
+connection.onNotification('editor/textDocumentDidChange', (params) => {
+  const uri = params?.uri ? String(params.uri) : '';
+  if (!uri) return;
+  const doc = openDocumentsByUri.get(uri);
+  if (!doc) return;
+  doc._updateFromBus({ text: params?.text, version: params?.version });
+  const evt = { document: doc, contentChanges: [] };
+  for (const fn of Array.from(changeTextDocumentListeners)) {
+    try {
+      fn(evt);
+    } catch {}
+  }
+});
+
+connection.onNotification('editor/textDocumentDidClose', (params) => {
+  const uri = params?.uri ? String(params.uri) : '';
+  if (!uri) return;
+  const doc = openDocumentsByUri.get(uri);
+  if (!doc) return;
+  openDocumentsByUri.delete(uri);
+  for (const fn of Array.from(closeTextDocumentListeners)) {
+    try {
+      fn(doc);
+    } catch {}
+  }
+});
+
+connection.onNotification('editor/textDocumentDidSave', (params) => {
+  const uri = params?.uri ? String(params.uri) : '';
+  if (!uri) return;
+  const doc = openDocumentsByUri.get(uri);
+  if (!doc) return;
+  for (const fn of Array.from(saveTextDocumentListeners)) {
+    try {
+      fn(doc);
+    } catch {}
+  }
+});
+
+connection.onNotification('editor/activeTextEditorChanged', (params) => {
+  const uri = params?.uri ? String(params.uri) : '';
+  const doc = uri ? openDocumentsByUri.get(uri) : null;
+  activeTextEditor = doc ? new TextEditor(doc) : undefined;
+  for (const fn of Array.from(activeTextEditorListeners)) {
+    try {
+      fn(activeTextEditor);
+    } catch {}
+  }
 });
 
 connection.onRequest('initialize', async () => {
   return { ok: true };
+});
+
+connection.onRequest('extHost/provideCompletionItems', async (params) => {
+  const languageId = params?.languageId ? String(params.languageId) : '';
+  const uri = params?.uri ? String(params.uri) : '';
+  const text = params?.text != null ? String(params.text) : '';
+  const version = Number.isFinite(params?.version) ? params.version : 1;
+  const position = params?.position && typeof params.position === 'object' ? params.position : null;
+  if (!languageId) return { ok: true, items: [] };
+  const doc = new TextDocument({ uri: Uri.parse(uri || '').toString(), fileName: '', languageId, version, text });
+  const items = await completionProviders.provide({ languageId, document: doc, position, context: params?.context || null });
+  const normalized = Array.isArray(items) ? items.map((it) => {
+    if (!it || typeof it !== 'object') return null;
+    const label = it.label != null ? String(it.label) : '';
+    if (!label) return null;
+    const insertText = it.insertText != null ? String(it.insertText) : '';
+    const detail = it.detail != null ? String(it.detail) : '';
+    const documentation = it.documentation?.value != null ? String(it.documentation.value) : (it.documentation != null ? String(it.documentation) : '');
+    const kind = Number.isFinite(it.kind) ? it.kind : undefined;
+    return {
+      label,
+      ...(insertText ? { insertText } : {}),
+      ...(detail ? { detail } : {}),
+      ...(documentation ? { documentation } : {}),
+      ...(kind ? { kind } : {}),
+    };
+  }).filter(Boolean) : [];
+  return { ok: true, items: normalized };
 });
 
 connection.onRequest('commands/executeCommand', async (params) => {
@@ -421,10 +918,10 @@ connection.onRequest('extHost/loadExtensions', async (params) => {
       const mod = require(main);
       if (mod && typeof mod.activate === 'function') {
         const res = await mod.activate(context);
-        extensions.set(id, { id, module: mod, exports: res, context });
+        extensions.set(id, { id, main, extensionPath, module: mod, exports: res, context });
         loaded.push({ id, ok: true });
       } else {
-        extensions.set(id, { id, module: mod, exports: null, context });
+        extensions.set(id, { id, main, extensionPath, module: mod, exports: null, context });
         loaded.push({ id, ok: true, note: 'no activate()' });
       }
     } catch (err) {
@@ -434,6 +931,16 @@ connection.onRequest('extHost/loadExtensions', async (params) => {
   }
 
   return { ok: true, loaded };
+});
+
+connection.onRequest('extHost/listExtensions', async () => {
+  const items = Array.from(extensions.values()).map((e) => ({
+    id: e?.id ? String(e.id) : '',
+    main: e?.main ? String(e.main) : '',
+    extensionPath: e?.extensionPath ? String(e.extensionPath) : '',
+  })).filter((e) => e.id);
+  items.sort((a, b) => a.id.localeCompare(b.id));
+  return { ok: true, items };
 });
 
 process.on('uncaughtException', (err) => {

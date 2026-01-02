@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const simpleGit = require('simple-git');
 const { registerIpcHandlers } = require('./main/ipcHandlers');
+const { resolvePreloadPath } = require('./main/preloadPath');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
 
@@ -47,6 +48,7 @@ function installCspHeaders() {
 
 function createWindow() {
   const initialTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  const preloadPath = resolvePreloadPath(__dirname);
 
   const win = new BrowserWindow({
     width: 1400,
@@ -54,7 +56,7 @@ function createWindow() {
     frame: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

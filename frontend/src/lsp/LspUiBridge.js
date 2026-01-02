@@ -17,6 +17,11 @@ export class LspUiBridge {
     return this.api.ensureServerForDocument(workspaceId, languageId, filePath, workspace);
   }
 
+  shutdownWorkspace(workspaceId) {
+    if (!this.api?.shutdownWorkspace) return Promise.resolve({ ok: false });
+    return this.api.shutdownWorkspace(workspaceId);
+  }
+
   openDocument(serverId, doc) {
     if (!this.api?.openDocument) throw new Error('electronAPI.lsp.openDocument unavailable');
     return this.api.openDocument(serverId, doc);

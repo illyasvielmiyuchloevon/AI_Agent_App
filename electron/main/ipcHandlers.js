@@ -13,6 +13,7 @@ const { createPluginIpcService } = require('./lsp/plugins/PluginIpcService');
 const { registerIdeBus } = require('./ideBus/registerIdeBus');
 const { ExtensionHostService } = require('./extensions/ExtensionHostService');
 const { createDapMainService } = require('./dap/DapMainService');
+const { resolvePreloadPath } = require('./preloadPath');
 
 const workspaceService = createWorkspaceService();
 const lspBroadcaster = createLspBroadcaster();
@@ -20,9 +21,7 @@ const extensionHostService = new ExtensionHostService({ workspaceService, recent
 
 function registerIpcHandlers() {
   const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
-
-  registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService });
-  extensionHostService.start().catch(() => {});
+  const preloadPath = resolvePreloadPath(path.join(__dirname, '..'));
 
   const getWindowFromEvent = (event) => {
     try {
@@ -99,10 +98,23 @@ function registerIpcHandlers() {
   });
 
   const pluginsReady = pluginManager.init().catch(() => {});
-  createPluginIpcService({ ipcMain, pluginManager, broadcast: lspBroadcaster.broadcast, ready: pluginsReady });
+  const notifyIdeBus = (method, params) => {
+    const msg = { jsonrpc: '2.0', method: String(method || ''), ...(params !== undefined ? { params } : {}) };
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        win.webContents.send('idebus:message', msg);
+      } catch {}
+    }
+  };
 
-  createLspMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, plugins: { manager: pluginManager, ready: pluginsReady } });
-  createDapMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, workspaceService, recentStore });
+  createPluginIpcService({ ipcMain, pluginManager, broadcast: lspBroadcaster.broadcast, notify: notifyIdeBus, ready: pluginsReady });
+  const pluginService = { manager: pluginManager, ready: pluginsReady, notify: notifyIdeBus };
+
+  const lspService = createLspMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, notify: notifyIdeBus, plugins: { manager: pluginManager, ready: pluginsReady } });
+  const dapService = createDapMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, notify: notifyIdeBus, workspaceService, recentStore });
+
+  registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService, dapService, lspService, plugins: pluginService });
+  extensionHostService.start().catch(() => {});
 
   ipcMain.handle('recent:list', async () => {
     return { ok: true, items: recentStore.list() };
@@ -295,7 +307,7 @@ function registerIpcHandlers() {
       frame: false,
       autoHideMenuBar: true,
       webPreferences: {
-        preload: path.join(__dirname, '..', 'preload.js'),
+        preload: preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -339,7 +351,7 @@ function registerIpcHandlers() {
       frame: true,
       autoHideMenuBar: true,
       webPreferences: {
-        preload: path.join(__dirname, '..', 'preload.js'),
+        preload: preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,

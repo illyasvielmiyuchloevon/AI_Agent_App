@@ -1,4 +1,4 @@
-function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {}) {
+function createPluginIpcService({ ipcMain, pluginManager, broadcast, notify, ready } = {}) {
   if (!ipcMain) throw new Error('createPluginIpcService: ipcMain is required');
   if (!pluginManager) throw new Error('createPluginIpcService: pluginManager is required');
   const ensureReady = async () => {
@@ -19,12 +19,21 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     }
   };
 
+  const notifyIdeBus = (method, params) => {
+    try {
+      notify?.(String(method || ''), params);
+    } catch {
+      // ignore
+    }
+  };
+
   const emitError = (payload) => {
     try {
       broadcast?.('plugins:error', { ...payload, ts: Date.now() });
     } catch {
       // ignore
     }
+    notifyIdeBus('plugins/error', { ...payload, ts: Date.now() });
   };
 
   ipcMain.handle('plugins:search', async (event, query, providerIds, options) => {
@@ -66,9 +75,15 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     await ensureReady();
     try {
       const res = await pluginManager.install(ref, {
-        onProgress: (p) => broadcast?.('plugins:progress', { ...p, ts: Date.now() }),
+        onProgress: (p) => {
+          const payload = { ...p, ts: Date.now() };
+          broadcast?.('plugins:progress', payload);
+          notifyIdeBus('plugins/progress', payload);
+        },
       });
-      broadcast?.('plugins:changed', { items: pluginManager.listInstalled(), ts: Date.now() });
+      const changed = { items: pluginManager.listInstalled(), ts: Date.now() };
+      broadcast?.('plugins:changed', changed);
+      notifyIdeBus('plugins/changed', changed);
       return res;
     } catch (err) {
       emitError({ action: 'install', pluginId: ref?.id, message: err?.message || String(err) });
@@ -81,7 +96,9 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     await ensureReady();
     try {
       const res = await pluginManager.uninstall(id);
-      broadcast?.('plugins:changed', { items: pluginManager.listInstalled(), ts: Date.now() });
+      const changed = { items: pluginManager.listInstalled(), ts: Date.now() };
+      broadcast?.('plugins:changed', changed);
+      notifyIdeBus('plugins/changed', changed);
       return res;
     } catch (err) {
       emitError({ action: 'uninstall', pluginId: id, message: err?.message || String(err) });
@@ -94,7 +111,9 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     await ensureReady();
     try {
       const res = await pluginManager.enable(id, { trust });
-      broadcast?.('plugins:changed', { items: pluginManager.listInstalled(), ts: Date.now() });
+      const changed = { items: pluginManager.listInstalled(), ts: Date.now() };
+      broadcast?.('plugins:changed', changed);
+      notifyIdeBus('plugins/changed', changed);
       return res;
     } catch (err) {
       emitError({ action: 'enable', pluginId: id, message: err?.message || String(err) });
@@ -107,7 +126,9 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     await ensureReady();
     try {
       const res = await pluginManager.disable(id);
-      broadcast?.('plugins:changed', { items: pluginManager.listInstalled(), ts: Date.now() });
+      const changed = { items: pluginManager.listInstalled(), ts: Date.now() };
+      broadcast?.('plugins:changed', changed);
+      notifyIdeBus('plugins/changed', changed);
       return res;
     } catch (err) {
       emitError({ action: 'disable', pluginId: id, message: err?.message || String(err) });

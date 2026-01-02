@@ -8,12 +8,25 @@ import { guessIsWindows, fileUriToFsPath, toWorkspaceRelativePath } from '../uti
 
 export const createModelSync = ({
   bridge,
+  ideBus,
   supportedLanguageIds,
   ensureServerForLanguage,
   getRootFsPath,
 } = {}) => {
   const docByModelPath = new Map();
   const modelPathByUri = new Map();
+  const changeTimersByUri = new Map();
+  const DOC_CHANGE_DEBOUNCE_MS = 120;
+
+  const notifyBus = (method, params) => {
+    const bus = ideBus || globalThis?.window?.electronAPI?.ideBus || null;
+    if (!bus?.notify) return;
+    try {
+      bus.notify(String(method || ''), params);
+    } catch {
+      // ignore
+    }
+  };
 
   const openModelIfNeeded = async (model) => {
     if (!model || !bridge?.isAvailable?.()) return;
@@ -47,6 +60,7 @@ export const createModelSync = ({
     for (const sid of openTargets) {
       await bridge.openDocument(sid, doc);
     }
+    notifyBus('editor/textDocumentDidOpen', doc);
 
     model.onDidChangeContent((e) => {
       const state = docByModelPath.get(modelPath);
@@ -63,11 +77,23 @@ export const createModelSync = ({
           contentChanges,
         }).catch(() => {});
       }
+
+      const pending = changeTimersByUri.get(uri);
+      if (pending) clearTimeout(pending);
+      const timer = setTimeout(() => {
+        changeTimersByUri.delete(uri);
+        notifyBus('editor/textDocumentDidChange', { uri, languageId, version: state.version, text: model.getValue?.() ?? '' });
+      }, DOC_CHANGE_DEBOUNCE_MS);
+      changeTimersByUri.set(uri, timer);
     });
 
     model.onWillDispose(() => {
       docByModelPath.delete(modelPath);
       modelPathByUri.delete(uri);
+      const pending = changeTimersByUri.get(uri);
+      if (pending) clearTimeout(pending);
+      changeTimersByUri.delete(uri);
+      notifyBus('editor/textDocumentDidClose', { uri, languageId });
       for (const sid of serverIds.length ? serverIds : [serverId]) {
         void bridge.closeDocument(sid, uri).catch(() => {});
       }
@@ -124,6 +150,7 @@ export const createModelSync = ({
     for (const sid of serverIds) {
       await bridge.saveDocument(sid, { uri, version: state.version, text: typeof text === 'string' ? text : undefined }).catch(() => {});
     }
+    notifyBus('editor/textDocumentDidSave', { uri, languageId: String(state.languageId || ''), version: state.version, ts: Date.now() });
     return { ok: true };
   };
 

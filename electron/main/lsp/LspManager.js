@@ -1573,6 +1573,21 @@ class LspManager {
     }
   }
 
+  async shutdownWorkspace(workspaceId) {
+    const wid = String(workspaceId || '').trim();
+    if (!wid) return;
+    const prefix = `${wid}::`;
+    const ids = Array.from(this.servers.keys()).filter((id) => String(id || '').startsWith(prefix));
+    for (const id of ids) {
+      await this.shutdownServer(id);
+    }
+    try {
+      this.workspaceSettings.delete(wid);
+    } catch {
+      // ignore
+    }
+  }
+
   async shutdownAll() {
     for (const id of Array.from(this.servers.keys())) {
       await this.shutdownServer(id);

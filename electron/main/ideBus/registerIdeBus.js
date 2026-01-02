@@ -2,6 +2,8 @@ const { app, BrowserWindow, dialog, screen, shell } = require('electron');
 const path = require('path');
 const { JsonRpcConnection } = require('../lsp/jsonrpc/JsonRpcConnection');
 const commandsService = require('../commands/commandsService');
+const { resolvePreloadPath } = require('../preloadPath');
+const { readWorkspaceSettingsSync, openTextDocument } = require('../workspace/documentModel');
 
 class IpcMainTransport {
   constructor(webContents) {
@@ -37,7 +39,7 @@ class IpcMainTransport {
   }
 }
 
-function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService } = {}) {
+function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService, dapService, lspService, plugins } = {}) {
   if (!ipcMain) throw new Error('registerIdeBus: ipcMain is required');
 
   const connections = new Map();
@@ -65,6 +67,10 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'workspace/setTrust': 150,
         'workspace/open': 1200,
         'workspace/close': 800,
+        'lsp/applyEditResponse': 250,
+        'workspace/applyEditResponse': 250,
+        'window/showInputBoxResponse': 250,
+        'window/showQuickPickResponse': 250,
         'window/minimize': 100,
         'window/toggleMaximize': 100,
         'window/isMaximized': 100,
@@ -193,6 +199,84 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     connection.onRequest('initialize', async (params) => {
       const protocolVersion = params?.protocolVersion ? String(params.protocolVersion) : '';
       const clientCapabilities = params?.clientCapabilities && typeof params.clientCapabilities === 'object' ? params.clientCapabilities : {};
+      const methods = [
+        'app/getInfo',
+        'workspace/pickFolder',
+        'workspace/pickFile',
+        'workspace/open',
+        'workspace/close',
+        'workspace/getTrust',
+        'workspace/setTrust',
+        'workspace/getWorkspaceFolders',
+        'workspace/getConfiguration',
+        'workspace/openTextDocument',
+        'extensions/getStatus',
+        'extensions/restart',
+        'extensions/listExtensions',
+        'languages/provideCompletionItems',
+        'commands/list',
+        'commands/execute',
+        'telemetry/getRpcStats',
+        'telemetry/resetRpcStats',
+        'telemetry/getRpcTraceConfig',
+        'telemetry/setRpcTraceConfig',
+        'window/minimize',
+        'window/toggleMaximize',
+        'window/isMaximized',
+        'window/openDevTools',
+        'window/toggleDevTools',
+        'window/applySnapLayout',
+        'window/openNewWindow',
+        'window/openTerminalWindow',
+        'window/close',
+        'window/showInputBoxResponse',
+        'window/showQuickPickResponse',
+        'shell/showItemInFolder',
+        'shell/openPath',
+        'lsp/applyEditResponse',
+        'workspace/applyEditResponse',
+      ];
+      if (dapService) {
+        methods.push('debug/startSession', 'debug/stopSession', 'debug/sendRequest', 'debug/listSessions');
+      }
+      if (plugins?.manager) {
+        methods.push(
+          'plugins/search',
+          'plugins/listInstalled',
+          'plugins/listUpdates',
+          'plugins/install',
+          'plugins/uninstall',
+          'plugins/enable',
+          'plugins/disable',
+          'plugins/doctor',
+          'plugins/listEnabledLanguages',
+        );
+      }
+
+      const notifications = [
+        'workspace/configurationChanged',
+        'commands/changed',
+        'window/showInformationMessage',
+        'window/showInputBoxRequest',
+        'window/showQuickPickRequest',
+        'output/append',
+        'output/clear',
+        'diagnostics/publish',
+        'lsp/applyEditRequest',
+        'workspace/applyEditRequest',
+        'editor/activeTextEditorChanged',
+        'editor/textDocumentDidOpen',
+        'editor/textDocumentDidChange',
+        'editor/textDocumentDidClose',
+        'editor/textDocumentDidSave',
+        'lsp/diagnostics',
+        'lsp/log',
+        'lsp/progress',
+        'lsp/serverStatus',
+        'lsp/serverCapabilities',
+        'debug/event',
+        'debug/status',
+      ];
       return {
         serverVersion: app.getVersion(),
         serverCapabilities: {
@@ -200,35 +284,66 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
           transport: 'electron-ipc',
           clientProtocolVersion: protocolVersion,
           clientCapabilities,
-          methods: [
-            'app/getInfo',
-            'workspace/pickFolder',
-            'workspace/pickFile',
-            'workspace/open',
-            'workspace/close',
-            'workspace/getTrust',
-            'workspace/setTrust',
-            'commands/list',
-            'commands/execute',
-            'telemetry/getRpcStats',
-            'telemetry/resetRpcStats',
-            'telemetry/getRpcTraceConfig',
-            'telemetry/setRpcTraceConfig',
-            'window/minimize',
-            'window/toggleMaximize',
-            'window/isMaximized',
-            'window/openDevTools',
-            'window/toggleDevTools',
-            'window/applySnapLayout',
-            'window/openNewWindow',
-            'window/openTerminalWindow',
-            'window/close',
-            'shell/showItemInFolder',
-            'shell/openPath',
-          ],
+          traceMeta: true,
+          methods,
+          notifications,
         },
       };
     });
+
+  const ensurePluginsReady = async () => {
+    try {
+      await plugins?.ready;
+    } catch {
+      // ignore
+    }
+  };
+
+  const notifyPlugins = (method, params) => {
+    if (typeof plugins?.notify === 'function') {
+      try {
+        plugins.notify(String(method || ''), params);
+        return;
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      transport.send({ jsonrpc: '2.0', method: String(method || ''), ...(params !== undefined ? { params } : {}) });
+    } catch {}
+  };
+
+  try {
+    workspaceService?.onDidChangeConfiguration?.((settings) => {
+      const payload = { settings: settings && typeof settings === 'object' ? settings : {}, ts: Date.now() };
+      notifyPlugins('workspace/configurationChanged', payload);
+      try {
+        extensionHostService?.connection?.sendNotification?.('workspace/setConfiguration', payload);
+      } catch {}
+    });
+  } catch {
+    // ignore
+  }
+
+  try {
+    connection.onNotification('editor/textDocumentDidOpen', (payload) => {
+      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidOpen', payload); } catch {}
+    });
+    connection.onNotification('editor/textDocumentDidChange', (payload) => {
+      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidChange', payload); } catch {}
+    });
+    connection.onNotification('editor/textDocumentDidClose', (payload) => {
+      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidClose', payload); } catch {}
+    });
+    connection.onNotification('editor/textDocumentDidSave', (payload) => {
+      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidSave', payload); } catch {}
+    });
+    connection.onNotification('editor/activeTextEditorChanged', (payload) => {
+      try { extensionHostService?.connection?.sendNotification?.('editor/activeTextEditorChanged', payload); } catch {}
+    });
+  } catch {
+    // ignore
+  }
 
     connection.onRequest('telemetry/getRpcStats', async () => {
       const items = Array.from(rpcStats.values()).map((s) => ({
@@ -295,6 +410,154 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       return { ok: true, result };
     });
 
+    connection.onRequest('extensions/getStatus', async () => {
+      if (!extensionHostService?.getStatus) return { ok: false, error: 'extension host service unavailable' };
+      return extensionHostService.getStatus();
+    });
+
+    connection.onRequest('extensions/restart', async (payload) => {
+      if (!extensionHostService?.restart) return { ok: false, error: 'extension host service unavailable' };
+      const reason = payload?.reason != null ? String(payload.reason) : 'idebus';
+      try {
+        await extensionHostService.restart(reason);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('extensions/listExtensions', async () => {
+      if (!extensionHostService?.listExtensions) return { ok: false, error: 'extension host service unavailable' };
+      return extensionHostService.listExtensions();
+    });
+
+    connection.onRequest('debug/startSession', async (payload) => {
+      if (!dapService?.startSession) return { ok: false, error: 'debug service unavailable' };
+      try { dapService.touchSender?.(sender); } catch {}
+      return dapService.startSession(payload || {});
+    });
+
+    connection.onRequest('debug/stopSession', async (payload) => {
+      if (!dapService?.stopSession) return { ok: false, error: 'debug service unavailable' };
+      const sessionId = payload?.sessionId ? String(payload.sessionId) : '';
+      try { dapService.touchSender?.(sender); } catch {}
+      return dapService.stopSession(sessionId);
+    });
+
+    connection.onRequest('debug/sendRequest', async (payload) => {
+      if (!dapService?.sendRequest) return { ok: false, error: 'debug service unavailable' };
+      const sessionId = payload?.sessionId ? String(payload.sessionId) : '';
+      const command = payload?.command ? String(payload.command) : '';
+      const args = payload?.args;
+      const options = payload?.options;
+      if (!sessionId) return { ok: false, error: 'missing sessionId' };
+      if (!command) return { ok: false, error: 'missing command' };
+      try { dapService.touchSender?.(sender); } catch {}
+      return dapService.sendRequest(sessionId, command, args, options);
+    });
+
+    connection.onRequest('debug/listSessions', async () => {
+      if (!dapService?.listSessions) return { ok: false, error: 'debug service unavailable' };
+      try { dapService.touchSender?.(sender); } catch {}
+      const items = Array.from(dapService.listSessions?.() || []);
+      return { ok: true, items };
+    });
+
+    connection.onRequest('plugins/search', async (payload) => {
+      if (!plugins?.manager?.search) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const query = payload?.query != null ? String(payload.query) : '';
+      const providerIds = Array.isArray(payload?.providerIds) ? payload.providerIds : undefined;
+      const options = payload?.options && typeof payload.options === 'object' ? payload.options : undefined;
+      const items = await plugins.manager.search({ query, providerIds, options });
+      return { ok: true, items };
+    });
+
+    connection.onRequest('plugins/listInstalled', async () => {
+      if (!plugins?.manager?.listInstalled) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      return { ok: true, items: plugins.manager.listInstalled() };
+    });
+
+    connection.onRequest('plugins/listUpdates', async () => {
+      if (!plugins?.manager?.listUpdates) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const items = await plugins.manager.listUpdates();
+      return { ok: true, items };
+    });
+
+    connection.onRequest('plugins/install', async (payload) => {
+      if (!plugins?.manager?.install) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const ref = payload && typeof payload === 'object' ? payload : {};
+      try {
+        const res = await plugins.manager.install(ref, {
+          onProgress: (p) => notifyPlugins('plugins/progress', { ...(p || {}), ts: Date.now() }),
+        });
+        notifyPlugins('plugins/changed', { items: plugins.manager.listInstalled?.() || [], ts: Date.now() });
+        return res;
+      } catch (err) {
+        notifyPlugins('plugins/error', { action: 'install', pluginId: ref?.id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('plugins/uninstall', async (payload) => {
+      if (!plugins?.manager?.uninstall) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      try {
+        const res = await plugins.manager.uninstall(id);
+        notifyPlugins('plugins/changed', { items: plugins.manager.listInstalled?.() || [], ts: Date.now() });
+        return res;
+      } catch (err) {
+        notifyPlugins('plugins/error', { action: 'uninstall', pluginId: id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('plugins/enable', async (payload) => {
+      if (!plugins?.manager?.enable) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const id = payload?.id != null ? String(payload.id) : '';
+      const trust = payload?.trust != null ? String(payload.trust) : undefined;
+      try {
+        const res = await plugins.manager.enable(id, trust ? { trust } : undefined);
+        notifyPlugins('plugins/changed', { items: plugins.manager.listInstalled?.() || [], ts: Date.now() });
+        return res;
+      } catch (err) {
+        notifyPlugins('plugins/error', { action: 'enable', pluginId: id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('plugins/disable', async (payload) => {
+      if (!plugins?.manager?.disable) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const id = payload?.id != null ? String(payload.id) : '';
+      try {
+        const res = await plugins.manager.disable(id);
+        notifyPlugins('plugins/changed', { items: plugins.manager.listInstalled?.() || [], ts: Date.now() });
+        return res;
+      } catch (err) {
+        notifyPlugins('plugins/error', { action: 'disable', pluginId: id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('plugins/doctor', async (payload) => {
+      if (!plugins?.manager?.doctor) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      return plugins.manager.doctor(id);
+    });
+
+    connection.onRequest('plugins/listEnabledLanguages', async () => {
+      if (!plugins?.manager?.listEnabledLanguages) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      return { ok: true, items: plugins.manager.listEnabledLanguages() };
+    });
+
     connection.onRequest('app/getInfo', async () => {
       return {
         ok: true,
@@ -359,6 +622,87 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       } catch {}
       try { await extensionHostService?.restart?.('workspace/close'); } catch {}
       return { ok: true };
+    });
+
+    connection.onRequest('workspace/getWorkspaceFolders', async () => {
+      const fsPath = String(workspaceService?.getCurrent?.()?.fsPath || '').trim();
+      if (!fsPath) return { ok: true, folders: [] };
+      let uri = '';
+      try {
+        // eslint-disable-next-line global-require
+        const { pathToFileURL } = require('node:url');
+        uri = pathToFileURL(fsPath).toString();
+      } catch {
+        uri = '';
+      }
+      const name = path.basename(fsPath.replace(/[\\\/]+$/, '')) || fsPath;
+      return { ok: true, folders: [{ uri, fsPath, name, index: 0 }] };
+    });
+
+    connection.onRequest('workspace/getConfiguration', async (payload) => {
+      const fsPath = payload?.fsPath ? String(payload.fsPath) : String(workspaceService?.getCurrent?.()?.fsPath || '');
+      const section = payload?.section != null ? String(payload.section) : '';
+      const currentFsPath = String(workspaceService?.getCurrent?.()?.fsPath || '');
+      const settings = (fsPath && currentFsPath && fsPath === currentFsPath && typeof workspaceService?.getConfiguration === 'function')
+        ? workspaceService.getConfiguration()
+        : readWorkspaceSettingsSync(fsPath);
+      if (!section) return { ok: true, settings, section: '' };
+      const scoped = settings && typeof settings === 'object' && Object.prototype.hasOwnProperty.call(settings, section) ? settings[section] : settings;
+      return { ok: true, settings: scoped, section };
+    });
+
+    connection.onRequest('workspace/openTextDocument', async (payload) => {
+      const workspaceRootFsPath = String(workspaceService?.getCurrent?.()?.fsPath || '');
+      const uriOrPath = payload?.uriOrPath != null ? payload.uriOrPath : (payload?.uri || payload?.path || payload?.fileName);
+      return await openTextDocument({ workspaceRootFsPath, uriOrPath });
+    });
+
+    connection.onRequest('languages/provideCompletionItems', async (payload) => {
+      const languageId = payload?.languageId ? String(payload.languageId) : '';
+      const uri = payload?.uri ? String(payload.uri) : '';
+      const text = payload?.text != null ? String(payload.text) : '';
+      const version = Number.isFinite(payload?.version) ? payload.version : 1;
+      const position = payload?.position && typeof payload.position === 'object' ? payload.position : null;
+      if (!languageId) return { ok: true, items: [] };
+      const res = await extensionHostService?.provideCompletionItems?.({ languageId, uri, text, version, position }) ?? { ok: true, items: [] };
+      if (res && res.ok) return res;
+      return { ok: true, items: [] };
+    });
+
+    connection.onRequest('lsp/applyEditResponse', async (payload) => {
+      const requestId = payload?.requestId != null ? String(payload.requestId) : '';
+      const result = payload?.result;
+      if (!requestId) return { ok: false, error: 'missing requestId' };
+      if (!lspService?.handleApplyEditResponse) return { ok: false, error: 'lsp service not available' };
+      const senderWebContentsId = sender?.id || 0;
+      return lspService.handleApplyEditResponse({ senderWebContentsId, requestId, result });
+    });
+
+    connection.onRequest('workspace/applyEditResponse', async (payload) => {
+      const requestId = payload?.requestId != null ? String(payload.requestId) : '';
+      const result = payload?.result;
+      if (!requestId) return { ok: false, error: 'missing requestId' };
+      if (!extensionHostService?.handleWorkspaceApplyEditResponse) return { ok: false, error: 'extension host not available' };
+      const senderWebContentsId = sender?.id || 0;
+      return extensionHostService.handleWorkspaceApplyEditResponse({ senderWebContentsId, requestId, result });
+    });
+
+    connection.onRequest('window/showInputBoxResponse', async (payload) => {
+      const requestId = payload?.requestId != null ? String(payload.requestId) : '';
+      const result = payload?.result && typeof payload.result === 'object' ? payload.result : {};
+      if (!requestId) return { ok: false, error: 'missing requestId' };
+      if (!extensionHostService?.handlePromptResponse) return { ok: false, error: 'extension host not available' };
+      const senderWebContentsId = sender?.id || 0;
+      return extensionHostService.handlePromptResponse({ senderWebContentsId, requestId, kind: 'inputBox', result });
+    });
+
+    connection.onRequest('window/showQuickPickResponse', async (payload) => {
+      const requestId = payload?.requestId != null ? String(payload.requestId) : '';
+      const result = payload?.result && typeof payload.result === 'object' ? payload.result : {};
+      if (!requestId) return { ok: false, error: 'missing requestId' };
+      if (!extensionHostService?.handlePromptResponse) return { ok: false, error: 'extension host not available' };
+      const senderWebContentsId = sender?.id || 0;
+      return extensionHostService.handlePromptResponse({ senderWebContentsId, requestId, kind: 'quickPick', result });
     });
 
     connection.onRequest('window/minimize', async () => {
@@ -489,6 +833,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       const openMode = payload && payload.openMode ? String(payload.openMode) : '';
       const workspaceFsPath = '';
       const newWindow = !openFile;
+      const preloadPath = resolvePreloadPath(path.join(__dirname, '..', '..'));
 
       const win = new BrowserWindow({
         width: 1400,
@@ -496,7 +841,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         frame: false,
         autoHideMenuBar: true,
         webPreferences: {
-          preload: path.join(__dirname, '..', '..', 'preload.js'),
+          preload: preloadPath,
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
@@ -536,6 +881,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
       const workspaceFsPath = payload && payload.workspaceFsPath ? String(payload.workspaceFsPath) : '';
       const terminalProfile = payload && payload.terminalProfile ? String(payload.terminalProfile) : '';
+      const preloadPath = resolvePreloadPath(path.join(__dirname, '..', '..'));
 
       const win = new BrowserWindow({
         width: 980,
@@ -543,7 +889,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         frame: true,
         autoHideMenuBar: true,
         webPreferences: {
-          preload: path.join(__dirname, '..', '..', 'preload.js'),
+          preload: preloadPath,
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,

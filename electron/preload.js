@@ -1,107 +1,115 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-class JsonRpcConnection {
-  constructor(transport, { name } = {}) {
-    this.transport = transport;
-    this.name = name ? String(name) : '';
-    this.nextId = 1;
-    this.pending = new Map();
-    this.notificationHandlers = new Map();
+let JsonRpcConnection = null;
+try {
+  // In Electron sandboxed renderer preloads, Node-style module loading for local files is restricted.
+  // Prefer the shared implementation when available, but fall back to a minimal one so preload can load.
+  // eslint-disable-next-line global-require
+  ({ JsonRpcConnection } = require('./main/lsp/jsonrpc/JsonRpcConnection'));
+} catch {
+  JsonRpcConnection = class JsonRpcConnection {
+    constructor(transport, { name } = {}) {
+      this.transport = transport;
+      this.name = name ? String(name) : '';
+      this.nextId = 1;
+      this.pending = new Map();
+      this.notificationHandlers = new Map();
 
-    transport.onMessage((msg) => this._onMessage(msg));
-    transport.onClose?.(() => this._onClose());
-  }
-
-  _onClose() {
-    for (const entry of this.pending.values()) {
-      try { clearTimeout(entry.timer); } catch {}
-      try { entry.reject(new Error('connection closed')); } catch {}
+      transport.onMessage((msg) => this._onMessage(msg));
+      transport.onClose?.(() => this._onClose());
     }
-    this.pending.clear();
-  }
 
-  _onMessage(msg) {
-    if (!msg || typeof msg !== 'object') return;
+    _onClose() {
+      for (const entry of this.pending.values()) {
+        try { clearTimeout(entry.timer); } catch {}
+        try { entry.reject(new Error('connection closed')); } catch {}
+      }
+      this.pending.clear();
+    }
 
-    const id = msg.id;
-    if (id != null) {
-      const entry = this.pending.get(id);
-      if (!entry) return;
-      this.pending.delete(id);
-      try { clearTimeout(entry.timer); } catch {}
+    _onMessage(msg) {
+      if (!msg || typeof msg !== 'object') return;
 
-      if (msg.error) {
-        const message = msg?.error?.message != null ? String(msg.error.message) : 'request failed';
-        const err = new Error(message);
-        err.code = msg?.error?.code;
-        err.data = msg?.error?.data;
-        entry.reject(err);
+      const id = msg.id;
+      if (id != null) {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        try { clearTimeout(entry.timer); } catch {}
+
+        if (msg.error) {
+          const message = msg?.error?.message != null ? String(msg.error.message) : 'request failed';
+          const err = new Error(message);
+          err.code = msg?.error?.code;
+          err.data = msg?.error?.data;
+          entry.reject(err);
+          return;
+        }
+        entry.resolve(msg.result);
         return;
       }
-      entry.resolve(msg.result);
-      return;
+
+      const method = msg.method ? String(msg.method) : '';
+      if (!method) return;
+      const set = this.notificationHandlers.get(method);
+      if (!set || set.size === 0) return;
+      for (const handler of Array.from(set)) {
+        try {
+          handler(msg.params);
+        } catch {}
+      }
     }
 
-    const method = msg.method ? String(msg.method) : '';
-    if (!method) return;
-    const set = this.notificationHandlers.get(method);
-    if (!set || set.size === 0) return;
-    for (const handler of Array.from(set)) {
-      try {
-        handler(msg.params);
-      } catch {}
+    sendRequest(method, params, options) {
+      const id = this.nextId++;
+      const timeoutMs = options && typeof options === 'object' ? Number(options.timeoutMs) : 0;
+
+      return new Promise((resolve, reject) => {
+        const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error('request timeout'));
+            }, timeoutMs)
+          : null;
+
+        this.pending.set(id, { resolve, reject, timer });
+        this.transport.send({
+          jsonrpc: '2.0',
+          id,
+          method: String(method || ''),
+          ...(params === undefined ? {} : { params }),
+        });
+      });
     }
-  }
 
-  sendRequest(method, params, options) {
-    const id = this.nextId++;
-    const timeoutMs = options && typeof options === 'object' ? Number(options.timeoutMs) : 0;
-
-    return new Promise((resolve, reject) => {
-      const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? setTimeout(() => {
-            this.pending.delete(id);
-            reject(new Error('request timeout'));
-          }, timeoutMs)
-        : null;
-
-      this.pending.set(id, { resolve, reject, timer });
+    sendNotification(method, params) {
       this.transport.send({
         jsonrpc: '2.0',
-        id,
         method: String(method || ''),
         ...(params === undefined ? {} : { params }),
       });
-    });
-  }
+    }
 
-  sendNotification(method, params) {
-    this.transport.send({
-      jsonrpc: '2.0',
-      method: String(method || ''),
-      ...(params === undefined ? {} : { params }),
-    });
-  }
+    onNotification(method, handler) {
+      const m = String(method || '');
+      if (!m || typeof handler !== 'function') return () => {};
+      const set = this.notificationHandlers.get(m) || new Set();
+      set.add(handler);
+      this.notificationHandlers.set(m, set);
+      return () => {
+        const cur = this.notificationHandlers.get(m);
+        if (!cur) return;
+        cur.delete(handler);
+        if (cur.size === 0) this.notificationHandlers.delete(m);
+      };
+    }
 
-  onNotification(method, handler) {
-    const m = String(method || '');
-    if (!m || typeof handler !== 'function') return () => {};
-    const set = this.notificationHandlers.get(m) || new Set();
-    set.add(handler);
-    this.notificationHandlers.set(m, set);
-    return () => {
-      const cur = this.notificationHandlers.get(m);
-      if (!cur) return;
-      cur.delete(handler);
-      if (cur.size === 0) this.notificationHandlers.delete(m);
-    };
-  }
-
-  dispose() {
-    try { this.transport.close?.(); } catch {}
-    this.notificationHandlers.clear();
-    this._onClose();
-  }
+    dispose() {
+      try { this.transport.close?.(); } catch {}
+      this.notificationHandlers.clear();
+      this._onClose();
+    }
+  };
 }
 
 class IpcRendererTransport {
@@ -222,6 +230,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     close: () => tryBus('workspace/close', undefined, () => ipcRenderer.invoke('workspace:close')),
     getTrust: (fsPath) => tryBus('workspace/getTrust', { fsPath }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: false })),
     setTrust: (fsPath, trusted) => tryBus('workspace/setTrust', { fsPath, trusted: !!trusted }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: !!trusted })),
+    getConfiguration: (section, fsPath) =>
+      tryBus('workspace/getConfiguration', { section: section == null ? '' : String(section), fsPath: fsPath == null ? '' : String(fsPath) }, async () => ({ ok: false, settings: {}, section: section == null ? '' : String(section) })),
+    openTextDocument: (uriOrPath) =>
+      tryBus('workspace/openTextDocument', { uriOrPath }, async () => ({ ok: false, error: 'workspace/openTextDocument unavailable' })),
+  },
+  extensions: {
+    getStatus: () => tryBus('extensions/getStatus', undefined, async () => ({ ok: false, running: false, trusted: false })),
+    restart: (reason) => tryBus('extensions/restart', { reason }, async () => ({ ok: false })),
+    listExtensions: () => tryBus('extensions/listExtensions', undefined, async () => ({ ok: false, items: [] })),
   },
   setTitlebarTheme: (theme) => ipcRenderer.send('renderer-theme-updated', theme),
   git: {
@@ -256,6 +273,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('lsp:ensureServer', workspaceId, languageId, serverConfig, workspace),
     ensureServerForDocument: (workspaceId, languageId, filePath, workspace) =>
       ipcRenderer.invoke('lsp:ensureServerForDocument', workspaceId, languageId, filePath, workspace),
+    shutdownWorkspace: (workspaceId) => ipcRenderer.invoke('lsp:shutdownWorkspace', workspaceId),
     openDocument: (serverId, doc) => ipcRenderer.invoke('lsp:openDocument', serverId, doc),
     changeDocument: (serverId, change) => ipcRenderer.invoke('lsp:changeDocument', serverId, change),
     closeDocument: (serverId, uri) => ipcRenderer.invoke('lsp:closeDocument', serverId, uri),
@@ -303,48 +321,68 @@ contextBridge.exposeInMainWorld('electronAPI', {
     willDeleteFiles: (workspaceId, params, options) => ipcRenderer.invoke('lsp:willDeleteFiles', workspaceId, params, options),
     didDeleteFiles: (workspaceId, params) => ipcRenderer.invoke('lsp:didDeleteFiles', workspaceId, params),
     cancel: (token) => ipcRenderer.invoke('lsp:cancel', token),
-    applyEditResponse: (requestId, result) => ipcRenderer.invoke('lsp:applyEditResponse', requestId, result),
+    applyEditResponse: (requestId, result) =>
+      tryBus('lsp/applyEditResponse', { requestId: String(requestId || ''), result: result && typeof result === 'object' ? result : {} }, () => ipcRenderer.invoke('lsp:applyEditResponse', requestId, result)),
     onApplyEditRequest: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/applyEditRequest', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:applyEditRequest', fn);
       return () => ipcRenderer.off('lsp:applyEditRequest', fn);
     },
     onDiagnostics: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/diagnostics', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:diagnostics', fn);
       return () => ipcRenderer.off('lsp:diagnostics', fn);
     },
     onLog: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/log', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:log', fn);
       return () => ipcRenderer.off('lsp:log', fn);
     },
     onProgress: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/progress', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:progress', fn);
       return () => ipcRenderer.off('lsp:progress', fn);
     },
     onServerStatus: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/serverStatus', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:serverStatus', fn);
       return () => ipcRenderer.off('lsp:serverStatus', fn);
     },
     onServerCapabilities: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('lsp/serverCapabilities', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('lsp:serverCapabilities', fn);
       return () => ipcRenderer.off('lsp:serverCapabilities', fn);
     },
   },
   plugins: {
-    search: (query, providerIds, options) => ipcRenderer.invoke('plugins:search', query, providerIds, options),
-    listInstalled: () => ipcRenderer.invoke('plugins:listInstalled'),
-    listUpdates: () => ipcRenderer.invoke('plugins:listUpdates'),
-    install: (ref) => ipcRenderer.invoke('plugins:install', ref),
-    uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
-    enable: (id, trust) => ipcRenderer.invoke('plugins:enable', id, trust),
-    disable: (id) => ipcRenderer.invoke('plugins:disable', id),
-    doctor: (id) => ipcRenderer.invoke('plugins:doctor', id),
-    listEnabledLanguages: () => ipcRenderer.invoke('plugins:listEnabledLanguages'),
+    search: (query, providerIds, options) =>
+      tryBus('plugins/search', { query, providerIds, options }, () => ipcRenderer.invoke('plugins:search', query, providerIds, options)),
+    listInstalled: () => tryBus('plugins/listInstalled', undefined, () => ipcRenderer.invoke('plugins:listInstalled')),
+    listUpdates: () => tryBus('plugins/listUpdates', undefined, () => ipcRenderer.invoke('plugins:listUpdates')),
+    install: (ref) => tryBus('plugins/install', ref, () => ipcRenderer.invoke('plugins:install', ref)),
+    uninstall: (id) => tryBus('plugins/uninstall', { id }, () => ipcRenderer.invoke('plugins:uninstall', id)),
+    enable: (id, trust) => tryBus('plugins/enable', { id, trust }, () => ipcRenderer.invoke('plugins:enable', id, trust)),
+    disable: (id) => tryBus('plugins/disable', { id }, () => ipcRenderer.invoke('plugins:disable', id)),
+    doctor: (id) => tryBus('plugins/doctor', { id }, () => ipcRenderer.invoke('plugins:doctor', id)),
+    listEnabledLanguages: () => tryBus('plugins/listEnabledLanguages', undefined, () => ipcRenderer.invoke('plugins:listEnabledLanguages')),
     onProgress: (handler) => {
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:progress', fn);
@@ -362,16 +400,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   dap: {
-    startSession: (payload) => ipcRenderer.invoke('dap:startSession', payload),
-    stopSession: (sessionId) => ipcRenderer.invoke('dap:stopSession', sessionId),
-    sendRequest: (sessionId, command, args, options) => ipcRenderer.invoke('dap:sendRequest', sessionId, command, args, options),
-    listSessions: () => ipcRenderer.invoke('dap:listSessions'),
+    startSession: (payload) => tryBus('debug/startSession', payload, () => ipcRenderer.invoke('dap:startSession', payload)),
+    stopSession: (sessionId) => tryBus('debug/stopSession', { sessionId }, () => ipcRenderer.invoke('dap:stopSession', sessionId)),
+    sendRequest: (sessionId, command, args, options) =>
+      tryBus('debug/sendRequest', { sessionId, command, args, options }, () => ipcRenderer.invoke('dap:sendRequest', sessionId, command, args, options)),
+    listSessions: () => tryBus('debug/listSessions', undefined, () => ipcRenderer.invoke('dap:listSessions')),
     onEvent: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('debug/event', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('dap:event', fn);
       return () => ipcRenderer.off('dap:event', fn);
     },
     onStatus: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('debug/status', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('dap:status', fn);
       return () => ipcRenderer.off('dap:status', fn);

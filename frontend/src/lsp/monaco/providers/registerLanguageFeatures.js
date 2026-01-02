@@ -12,6 +12,7 @@ export const registerLanguageFeatures = (monaco, {
   lspRangeToMonacoRange,
   lspKindToMonacoKind,
   normalizeCompletionItems,
+  ideBus,
   guessIsWindows,
   fileUriToFsPath,
   toWorkspaceRelativePath,
@@ -74,7 +75,44 @@ export const registerLanguageFeatures = (monaco, {
               data: { serverId: state.serverId, uri: state.uri, lspItem: it },
             };
           }).filter((s) => s.label);
-          return { suggestions };
+
+          const extItems = await (async () => {
+            const bus = ideBus || globalThis?.window?.electronAPI?.ideBus || null;
+            if (!bus?.request) return [];
+            const pos = params.position;
+            if (!pos) return [];
+            try {
+              const busRes = await bus.request('languages/provideCompletionItems', {
+                languageId,
+                uri: state.uri,
+                text: model.getValue?.() ?? '',
+                version: typeof model?.getVersionId === 'function' ? Number(model.getVersionId()) : 1,
+                position: pos,
+              }, { timeoutMs: 500 });
+              const list = Array.isArray(busRes?.items) ? busRes.items : [];
+              return list;
+            } catch {
+              return [];
+            }
+          })();
+
+          const extSuggestions = extItems.map((it) => {
+            const label = it?.label != null ? String(it.label) : '';
+            if (!label) return null;
+            const insertText = it?.insertText != null ? String(it.insertText) : label;
+            const documentation = it?.documentation != null ? String(it.documentation) : '';
+            const kind = Number.isFinite(it?.kind) ? it.kind : undefined;
+            return {
+              label,
+              kind: kind != null ? lspKindToMonacoKind?.(monaco, kind) : monaco.languages.CompletionItemKind.Text,
+              detail: it?.detail ? String(it.detail) : undefined,
+              documentation: documentation ? String(documentation) : undefined,
+              insertText,
+              range: defaultRange,
+              data: { source: 'extension', uri: state.uri },
+            };
+          }).filter(Boolean);
+          return { suggestions: [...suggestions, ...extSuggestions] };
         },
       }) ?? { suggestions: [] };
     },

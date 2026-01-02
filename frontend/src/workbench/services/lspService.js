@@ -279,6 +279,7 @@ export const lspService = (() => {
 
   const modelSync = createModelSync({
     bridge,
+    ideBus: globalThis?.window?.electronAPI?.ideBus || null,
     supportedLanguageIds,
     ensureServerForLanguage,
     getRootFsPath: () => rootFsPath,
@@ -688,6 +689,7 @@ export const lspService = (() => {
         bridge,
         outputService,
         rootFsPath,
+        ideBus: globalThis?.window?.electronAPI?.ideBus || null,
         getDocState: modelSync.getDocState,
         completionRequest,
         hoverRequest,
@@ -897,6 +899,62 @@ export const lspService = (() => {
       }
     });
 
+    const ideBus = globalThis?.window?.electronAPI?.ideBus || null;
+    const disposeWorkspaceApplyEdit = ideBus?.onNotification
+      ? ideBus.onNotification('workspace/applyEditRequest', async (payload) => {
+        const requestId = String(payload?.requestId || '').trim();
+        if (!requestId) return;
+        try {
+          if (!monacoRef) throw new Error('monaco is not ready');
+          await applyWorkspaceEdit(payload?.edit);
+          await ideBus.request('workspace/applyEditResponse', { requestId, result: { applied: true } }, { timeoutMs: 10_000 });
+        } catch (err) {
+          try {
+            await ideBus.request('workspace/applyEditResponse', { requestId, result: { applied: false, failureReason: err?.message || String(err) } }, { timeoutMs: 10_000 });
+          } catch {
+            // ignore
+          }
+        }
+      })
+      : null;
+    const notifyActiveTextEditor = (model) => {
+      if (!ideBus?.notify) return;
+      const state = modelSync.getDocState?.(model);
+      const uri = String(state?.uri || '').trim();
+      if (!uri) return;
+      try {
+        ideBus.notify('editor/activeTextEditorChanged', { uri, ts: Date.now() });
+      } catch {
+        // ignore
+      }
+    };
+
+    const editorDisposables = new Set();
+    const disposeActiveTracker = typeof monaco.editor?.onDidCreateEditor === 'function'
+      ? monaco.editor.onDidCreateEditor((editor) => {
+        if (!editor) return;
+        const per = [];
+        const track = () => {
+          const model = editor.getModel?.();
+          if (!model) return;
+          void modelSync.openModelIfNeeded(model).catch(() => {});
+          notifyActiveTextEditor(model);
+        };
+        try { per.push(editor.onDidFocusEditorWidget?.(track)); } catch {}
+        try { per.push(editor.onDidChangeModel?.(track)); } catch {}
+        try { if (editor.hasTextFocus?.()) track(); } catch {}
+        try {
+          editor.onDidDispose?.(() => {
+            for (const d of per) {
+              try { d?.dispose?.(); } catch {}
+            }
+            editorDisposables.delete(per);
+          });
+        } catch {}
+        editorDisposables.add(per);
+      })
+      : null;
+
     monaco.editor.onDidCreateModel((model) => {
       void modelSync.openModelIfNeeded(model).catch(() => {});
     });
@@ -916,8 +974,16 @@ export const lspService = (() => {
       disposeExtDiagnostics?.();
       disposeLog?.();
       disposeApplyEdit?.();
+      disposeWorkspaceApplyEdit?.();
       disposeStatus?.();
       disposeCaps?.();
+      try { disposeActiveTracker?.dispose?.(); } catch {}
+      for (const per of Array.from(editorDisposables)) {
+        for (const d of Array.isArray(per) ? per : []) {
+          try { d?.dispose?.(); } catch {}
+        }
+      }
+      editorDisposables.clear();
     };
   };
 
@@ -949,6 +1015,13 @@ export const lspService = (() => {
     };
 
     if (workspaceChanged) {
+      if (prevWorkspaceId) {
+        try {
+          void bridge.shutdownWorkspace(prevWorkspaceId).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
       serverInfoByKey.clear();
       ensureFailTsByKey.clear();
       serverCapsById.clear();
