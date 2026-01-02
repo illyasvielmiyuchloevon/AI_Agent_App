@@ -109,7 +109,7 @@ export function useGit({
 
   const unstageAll = useCallback(async () => {
     if (!backendWorkspaceRoot) return;
-    const hasStaged = gitStatus?.files?.some((f) => ['A', 'M', 'D', 'R'].includes(f.working_dir) === false && ['A', 'M', 'D', 'R'].includes(f.index));
+    const hasStaged = gitStatus?.files?.some((f) => ['A', 'M', 'D', 'R'].includes(f.index));
     if (!hasStaged) return;
     await GitDriver.unstage(backendWorkspaceRoot, '.');
     refreshGitStatus();
@@ -407,4 +407,3 @@ export function useGit({
     openBatchDiffs,
   };
 }
-

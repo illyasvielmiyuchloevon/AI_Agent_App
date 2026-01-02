@@ -161,6 +161,18 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     }
   };
 
+  const pluginErrorLastTsByKey = new Map();
+  const emitPluginError = (payload, dedupeKey) => {
+    const key = String(dedupeKey || '').trim();
+    const now = Date.now();
+    if (key) {
+      const last = pluginErrorLastTsByKey.get(key) || 0;
+      if (now - last < 15_000) return;
+      pluginErrorLastTsByKey.set(key, now);
+    }
+    try { broadcast?.('plugins:error', { ...(payload || {}), ts: now }); } catch {}
+  };
+
   ipcMain.handle('lsp:ensureServer', async (event, workspaceId, languageId, serverConfig, workspace) => {
     ensureSenderSubscribed(event);
     return manager.ensureServer({ workspaceId, languageId, serverConfig, workspace });
@@ -173,7 +185,7 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
     } catch {
       // ignore
     }
-    if (!pluginManager) throw new Error('language plugins are not available');
+    if (!pluginManager) return { ok: false, error: 'language plugins are not available' };
 
     const wid = String(workspaceId || '').trim();
     const lang = String(languageId || '').trim();
@@ -217,12 +229,17 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
 
     if (resolvedMany?.ok) {
       const configs = Array.isArray(resolvedMany.serverConfigs) ? resolvedMany.serverConfigs : [];
-      if (!configs.length) throw new Error('plugin has no matching server');
+      if (!configs.length) {
+        const msg = 'plugin has no matching server';
+        emitPluginError({ pluginId: preferred || '', message: msg }, `lsp:ensureServerForDocument:${wid}:${lang}:${preferred}:${msg}`);
+        return { ok: false, error: msg, plugin: resolvedMany.plugin };
+      }
       const ensured = await Promise.all(configs.map((cfg) => manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: cfg, workspace: workspaceForFile })));
       const primaryIdx = Math.max(0, configs.findIndex((c) => String(c?.role || '').toLowerCase() === 'primary'));
       const serverIds = ensured.map((r) => String(r?.serverId || '')).filter(Boolean);
       const serverId = serverIds[primaryIdx] || serverIds[0] || '';
       return {
+        ok: true,
         serverId,
         serverIds,
         servers: serverIds.map((sid, i) => ({ serverId: sid, serverConfigId: configs[i]?.id, role: configs[i]?.role || '' })),
@@ -232,12 +249,12 @@ function createLspMainService({ ipcMain, logger, broadcast, plugins } = {}) {
 
     if (!resolvedOne?.ok) {
       const msg = resolvedOne?.error || 'no matching language plugin';
-      try { broadcast?.('plugins:error', { pluginId: preferred || '', message: msg, ts: Date.now() }); } catch {}
-      throw new Error(msg);
+      emitPluginError({ pluginId: preferred || '', message: msg }, `lsp:ensureServerForDocument:${wid}:${lang}:${preferred}:${msg}`);
+      return { ok: false, error: msg };
     }
 
     const res = await manager.ensureServer({ workspaceId: wid, languageId: lang, serverConfig: resolvedOne.serverConfig, workspace: workspaceForFile });
-    return { ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
+    return { ok: true, ...res, serverIds: [res.serverId], servers: [{ serverId: res.serverId, serverConfigId: resolvedOne.serverConfig?.id, role: resolvedOne.serverConfig?.role || '' }], plugin: resolvedOne.plugin, serverConfigId: resolvedOne.serverConfig?.id };
   });
 
   ipcMain.handle('lsp:openDocument', async (event, serverId, doc) => {

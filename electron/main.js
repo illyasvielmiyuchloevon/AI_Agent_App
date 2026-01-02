@@ -206,13 +206,13 @@ app.whenReady().then(() => {
       if (hasHead) {
         await git.reset(['HEAD']);
       } else {
-        await git.raw(['restore', '--staged', '--', '.']);
+        await git.raw(['rm', '--cached', '-r', '--', '.']);
       }
     } else {
       if (hasHead) {
         await git.reset(['HEAD', '--', ...targetList]);
       } else {
-        await git.raw(['restore', '--staged', '--', ...targetList]);
+        await git.raw(['rm', '--cached', '--', ...targetList]);
       }
     }
     return { success: true };

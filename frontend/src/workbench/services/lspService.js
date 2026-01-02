@@ -105,6 +105,7 @@ export const lspService = (() => {
   };
 
   const serverInfoByKey = new Map(); // `${workspaceId}::${rootFsPath}::${languageId}` -> { serverId, serverIds }
+  const ensureFailTsByKey = new Map(); // `${workspaceId}::${rootFsPath}::${languageId}` -> last failure ts
   const serverCapsById = new Map(); // serverId -> capabilities
   const semanticTokenMapByServerId = new Map(); // serverId -> { tokenTypeIndexMap:number[], modifierBitMap:bigint[], supportsDelta:boolean, supportsRange:boolean }
 
@@ -219,6 +220,8 @@ export const lspService = (() => {
     const abs = filePath ? resolveFsPath(rootFsPath, String(filePath || '')) : String(rootFsPath || '');
     const chosenRoot = pickContainingRootFsPath(workspaceFolders, abs) || String(rootFsPath || '').trim();
     const cacheKey = `${workspaceId}::${chosenRoot}::${lang}`;
+    const lastFail = ensureFailTsByKey.get(cacheKey) || 0;
+    if (lastFail && Date.now() - lastFail < 15_000) return { serverId: '', serverIds: [] };
     const cached = serverInfoByKey.get(cacheKey);
     if (cached?.serverId) return cached;
 
@@ -229,10 +232,19 @@ export const lspService = (() => {
         outputService.append('LSP', `[ERROR] ensureServer failed: ${err?.message || String(err)}`);
         return null;
       });
+      if (res?.ok === false) {
+        ensureFailTsByKey.set(cacheKey, Date.now());
+        return { serverId: '', serverIds: [] };
+      }
       const primary = String(res?.serverId || '');
       const all = Array.isArray(res?.serverIds) ? res.serverIds.map((x) => String(x || '')).filter(Boolean) : (primary ? [primary] : []);
       const info = { serverId: primary, serverIds: all.length ? all : (primary ? [primary] : []) };
-      if (info.serverId) serverInfoByKey.set(cacheKey, info);
+      if (info.serverId) {
+        ensureFailTsByKey.delete(cacheKey);
+        serverInfoByKey.set(cacheKey, info);
+      } else {
+        ensureFailTsByKey.set(cacheKey, Date.now());
+      }
       return info;
     }
 
@@ -918,6 +930,7 @@ export const lspService = (() => {
 
     if (workspaceChanged) {
       serverInfoByKey.clear();
+      ensureFailTsByKey.clear();
       serverCapsById.clear();
       semanticTokenMapByServerId.clear();
       modelSync.clearDocumentsAndClose();
