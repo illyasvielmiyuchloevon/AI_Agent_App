@@ -6,12 +6,17 @@ class GitHubReleasesProvider {
     this.known = Array.isArray(known) ? known : [];
   }
 
-  async search(query = '') {
+  async search(query = '', options) {
     const q = String(query || '').trim().toLowerCase();
-    if (!q) return this.known.map((x) => ({ ...x, source: { providerId: this.id, repo: x.repo } }));
-    return this.known
-      .filter((p) => (`${p.id} ${p.name || ''} ${p.description || ''} ${p.repo || ''}`).toLowerCase().includes(q))
-      .map((x) => ({ ...x, source: { providerId: this.id, repo: x.repo } }));
+    const offset = Number.isFinite(options?.offset) ? Math.max(0, Number(options.offset)) : 0;
+    const limit = Number.isFinite(options?.limit) ? Math.max(0, Number(options.limit)) : 0;
+    const filtered = !q
+      ? this.known
+      : this.known.filter((p) => (`${p.id} ${p.name || ''} ${p.description || ''} ${p.repo || ''}`).toLowerCase().includes(q));
+    const sliced = (!offset && !limit)
+      ? filtered
+      : filtered.slice(offset || 0, limit ? ((offset || 0) + limit) : undefined);
+    return sliced.map((x) => ({ ...x, source: { providerId: this.id, repo: x.repo } }));
   }
 
   async get(id) {
@@ -53,4 +58,3 @@ class GitHubReleasesProvider {
 }
 
 module.exports = { GitHubReleasesProvider };
-

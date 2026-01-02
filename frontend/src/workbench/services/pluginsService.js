@@ -78,11 +78,11 @@ export const pluginsService = (() => {
       return () => listeners.delete(fn);
     },
     getSnapshot: () => snapshot,
-    search: async (query, providerIds) => {
+    search: async (query, providerIds, options) => {
       const a = api();
       if (!a?.search) return { ok: false, items: [] };
       ensureSubscriptions();
-      return a.search(query, providerIds);
+      return a.search(query, providerIds, options);
     },
     listInstalled,
     listUpdates,
@@ -124,4 +124,3 @@ export const pluginsService = (() => {
     },
   };
 })();
-

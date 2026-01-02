@@ -24,14 +24,19 @@ class OfficialCatalogProvider {
     return items.filter((x) => x && typeof x === 'object');
   }
 
-  async search(query = '') {
+  async search(query = '', options) {
     const q = String(query || '').trim().toLowerCase();
     const items = this._readCatalog();
-    if (!q) return items;
-    return items.filter((p) => {
+    const filtered = !q ? items : items.filter((p) => {
       const hay = `${p.id} ${p.name || ''} ${p.description || ''} ${(p.languages || []).join(' ')}`.toLowerCase();
       return hay.includes(q);
     });
+    const offset = Number.isFinite(options?.offset) ? Math.max(0, Number(options.offset)) : 0;
+    const limit = Number.isFinite(options?.limit) ? Math.max(0, Number(options.limit)) : 0;
+    if (!offset && !limit) return filtered;
+    const start = offset || 0;
+    const end = limit ? (start + limit) : undefined;
+    return filtered.slice(start, end);
   }
 
   async get(id) {
@@ -43,4 +48,3 @@ class OfficialCatalogProvider {
 }
 
 module.exports = { OfficialCatalogProvider };
-

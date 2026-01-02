@@ -76,14 +76,16 @@ class LanguagePluginManager {
     }));
   }
 
-  async search({ query = '', providerIds = ['official', 'github', 'openvsx'] } = {}) {
+  async search({ query = '', providerIds = ['official', 'github', 'openvsx'], options } = {}) {
     const q = String(query || '').trim();
+    const offset = Number.isFinite(options?.offset) ? Math.max(0, Number(options.offset)) : 0;
+    const limit = Number.isFinite(options?.limit) ? Math.max(0, Number(options.limit)) : 0;
     const list = [];
     for (const id of Array.isArray(providerIds) ? providerIds : []) {
       const p = this.providers.get(String(id));
       if (!p?.search) continue;
       try {
-        const res = await p.search(q);
+        const res = await p.search(q, { offset, limit });
         for (const it of Array.isArray(res) ? res : []) list.push({ ...it, source: { ...(it.source || {}), providerId: p.id } });
       } catch (err) {
         this.logger?.warn?.('plugin search failed', { providerId: id, error: err?.message || String(err) });

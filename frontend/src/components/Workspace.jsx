@@ -1,6 +1,8 @@
 import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
+import { useSyncExternalStore } from 'react';
 import PanelShell from '../workbench/bottom-panel/PanelShell';
 import { lspService } from '../workbench/services/lspService';
+import { debugService } from '../workbench/services/debugService';
 import ManagedDiffEditor from './ManagedDiffEditor';
 import WorkspaceEditorGroups from './WorkspaceEditorGroups';
 import { useWorkspaceAi, WorkspaceAiOverlay } from './WorkspaceAiOverlay';
@@ -29,6 +31,12 @@ import {
 } from '../utils/appAlgorithms';
 
 const MonacoEditor = React.lazy(() => loadMonacoEditorWithUndoRedoPatch());
+
+const normalizeFileKey = (filePath) => {
+  const raw = String(filePath || '');
+  const cleaned = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return cleaned;
+};
 
 function Workspace({
   files,
@@ -253,6 +261,8 @@ function Workspace({
     return normalized;
   }, [undoRedoLimit]);
 
+  const debugSnap = useSyncExternalStore(debugService.subscribe, debugService.getSnapshot, debugService.getSnapshot);
+
   const {
     editorRef,
     monacoRef,
@@ -321,6 +331,90 @@ function Workspace({
     getEditorInstanceByGroupId,
     onOpenFile,
   });
+
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const updateDecorations = () => {
+      const model = editor.getModel?.();
+      if (!model) return;
+
+      const fileKey = normalizeFileKey(activeFile);
+      if (!fileKey) {
+        try { editor.createDecorationsCollection([]); } catch {}
+        return;
+      }
+
+      const map = (debugSnap?.breakpoints && typeof debugSnap.breakpoints === 'object') ? debugSnap.breakpoints : {};
+      const lines = Array.isArray(map[fileKey]) ? map[fileKey] : [];
+      const lineCount = model.getLineCount?.() || 0;
+      const decorations = lines
+        .map((n) => Math.max(1, Math.floor(Number(n) || 0)))
+        .filter((n) => n > 0 && n <= lineCount)
+        .map((lineNumber) => ({
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            isWholeLine: true,
+            className: 'debug-breakpoint-line',
+            glyphMarginClassName: 'debug-breakpoint-glyph',
+          },
+        }));
+
+      try {
+        if (!editor.__debugBreakpointDecorations) {
+          editor.__debugBreakpointDecorations = editor.createDecorationsCollection(decorations);
+        } else {
+          editor.__debugBreakpointDecorations.set(decorations);
+        }
+      } catch {
+      }
+    };
+
+    updateDecorations();
+
+    const subs = [];
+    try { subs.push(editor.onDidChangeModel?.(() => updateDecorations())); } catch {}
+    try { subs.push(editor.onDidChangeModelContent?.(() => updateDecorations())); } catch {}
+
+    return () => {
+      subs.forEach((d) => d?.dispose?.());
+      try { editor.__debugBreakpointDecorations?.clear?.(); } catch {}
+      try { editor.__debugBreakpointDecorations = null; } catch {}
+    };
+  }, [activeFile, debugSnap?.version, editorRef, editorVersion, monacoRef]);
+
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const handler = (e) => {
+      const target = e?.target || null;
+      const mouseType = target?.type;
+      const want = monaco?.editor?.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+      if (want == null || mouseType !== want) return;
+      const pos = target?.position || null;
+      const lineNumber = Number(pos?.lineNumber);
+      if (!Number.isFinite(lineNumber) || lineNumber <= 0) return;
+      const fileKey = normalizeFileKey(activeFile);
+      if (!fileKey) return;
+      try {
+        e.event?.preventDefault?.();
+        e.event?.stopPropagation?.();
+      } catch {
+      }
+      debugService.toggleBreakpoint(fileKey, lineNumber, { workspaceRoot: backendRoot }).catch(() => {});
+    };
+
+    const d = editor.onMouseDown?.(handler);
+    return () => {
+      try { d?.dispose?.(); } catch {}
+    };
+  }, [activeFile, backendRoot, editorRef, editorVersion, monacoRef]);
 
   const renderEditorForGroup = (group) => {
     const filePath = String(group.activeFile || '');

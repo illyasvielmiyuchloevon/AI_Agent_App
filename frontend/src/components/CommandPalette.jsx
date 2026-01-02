@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { pluginsService } from '../workbench/services/pluginsService';
 import { outputService } from '../workbench/services/outputService';
@@ -25,9 +25,11 @@ const CommandPalette = ({
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [symbolItems, setSymbolItems] = useState([]);
     const [symbolLoading, setSymbolLoading] = useState(false);
+    const [ideCommands, setIdeCommands] = useState([]);
     const inputRef = useRef(null);
     const listRef = useRef(null);
     const symbolReqRef = useRef(0);
+    const ideCmdReqRef = useRef(0);
 
     useEffect(() => {
         if (isOpen && inputRef.current) {
@@ -36,6 +38,42 @@ const CommandPalette = ({
             setSelectedIndex(0);
         }
     }, [isOpen, initialQuery]);
+
+    const loadIdeCommands = useCallback(async () => {
+        const bus = globalThis?.window?.electronAPI?.ideBus;
+        if (!bus?.request) return;
+        const requestId = (ideCmdReqRef.current += 1);
+        try {
+            const res = await bus.request('commands/list');
+            if (requestId !== ideCmdReqRef.current) return;
+            const items = Array.isArray(res?.items) ? res.items : [];
+            const normalized = items
+                .map((it) => ({
+                    id: String(it?.id || '').trim(),
+                    title: String(it?.title || it?.id || '').trim(),
+                    source: it?.source ? String(it.source) : '',
+                }))
+                .filter((it) => it.id);
+            setIdeCommands(normalized);
+        } catch {
+            if (requestId !== ideCmdReqRef.current) return;
+            setIdeCommands([]);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        loadIdeCommands();
+    }, [isOpen, loadIdeCommands]);
+
+    useEffect(() => {
+        const bus = globalThis?.window?.electronAPI?.ideBus;
+        if (!bus?.onNotification) return undefined;
+        const dispose = bus.onNotification('commands/changed', () => {
+            loadIdeCommands();
+        });
+        return () => dispose?.();
+    }, [loadIdeCommands]);
 
     const symbolState = useMemo(() => {
         const raw = String(query || '');
@@ -247,12 +285,17 @@ const CommandPalette = ({
         }
 
         if (inCommandMode || !query) {
-             pushIfMatch({
+            pushIfMatch({
                 type: 'action',
                 id: 'search-files',
                 label: 'Go to File...',
                 description: 'Search files by name',
-                action: () => {}, // No-op, just a hint or focus input
+                action: () => {
+                    if (inCommandMode) {
+                        setQuery('');
+                        setSelectedIndex(0);
+                    }
+                },
                 icon: 'codicon-file',
                 shortcut: 'Ctrl + P'
             });
@@ -261,7 +304,10 @@ const CommandPalette = ({
                 id: 'show-commands',
                 label: 'Show and Run Commands >',
                 description: 'Execute IDE commands',
-                action: () => {}, 
+                action: () => {
+                    setQuery('> ');
+                    setSelectedIndex(0);
+                },
                 icon: 'codicon-terminal',
                 shortcut: 'Ctrl + Shift + P'
             });
@@ -451,6 +497,32 @@ const CommandPalette = ({
                     });
                 }
             }
+
+            const bus = globalThis?.window?.electronAPI?.ideBus;
+            if (bus?.request) {
+                const list = Array.isArray(ideCommands) ? ideCommands : [];
+                for (const cmd of list) {
+                    const id = String(cmd?.id || '').trim();
+                    if (!id) continue;
+                    const title = String(cmd?.title || id);
+                    pushIfMatch({
+                        type: 'command',
+                        id: `idecmd:${id}`,
+                        label: title,
+                        description: id,
+                        action: async () => {
+                            try {
+                                const res = await bus.request('commands/execute', { command: id, args: [] });
+                                const ok = !!res?.ok;
+                                if (!ok) outputService.append('Extensions', `[ERROR] command failed: ${id}`);
+                            } catch (err) {
+                                outputService.append('Extensions', `[ERROR] command failed: ${id} ${err?.message || String(err)}`);
+                            }
+                        },
+                        icon: 'codicon-play',
+                    });
+                }
+            }
         }
 
         if (!inCommandMode && query) {
@@ -470,7 +542,7 @@ const CommandPalette = ({
         }
 
         return items;
-    }, [aiInvoker, editorNavState, files, onCloseEditor, onOpenFile, onSearchText, query, symbolItems, symbolState.mode]);
+    }, [aiInvoker, editorNavState, files, ideCommands, onCloseEditor, onOpenFile, onSearchText, query, symbolItems, symbolState.mode]);
 
     useEffect(() => {
         setSelectedIndex(0);

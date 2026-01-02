@@ -6,7 +6,7 @@ import {
   toLspPositionFromMonaco,
   toLspRangeFromMonacoRange,
 } from '../../lsp/adapters/toLsp';
-import { lspRangeToMonacoRange } from '../../lsp/adapters/fromLsp';
+import { lspDiagnosticToMonacoMarker, lspRangeToMonacoRange } from '../../lsp/adapters/fromLsp';
 import { outputService } from './outputService';
 import { applyLspTextEdits } from '../../lsp/util/textEdits';
 import { guessIsWindows, fileUriToFsPath, toWorkspaceRelativePath } from '../../lsp/util/fsPath';
@@ -809,6 +809,20 @@ export const lspService = (() => {
     return Array.isArray(res) ? res : [];
   };
 
+  const applyExternalDiagnostics = ({ uri, diagnostics, owner } = {}) => {
+    const monaco = monacoRef;
+    if (!attached || !monaco?.editor?.setModelMarkers) return;
+    const u = String(uri || '');
+    if (!u) return;
+    const modelPath = modelSync.lspUriToModelPath(u);
+    if (!modelPath) return;
+    const model = monaco.editor.getModel(monaco.Uri.parse(modelPath));
+    if (!model) return;
+    const list = Array.isArray(diagnostics) ? diagnostics : [];
+    const markers = list.map((d) => lspDiagnosticToMonacoMarker(monaco, d)).filter((m) => m.message);
+    monaco.editor.setModelMarkers(model, `ext:${String(owner || 'extension')}`, markers);
+  };
+
   const attachMonaco = (monaco, { nextWorkspaceId, nextRootFsPath, nextWorkspaceFolders } = {}, nextUiContext) => {
     if (!bridge.isAvailable()) return;
     if (!monaco || attached) return;
@@ -829,6 +843,11 @@ export const lspService = (() => {
         owner: `lsp:${payload?.serverId || 'default'}`,
       });
     });
+    const disposeExtDiagnostics = globalThis?.window?.electronAPI?.ideBus?.onNotification
+      ? globalThis.window.electronAPI.ideBus.onNotification('diagnostics/publish', (payload) => {
+        applyExternalDiagnostics(payload || {});
+      })
+      : null;
     outputService.ensureChannel('LSP', 'LSP');
     const disposeLog = bridge.onLog((payload) => {
       const level = String(payload?.level || 'info').toUpperCase();
@@ -894,6 +913,7 @@ export const lspService = (() => {
     return () => {
       disposeProviders?.();
       disposeDiagnostics?.();
+      disposeExtDiagnostics?.();
       disposeLog?.();
       disposeApplyEdit?.();
       disposeStatus?.();
@@ -967,6 +987,7 @@ export const lspService = (() => {
     searchWorkspaceSymbols,
     searchDocumentSymbols,
     lspUriToModelPath: modelSync.lspUriToModelPath,
+    applyExternalDiagnostics,
     prepareCallHierarchy,
     callHierarchyIncoming,
     callHierarchyOutgoing,

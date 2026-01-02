@@ -1,3 +1,5 @@
+import { pathJoinAbs } from '../../utils/appAlgorithms';
+
 const listeners = new Set();
 
 const STORAGE = {
@@ -46,11 +48,14 @@ let seq = 1;
 let pendingEntries = [];
 let flushRaf = 0;
 let consoleRestore = null;
+let dapUnsubs = [];
+let dapSubscribed = false;
 let state = {
   version: 1,
   sessionActive: false,
   session: null,
   entries: [],
+  breakpoints: {},
   follow: typeof window === 'undefined' ? true : !!readJson(STORAGE.follow, true),
   history: typeof window === 'undefined' ? [] : (readJson(STORAGE.history, []) || []).slice(0, 200),
   scrollToBottomTick: 0,
@@ -188,6 +193,109 @@ const installConsoleMirror = () => {
   };
 };
 
+const getDapApi = () => globalThis?.window?.electronAPI?.dap || null;
+
+const normalizeFileKey = (filePath) => {
+  const raw = String(filePath || '');
+  const cleaned = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return cleaned;
+};
+
+const getWorkspaceRoot = (fallback) => {
+  const root = globalThis?.window?.__NODE_AGENT_WORKSPACE_ROOT__;
+  if (root) return String(root);
+  return String(fallback || '');
+};
+
+const getBreakpointsForPath = (filePath) => {
+  const key = normalizeFileKey(filePath);
+  const list = state.breakpoints && typeof state.breakpoints === 'object' ? state.breakpoints[key] : null;
+  return Array.isArray(list) ? list.slice() : [];
+};
+
+const setBreakpointsForPath = (filePath, nextLines) => {
+  const key = normalizeFileKey(filePath);
+  const unique = Array.from(new Set((nextLines || []).map((n) => Math.max(1, Math.floor(Number(n) || 0))).filter((n) => n > 0)));
+  unique.sort((a, b) => a - b);
+  const prev = state.breakpoints && typeof state.breakpoints === 'object' ? state.breakpoints : {};
+  const existing = Array.isArray(prev[key]) ? prev[key] : [];
+  const same = existing.length === unique.length && existing.every((v, i) => v === unique[i]);
+  if (same) return;
+  const next = { ...prev };
+  if (unique.length === 0) delete next[key];
+  else next[key] = unique;
+  state = { ...state, breakpoints: next, version: state.version + 1 };
+  emit();
+};
+
+const sendDapSetBreakpoints = async (dapSessionId, filePath, lines, { workspaceRoot } = {}) => {
+  const sid = String(dapSessionId || '');
+  if (!sid) return { ok: false, error: 'missing session' };
+  const api = getDapApi();
+  if (!api?.sendRequest) return { ok: false, error: 'dap not available' };
+  const key = normalizeFileKey(filePath);
+  const root = getWorkspaceRoot(workspaceRoot);
+  const sourcePath = root ? pathJoinAbs(root, key) : key;
+  const name = key.split('/').pop() || key;
+  return api.sendRequest(
+    sid,
+    'setBreakpoints',
+    {
+      source: { name, path: sourcePath },
+      breakpoints: (lines || []).map((line) => ({ line: Number(line) || 1 })),
+    },
+    { timeoutMs: 8_000 },
+  ).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+};
+
+const ensureDapSubscriptions = () => {
+  if (dapSubscribed) return;
+  const api = getDapApi();
+  if (!api?.onEvent || !api?.onStatus) return;
+  dapSubscribed = true;
+
+  dapUnsubs.push(api.onEvent((payload) => {
+    const sid = String(payload?.sessionId || '');
+    const activeSid = String(state?.session?.dapSessionId || '');
+    if (!sid || sid !== activeSid) return;
+    const evt = payload?.event || null;
+    const evtName = String(evt?.event || '');
+    if (evtName === 'output') {
+      const out = evt?.body?.output != null ? String(evt.body.output) : '';
+      const category = String(evt?.body?.category || '');
+      const stream = category === 'stderr' ? 'stderr' : 'stdout';
+      if (out) debugService.appendOutput(out, { stream });
+      return;
+    }
+    if (evtName) append('system', `[dap] event: ${evtName}`);
+  }));
+
+  dapUnsubs.push(api.onStatus((payload) => {
+    const sid = String(payload?.sessionId || '');
+    const activeSid = String(state?.session?.dapSessionId || '');
+    if (!sid || sid !== activeSid) return;
+    const status = String(payload?.status || '');
+    if (status) append('system', `[dap] status: ${status}`);
+  }));
+};
+
+const stopDapIfAny = async () => {
+  const sid = String(state?.session?.dapSessionId || '');
+  if (!sid) return;
+  const api = getDapApi();
+  try { await api?.stopSession?.(sid); } catch {}
+};
+
+const applyAllDapBreakpoints = async ({ workspaceRoot } = {}) => {
+  const sid = String(state?.session?.dapSessionId || '');
+  if (!sid) return;
+  const map = state.breakpoints && typeof state.breakpoints === 'object' ? state.breakpoints : {};
+  for (const [filePath, lines] of Object.entries(map)) {
+    if (!Array.isArray(lines) || lines.length === 0) continue;
+    await sendDapSetBreakpoints(sid, filePath, lines, { workspaceRoot }).catch(() => {});
+  }
+};
+
 export const debugService = {
   subscribe(fn) {
     listeners.add(fn);
@@ -221,16 +329,43 @@ export const debugService = {
     persistFollow();
     emit();
   },
-  startSession({ name = 'JavaScript (Renderer)' } = {}) {
-    const session = { id: `sess:${Date.now()}`, name, startedAt: Date.now() };
+  async startSession({ name = '', mode = '' } = {}) {
+    const api = getDapApi();
+    const want = String(mode || '').trim() || (api?.startSession ? 'dap' : 'renderer');
+    const sessionName = String(name || (want === 'dap' ? 'DAP (Fake Adapter)' : 'JavaScript (Renderer)'));
+
+    if (want === 'dap' && api?.startSession) {
+      ensureDapSubscriptions();
+      const res = await api.startSession({
+        name: sessionName,
+        adapter: { kind: 'builtin', id: 'fake' },
+        request: 'launch',
+        arguments: {},
+      }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+
+      if (!res?.ok) {
+        append('error', res?.error || 'Failed to start DAP session');
+        return;
+      }
+
+      const session = { id: `sess:${Date.now()}`, name: sessionName, startedAt: Date.now(), type: 'dap', dapSessionId: String(res.sessionId || '') };
+      state = { ...state, sessionActive: true, session, version: state.version + 1 };
+      emit();
+      append('system', `Debug session started: ${sessionName}`);
+      void applyAllDapBreakpoints({ workspaceRoot: getWorkspaceRoot('') });
+      return;
+    }
+
+    const session = { id: `sess:${Date.now()}`, name: sessionName, startedAt: Date.now(), type: 'renderer' };
     state = { ...state, sessionActive: true, session, version: state.version + 1 };
     emit();
     installConsoleMirror();
-    append('system', `Debug session started: ${name}`);
+    append('system', `Debug session started: ${sessionName}`);
   },
-  stopSession() {
+  async stopSession() {
     if (!state.sessionActive) return;
     const name = state.session?.name || 'Session';
+    await stopDapIfAny();
     state = { ...state, sessionActive: false, session: null, version: state.version + 1 };
     emit();
     if (consoleRestore) consoleRestore();
@@ -238,6 +373,30 @@ export const debugService = {
   },
   appendOutput(text, { stream = 'stdout' } = {}) {
     append(stream === 'stderr' ? 'stderr' : 'stdout', text);
+  },
+  getBreakpoints() {
+    const map = state.breakpoints && typeof state.breakpoints === 'object' ? state.breakpoints : {};
+    return { ...map };
+  },
+  hasBreakpoint(filePath, lineNumber) {
+    const key = normalizeFileKey(filePath);
+    const lines = getBreakpointsForPath(key);
+    const ln = Math.max(1, Math.floor(Number(lineNumber) || 0));
+    return lines.includes(ln);
+  },
+  async toggleBreakpoint(filePath, lineNumber, { workspaceRoot } = {}) {
+    const key = normalizeFileKey(filePath);
+    const ln = Math.max(1, Math.floor(Number(lineNumber) || 0));
+    if (!key || !ln) return;
+    const lines = getBreakpointsForPath(key);
+    const next = lines.includes(ln) ? lines.filter((x) => x !== ln) : [...lines, ln];
+    setBreakpointsForPath(key, next);
+    const sid = String(state?.session?.dapSessionId || '');
+    if (sid) {
+      const latest = getBreakpointsForPath(key);
+      const res = await sendDapSetBreakpoints(sid, key, latest, { workspaceRoot }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+      if (!res?.ok) append('error', res?.error || 'Failed to set breakpoints');
+    }
   },
   async evaluate(expression) {
     const expr = String(expression || '').trim();
@@ -251,6 +410,21 @@ export const debugService = {
     persistHistory();
 
     append('input', `> ${expr}`);
+    const dapSessionId = String(state?.session?.dapSessionId || '');
+    if (dapSessionId) {
+      const api = getDapApi();
+      const res = await api?.sendRequest?.(dapSessionId, 'evaluate', { expression: expr, context: 'repl' }, { timeoutMs: 8_000 })
+        .catch((err) => ({ ok: false, error: err?.message || String(err) }));
+      if (!res?.ok) {
+        append('error', res?.error || 'Error');
+        return;
+      }
+      const value = res?.response?.body?.result;
+      const rendered = normalizeText(value);
+      append('result', rendered === '' ? 'undefined' : rendered);
+      return;
+    }
+
     const res = await evalInRenderer(expr);
     if (!res.ok) {
       append('error', res.error || 'Error');

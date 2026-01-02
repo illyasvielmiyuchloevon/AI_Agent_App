@@ -46,6 +46,29 @@ export default function PanelShell({ workspacePath = '', onOpenFile, terminalSet
     outputService.ensureChannel('Tasks', '任务');
     outputService.ensureChannel('Extensions', '扩展');
     outputService.ensureChannel('Git', 'Git');
+    outputService.ensureChannel('IdeBus', 'IDE Bus');
+
+    const bus = globalThis?.window?.electronAPI?.ideBus;
+    if (!bus?.onNotification) return undefined;
+
+    const disposeAppend = bus.onNotification('output/append', (payload) => {
+      const channelId = payload?.channelId ? String(payload.channelId) : '';
+      const label = payload?.label ? String(payload.label) : '';
+      const text = payload?.text != null ? String(payload.text) : '';
+      if (!channelId || !text) return;
+      outputService.append(channelId, text, { label: label || channelId });
+    });
+
+    const disposeClear = bus.onNotification('output/clear', (payload) => {
+      const channelId = payload?.channelId ? String(payload.channelId) : '';
+      if (!channelId) return;
+      outputService.clear(channelId);
+    });
+
+    return () => {
+      disposeAppend?.();
+      disposeClear?.();
+    };
   }, []);
 
   const mergeTerminalUi = useCallback((patch) => {
@@ -165,7 +188,13 @@ export default function PanelShell({ workspacePath = '', onOpenFile, terminalSet
 
   const viewPropsById = useMemo(() => ({
     problems: { filter: problemsFilter, onOpenFile },
-    output: { channelId: outputChannelId, filter: outputFilter },
+    output: {
+      channelId: outputChannelId,
+      filter: outputFilter,
+      onChangeChannel: setOutputChannelId,
+      onChangeFilter: setOutputFilter,
+      onClear: () => outputService.clear(outputChannelId),
+    },
     debugConsole: {},
     terminal: {
       workspacePath,

@@ -29,12 +29,18 @@ export default function LspSettingsPage({
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchItems, setSearchItems] = useState([]);
+  const [searchPageSize] = useState(20);
+  const [searchLimit, setSearchLimit] = useState(20);
   const [installingIds, setInstallingIds] = useState(() => new Set());
 
   const [installedItems, setInstalledItems] = useState([]);
   const [updates, setUpdates] = useState([]);
   const [lastProgress, setLastProgress] = useState(null);
   const [lastError, setLastError] = useState(null);
+
+  const [localVsixPath, setLocalVsixPath] = useState('');
+  const [localPluginId, setLocalPluginId] = useState('');
+  const [localPluginVersion, setLocalPluginVersion] = useState('local');
 
   const [configText, setConfigText] = useState(() => safeStringify(lspConfig));
   const [configError, setConfigError] = useState('');
@@ -85,17 +91,69 @@ export default function LspSettingsPage({
     onChangeLspConfig?.({ ...root, _client: { ...client, languagePlugins: mapping } });
   };
 
-  const doSearch = async () => {
+  const doSearch = async ({ limit = searchPageSize } = {}) => {
     if (!pluginsService.isAvailable()) return;
     setSearching(true);
     setSearchItems([]);
     try {
-      const res = await pluginsService.search(query, providerIds);
-      setSearchItems(Array.isArray(res?.items) ? res.items : []);
+      const nextLimit = Number.isFinite(limit) ? Math.max(1, Number(limit)) : searchPageSize;
+      const res = await pluginsService.search(query, providerIds, { offset: 0, limit: nextLimit });
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setSearchItems(items);
+      setSearchLimit(nextLimit);
     } catch (err) {
       setLastError({ message: err?.message || String(err) });
     } finally {
       setSearching(false);
+    }
+  };
+
+  const pickLocalVsix = async () => {
+    const api = globalThis?.window?.electronAPI?.workspace;
+    if (!api?.pickFile) return;
+    try {
+      const res = await api.pickFile();
+      const fsPath = String(res?.fsPath || '').trim();
+      if (res?.canceled || !fsPath) return;
+      setLocalVsixPath(fsPath);
+    } catch (err) {
+      setLastError({ message: err?.message || String(err) });
+    }
+  };
+
+  const inferPluginIdFromPath = (fsPath) => {
+    const p = String(fsPath || '');
+    const name = p.split(/[\\/]/).filter(Boolean).slice(-1)[0] || '';
+    const base = name.replace(/\.vsix$/i, '');
+    const cleaned = base.replace(/[^a-zA-Z0-9._@/\\-]/g, '_');
+    return cleaned || 'local.plugin';
+  };
+
+  const installLocalVsix = async () => {
+    if (!pluginsService.isAvailable()) return;
+    const filePath = String(localVsixPath || '').trim();
+    if (!filePath) return;
+    const pid = String(localPluginId || '').trim() || inferPluginIdFromPath(filePath);
+    const version = String(localPluginVersion || '').trim() || 'local';
+    setInstallingIds((prev) => {
+      const next = new Set(prev);
+      next.add(pid);
+      return next;
+    });
+    try {
+      await pluginsService.install({ providerId: 'local', id: pid, version, filePath });
+      await pluginsService.listInstalled().catch(() => {});
+      const res = await pluginsService.listUpdates().catch(() => ({ items: [] }));
+      setUpdates(Array.isArray(res?.items) ? res.items : []);
+      setActiveTab('installed');
+    } catch (err) {
+      setLastError({ message: err?.message || String(err) });
+    } finally {
+      setInstallingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(pid);
+        return next;
+      });
     }
   };
 
@@ -114,6 +172,8 @@ export default function LspSettingsPage({
         await pluginsService.enable(pid).catch(() => {});
       }
       await pluginsService.listInstalled().catch(() => {});
+      const res = await pluginsService.listUpdates().catch(() => ({ items: [] }));
+      setUpdates(Array.isArray(res?.items) ? res.items : []);
     } catch (err) {
       setLastError({ message: err?.message || String(err) });
     } finally {
@@ -182,6 +242,68 @@ export default function LspSettingsPage({
 
   const renderDiscover = () => (
     <>
+      <div className="settings-group-title">{t('本地安装', 'Local Install')}</div>
+      <SectionCard>
+        <SettingRow
+          title={t('本地 VSIX', 'Local VSIX')}
+          description={t('从本机选择 .vsix 安装（需包含 language-plugin.json 才能作为语言插件工作）。', 'Pick a .vsix from disk to install (needs language-plugin.json to work as a language plugin).')}
+        >
+          {!pluginsService.isAvailable() ? (
+            <div style={{ opacity: 0.8 }}>{t('当前环境不可用。', 'Not available in this environment.')}</div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                className="settings-control"
+                value={localVsixPath}
+                placeholder={t('选择一个 .vsix 文件…', 'Choose a .vsix file…')}
+                readOnly
+                style={{ flex: 1, minWidth: 220 }}
+              />
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 34 }}
+                onClick={pickLocalVsix}
+                disabled={!globalThis?.window?.electronAPI?.workspace?.pickFile}
+              >
+                {t('选择文件', 'Pick file')}
+              </button>
+            </div>
+          )}
+        </SettingRow>
+        <SettingRow title={t('插件 ID', 'Plugin ID')} description={t('用于本地注册与管理（留空则从文件名推断）。', 'Used for local registry management (empty = inferred from filename).')}>
+          <input
+            type="text"
+            className="settings-control"
+            value={localPluginId}
+            onChange={(e) => setLocalPluginId(e.target.value)}
+            placeholder={t('例如：local.my-plugin', 'e.g. local.my-plugin')}
+          />
+        </SettingRow>
+        <SettingRow title={t('版本', 'Version')} description={t('用于本地安装目录区分。', 'Used to separate install directories.')}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+            <input
+              type="text"
+              className="settings-control"
+              value={localPluginVersion}
+              onChange={(e) => setLocalPluginVersion(e.target.value)}
+              placeholder={t('例如：local / 1.0.0', 'e.g. local / 1.0.0')}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="primary-btn"
+              style={{ height: 34 }}
+              onClick={installLocalVsix}
+              disabled={!localVsixPath || installingIds.has(String((localPluginId || inferPluginIdFromPath(localVsixPath)) || ''))}
+            >
+              {installingIds.has(String((localPluginId || inferPluginIdFromPath(localVsixPath)) || '')) ? t('安装中…', 'Installing…') : t('安装', 'Install')}
+            </button>
+          </div>
+        </SettingRow>
+      </SectionCard>
+
       <div className="settings-group-title">{t('Marketplace', 'Marketplace')}</div>
       <SectionCard>
         <SettingRow title={t('搜索', 'Search')} description={t('从多个来源搜索语言插件。', 'Search language plugins across providers.')}>
@@ -191,10 +313,13 @@ export default function LspSettingsPage({
               className="settings-control"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void doSearch({ limit: searchPageSize });
+              }}
               placeholder={t('例如：tsls / pyright / rust-analyzer', 'e.g. tsls / pyright / rust-analyzer')}
               style={{ flex: 1 }}
             />
-            <button type="button" className="primary-btn" style={{ height: 34 }} onClick={doSearch} disabled={searching}>
+            <button type="button" className="primary-btn" style={{ height: 34 }} onClick={() => doSearch({ limit: searchPageSize })} disabled={searching}>
               {searching ? t('搜索中…', 'Searching…') : t('搜索', 'Search')}
             </button>
           </div>
@@ -243,7 +368,7 @@ export default function LspSettingsPage({
           <div style={{ opacity: 0.8 }}>{t('暂无结果。', 'No results.')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {searchItems.slice(0, 30).map((it) => (
+            {searchItems.map((it) => (
               <div
                 key={`${it?.source?.providerId || 'p'}:${it?.id || ''}:${it?.version || ''}`}
                 style={{
@@ -272,6 +397,17 @@ export default function LspSettingsPage({
                 </button>
               </div>
             ))}
+            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 6 }}>
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ height: 34 }}
+                onClick={() => doSearch({ limit: searchLimit + searchPageSize })}
+                disabled={searching || searchItems.length === 0}
+              >
+                {t('加载更多', 'Load more')}
+              </button>
+            </div>
           </div>
         )}
         </div>

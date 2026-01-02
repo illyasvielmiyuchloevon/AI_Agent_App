@@ -10,12 +10,19 @@ const { OfficialCatalogProvider } = require('./lsp/plugins/providers/OfficialCat
 const { OpenVsxProvider } = require('./lsp/plugins/providers/OpenVsxProvider');
 const { GitHubReleasesProvider } = require('./lsp/plugins/providers/GitHubReleasesProvider');
 const { createPluginIpcService } = require('./lsp/plugins/PluginIpcService');
+const { registerIdeBus } = require('./ideBus/registerIdeBus');
+const { ExtensionHostService } = require('./extensions/ExtensionHostService');
+const { createDapMainService } = require('./dap/DapMainService');
 
 const workspaceService = createWorkspaceService();
 const lspBroadcaster = createLspBroadcaster();
+const extensionHostService = new ExtensionHostService({ workspaceService, recentStore });
 
 function registerIpcHandlers() {
   const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
+
+  registerIdeBus({ ipcMain, workspaceService, recentStore });
+  extensionHostService.start().catch(() => {});
 
   const getWindowFromEvent = (event) => {
     try {
@@ -95,6 +102,7 @@ function registerIpcHandlers() {
   createPluginIpcService({ ipcMain, pluginManager, broadcast: lspBroadcaster.broadcast, ready: pluginsReady });
 
   createLspMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, plugins: { manager: pluginManager, ready: pluginsReady } });
+  createDapMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, workspaceService, recentStore });
 
   ipcMain.handle('recent:list', async () => {
     return { ok: true, items: recentStore.list() };

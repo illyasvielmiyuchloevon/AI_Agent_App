@@ -1,8 +1,94 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { JsonRpcConnection } = require('./main/lsp/jsonrpc/JsonRpcConnection');
+
+class IpcRendererTransport {
+  constructor() {
+    this._onMessage = null;
+    this._onClose = null;
+
+    this._listener = (_e, msg) => {
+      try {
+        this._onMessage?.(msg);
+      } catch {}
+    };
+    ipcRenderer.on('idebus:message', this._listener);
+  }
+
+  onMessage(handler) {
+    this._onMessage = handler;
+  }
+
+  onClose(handler) {
+    this._onClose = handler;
+  }
+
+  send(msg) {
+    ipcRenderer.send('idebus:message', msg);
+  }
+
+  close() {
+    try {
+      ipcRenderer.off('idebus:message', this._listener);
+    } catch {}
+    try {
+      this._onClose?.();
+    } catch {}
+  }
+}
+
+const ideBus = (() => {
+  const transport = new IpcRendererTransport();
+  const connection = new JsonRpcConnection(transport, { name: 'idebus:renderer', traceMeta: true });
+
+  let initPromise = null;
+  const ensureInit = async () => {
+    if (!initPromise) {
+      initPromise = connection
+        .sendRequest('initialize', {
+          protocolVersion: '1.0',
+          clientCapabilities: {
+            kind: 'renderer-preload',
+          },
+        })
+        .catch(() => null);
+    }
+    return initPromise;
+  };
+
+  const request = async (method, params, options) => {
+    await ensureInit();
+    return connection.sendRequest(method, params, options);
+  };
+
+  const notify = async (method, params) => {
+    await ensureInit();
+    connection.sendNotification(method, params);
+  };
+
+  const onNotification = (method, handler) => connection.onNotification(method, handler);
+
+  const ready = () => ensureInit();
+
+  return { request, notify, onNotification, ready };
+})();
+
+const tryBus = async (busMethod, params, fallback) => {
+  try {
+    return await ideBus.request(busMethod, params);
+  } catch {
+    return await fallback();
+  }
+};
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  ideBus: {
+    request: (method, params, options) => ideBus.request(String(method || ''), params, options),
+    notify: (method, params) => ideBus.notify(String(method || ''), params),
+    onNotification: (method, handler) => ideBus.onNotification(String(method || ''), handler),
+    ready: () => ideBus.ready(),
+  },
   app: {
-    getInfo: () => ipcRenderer.invoke('app:getInfo'),
+    getInfo: () => tryBus('app/getInfo', undefined, () => ipcRenderer.invoke('app:getInfo')),
   },
   openFolder: () => ipcRenderer.invoke('open-folder'),
   recent: {
@@ -10,25 +96,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     remove: (id) => ipcRenderer.invoke('recent:remove', id),
   },
   window: {
-    minimize: () => ipcRenderer.invoke('window:minimize'),
-    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
-    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
-    openDevTools: () => ipcRenderer.invoke('window:openDevTools'),
-    toggleDevTools: () => ipcRenderer.invoke('window:toggleDevTools'),
-    applySnapLayout: (layoutId, zoneIndex) => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex }),
-    openNewWindow: (payload) => ipcRenderer.invoke('window:openNewWindow', payload),
-    openTerminalWindow: (payload) => ipcRenderer.invoke('window:openTerminalWindow', payload),
-    close: () => ipcRenderer.invoke('window:close'),
+    minimize: () => tryBus('window/minimize', undefined, () => ipcRenderer.invoke('window:minimize')),
+    toggleMaximize: () => tryBus('window/toggleMaximize', undefined, () => ipcRenderer.invoke('window:toggleMaximize')),
+    isMaximized: () => tryBus('window/isMaximized', undefined, () => ipcRenderer.invoke('window:isMaximized')),
+    openDevTools: () => tryBus('window/openDevTools', undefined, () => ipcRenderer.invoke('window:openDevTools')),
+    toggleDevTools: () => tryBus('window/toggleDevTools', undefined, () => ipcRenderer.invoke('window:toggleDevTools')),
+    applySnapLayout: (layoutId, zoneIndex) =>
+      tryBus('window/applySnapLayout', { layoutId, zoneIndex }, () => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex })),
+    openNewWindow: (payload) => tryBus('window/openNewWindow', payload, () => ipcRenderer.invoke('window:openNewWindow', payload)),
+    openTerminalWindow: (payload) =>
+      tryBus('window/openTerminalWindow', payload, () => ipcRenderer.invoke('window:openTerminalWindow', payload)),
+    close: () => tryBus('window/close', undefined, () => ipcRenderer.invoke('window:close')),
   },
   shell: {
-    showItemInFolder: (fsPath) => ipcRenderer.invoke('shell:showItemInFolder', fsPath),
-    openPath: (fsPath) => ipcRenderer.invoke('shell:openPath', fsPath),
+    showItemInFolder: (fsPath) => tryBus('shell/showItemInFolder', fsPath, () => ipcRenderer.invoke('shell:showItemInFolder', fsPath)),
+    openPath: (fsPath) => tryBus('shell/openPath', fsPath, () => ipcRenderer.invoke('shell:openPath', fsPath)),
   },
   workspace: {
-    pickFolder: () => ipcRenderer.invoke('workspace:pickFolder'),
-    pickFile: () => ipcRenderer.invoke('workspace:pickFile'),
-    open: (payload) => ipcRenderer.invoke('workspace:open', payload),
-    close: () => ipcRenderer.invoke('workspace:close'),
+    pickFolder: () => tryBus('workspace/pickFolder', undefined, () => ipcRenderer.invoke('workspace:pickFolder')),
+    pickFile: () => tryBus('workspace/pickFile', undefined, () => ipcRenderer.invoke('workspace:pickFile')),
+    open: (payload) => tryBus('workspace/open', payload, () => ipcRenderer.invoke('workspace:open', payload)),
+    close: () => tryBus('workspace/close', undefined, () => ipcRenderer.invoke('workspace:close')),
+    getTrust: (fsPath) => tryBus('workspace/getTrust', { fsPath }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: false })),
+    setTrust: (fsPath, trusted) => tryBus('workspace/setTrust', { fsPath, trusted: !!trusted }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: !!trusted })),
   },
   setTitlebarTheme: (theme) => ipcRenderer.send('renderer-theme-updated', theme),
   git: {
@@ -143,7 +233,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   plugins: {
-    search: (query, providerIds) => ipcRenderer.invoke('plugins:search', query, providerIds),
+    search: (query, providerIds, options) => ipcRenderer.invoke('plugins:search', query, providerIds, options),
     listInstalled: () => ipcRenderer.invoke('plugins:listInstalled'),
     listUpdates: () => ipcRenderer.invoke('plugins:listUpdates'),
     install: (ref) => ipcRenderer.invoke('plugins:install', ref),
@@ -166,6 +256,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:error', fn);
       return () => ipcRenderer.off('plugins:error', fn);
+    },
+  },
+  dap: {
+    startSession: (payload) => ipcRenderer.invoke('dap:startSession', payload),
+    stopSession: (sessionId) => ipcRenderer.invoke('dap:stopSession', sessionId),
+    sendRequest: (sessionId, command, args, options) => ipcRenderer.invoke('dap:sendRequest', sessionId, command, args, options),
+    listSessions: () => ipcRenderer.invoke('dap:listSessions'),
+    onEvent: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('dap:event', fn);
+      return () => ipcRenderer.off('dap:event', fn);
+    },
+    onStatus: (handler) => {
+      const fn = (_e, payload) => handler(payload);
+      ipcRenderer.on('dap:status', fn);
+      return () => ipcRenderer.off('dap:status', fn);
     },
   },
 });

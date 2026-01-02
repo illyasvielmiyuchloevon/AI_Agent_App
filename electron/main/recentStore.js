@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_RECENTS = 20;
 
 function storagePath() {
@@ -14,7 +14,7 @@ function safeReadJson() {
     const raw = fs.readFileSync(storagePath(), 'utf-8');
     return JSON.parse(raw);
   } catch {
-    return { v: SCHEMA_VERSION, items: [] };
+    return { v: SCHEMA_VERSION, items: [], trust: {} };
   }
 }
 
@@ -24,9 +24,11 @@ function safeWriteJson(db) {
 }
 
 function migrate(db) {
-  if (!db || typeof db !== 'object') return { v: SCHEMA_VERSION, items: [] };
-  if (db.v === SCHEMA_VERSION && Array.isArray(db.items)) return db;
-  return { v: SCHEMA_VERSION, items: Array.isArray(db.items) ? db.items : [] };
+  if (!db || typeof db !== 'object') return { v: SCHEMA_VERSION, items: [], trust: {} };
+  const items = Array.isArray(db.items) ? db.items : [];
+  const trust = db.trust && typeof db.trust === 'object' ? db.trust : {};
+  if (db.v === SCHEMA_VERSION) return { ...db, v: SCHEMA_VERSION, items, trust };
+  return { v: SCHEMA_VERSION, items, trust };
 }
 
 function list() {
@@ -50,15 +52,36 @@ function touch({ id, fsPath, name }) {
     lastOpened: Date.now(),
   };
   const items = [entry, ...(db.items || []).filter((x) => x && x.id !== entry.id)].slice(0, MAX_RECENTS);
-  safeWriteJson({ v: SCHEMA_VERSION, items });
+  safeWriteJson({ v: SCHEMA_VERSION, items, trust: db.trust || {} });
   return entry;
 }
 
 function remove(id) {
   const db = migrate(safeReadJson());
   const items = (db.items || []).filter((x) => x && x.id !== id);
-  safeWriteJson({ v: SCHEMA_VERSION, items });
+  safeWriteJson({ v: SCHEMA_VERSION, items, trust: db.trust || {} });
 }
 
-module.exports = { list, touch, remove };
+function normalizeFsPath(fsPath) {
+  return String(fsPath || '').trim();
+}
 
+function getTrustedByFsPath(fsPath) {
+  const key = normalizeFsPath(fsPath);
+  if (!key) return false;
+  const db = migrate(safeReadJson());
+  return db?.trust?.[key] === true;
+}
+
+function setTrustedByFsPath(fsPath, trusted) {
+  const key = normalizeFsPath(fsPath);
+  if (!key) return false;
+  const db = migrate(safeReadJson());
+  const next = { ...(db.trust || {}) };
+  if (trusted) next[key] = true;
+  else delete next[key];
+  safeWriteJson({ v: SCHEMA_VERSION, items: db.items || [], trust: next });
+  return true;
+}
+
+module.exports = { list, touch, remove, getTrustedByFsPath, setTrustedByFsPath };

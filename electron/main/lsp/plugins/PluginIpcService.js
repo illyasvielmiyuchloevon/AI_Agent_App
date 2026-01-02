@@ -27,11 +27,11 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, ready } = {
     }
   };
 
-  ipcMain.handle('plugins:search', async (event, query, providerIds) => {
+  ipcMain.handle('plugins:search', async (event, query, providerIds, options) => {
     ensureSenderSubscribed(event);
     await ensureReady();
     try {
-      const items = await pluginManager.search({ query, providerIds });
+      const items = await pluginManager.search({ query, providerIds, options });
       return { ok: true, items };
     } catch (err) {
       emitError({ action: 'search', message: err?.message || String(err) });

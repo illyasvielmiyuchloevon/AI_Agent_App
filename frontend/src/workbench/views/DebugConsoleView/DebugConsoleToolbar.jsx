@@ -52,8 +52,8 @@ export default function DebugConsoleToolbar() {
         <button
           type="button"
           className="bottom-panel-icon-btn"
-          onClick={() => debugService.startSession({ name: 'JavaScript (Renderer)' })}
-          title="启动调试会话（临时：Renderer JS）"
+          onClick={() => debugService.startSession({}).catch(() => {})}
+          title="启动调试会话"
         >
           <span className="codicon codicon-debug-start" aria-hidden />
         </button>
@@ -61,7 +61,7 @@ export default function DebugConsoleToolbar() {
         <button
           type="button"
           className="bottom-panel-icon-btn"
-          onClick={() => debugService.stopSession()}
+          onClick={() => debugService.stopSession().catch(() => {})}
           title="停止调试会话"
         >
           <span className="codicon codicon-debug-stop" aria-hidden />

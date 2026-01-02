@@ -20,6 +20,7 @@ import CommandPalette from './components/CommandPalette';
 import Modal from './components/Modal';
 import StatusBar from './components/StatusBar';
 import InputModal from './components/InputModal';
+import { outputService } from './workbench/services/outputService';
 
 function AppShell({
   theme,
@@ -210,6 +211,26 @@ function AppShell({
   diffTabPrefix,
   inputModal,
 }) {
+  const [infoToasts, setInfoToasts] = React.useState([]);
+
+  React.useEffect(() => {
+    const bus = globalThis?.window?.electronAPI?.ideBus;
+    if (!bus?.onNotification) return undefined;
+    const dispose = bus.onNotification('window/showInformationMessage', (payload) => {
+      const message = payload?.message ? String(payload.message) : '';
+      const items = Array.isArray(payload?.items) ? payload.items.map((x) => String(x)) : [];
+      if (message) outputService.append('Extensions', `[INFO] ${message}`);
+
+      const id = `toast:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+      const toast = { id, message, items, ts: Date.now() };
+      setInfoToasts((prev) => [...(Array.isArray(prev) ? prev : []), toast].slice(-4));
+      window.setTimeout(() => {
+        setInfoToasts((prev) => (Array.isArray(prev) ? prev.filter((t) => t?.id !== id) : []));
+      }, 4200);
+    });
+    return () => dispose?.();
+  }, []);
+
   return (
     <WorkbenchShell theme={theme}>
       <TitleBar
@@ -709,6 +730,43 @@ function AppShell({
           </div>
         )}
       </Modal>
+      {infoToasts.length ? (
+        <div style={{ position: 'fixed', right: 12, bottom: 52, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420 }}>
+          {infoToasts.map((t) => (
+            <div
+              key={t.id}
+              style={{
+                background: 'var(--panel-background)',
+                border: '1px solid var(--border-subtle)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+                borderRadius: 8,
+                padding: '10px 12px',
+                color: 'var(--text)',
+                fontSize: 13,
+                lineHeight: 1.5,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ fontWeight: 700 }}>提示</div>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  style={{ height: 24, padding: '0 8px' }}
+                  onClick={() => setInfoToasts((prev) => prev.filter((x) => x.id !== t.id))}
+                >
+                  关闭
+                </button>
+              </div>
+              <div style={{ marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{t.message || ''}</div>
+              {t.items?.length ? (
+                <div style={{ marginTop: 6, color: 'var(--muted)' }}>
+                  {t.items.slice(0, 6).join('  •  ')}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </WorkbenchShell>
   );
 }

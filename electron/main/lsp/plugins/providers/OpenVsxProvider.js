@@ -3,10 +3,12 @@ class OpenVsxProvider {
     this.id = 'openvsx';
   }
 
-  async search(query = '') {
+  async search(query = '', options) {
     const q = String(query || '').trim();
     if (!q) return [];
-    const url = `https://open-vsx.org/api/-/search?query=${encodeURIComponent(q)}&size=20&offset=0`;
+    const offset = Number.isFinite(options?.offset) ? Math.max(0, Number(options.offset)) : 0;
+    const limit = Number.isFinite(options?.limit) ? Math.max(1, Number(options.limit)) : 20;
+    const url = `https://open-vsx.org/api/-/search?query=${encodeURIComponent(q)}&size=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`OpenVSX search failed: ${res.status}`);
     const json = await res.json();
@@ -61,4 +63,3 @@ class OpenVsxProvider {
 }
 
 module.exports = { OpenVsxProvider };
-
