@@ -60,6 +60,8 @@ const SourceControlPanel = ({
     const listsRef = useRef(null);
     const [syncHint, setSyncHint] = useState(null);
     const [repoMenu, setRepoMenu] = useState(null);
+    const [commitMenu, setCommitMenu] = useState(null);
+    const commitDropdownRef = useRef(null);
 
     // Hover state management
     const [hoveredCommit, setHoveredCommit] = useState(null); // { commit, rect }
@@ -142,6 +144,19 @@ const SourceControlPanel = ({
         };
     }, [repoMenu]);
 
+    useEffect(() => {
+        if (!commitMenu) return;
+        const handler = (e) => {
+            if (e.key === 'Escape') {
+                setCommitMenu(null);
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => {
+            window.removeEventListener('keydown', handler);
+        };
+    }, [commitMenu]);
+
     if (!gitStatus && !loading) {
         return (
             <div className="sc-panel" style={{ alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -180,6 +195,57 @@ const SourceControlPanel = ({
         onCommit(trimmed);
         setMessage('');
     };
+
+    const closeCommitMenu = () => setCommitMenu(null);
+
+    const openCommitMenu = () => {
+        const el = commitDropdownRef.current;
+        if (!el || typeof el.getBoundingClientRect !== 'function') return;
+        const rect = el.getBoundingClientRect();
+        const menuWidth = 220;
+        const gap = 6;
+        const x = Math.max(8, Math.min((rect.right - menuWidth), (window.innerWidth - menuWidth - 8)));
+        const y = Math.min(window.innerHeight - 8, rect.bottom + gap);
+        setCommitMenu({ x, y });
+    };
+
+    const handleCommitMenuToggle = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (commitMenu) closeCommitMenu();
+        else openCommitMenu();
+    };
+
+    const runMaybePromise = async (fn, ...args) => {
+        if (typeof fn !== 'function') return;
+        const res = fn(...args);
+        if (res && typeof res.then === 'function') await res;
+    };
+
+    const runCommitFlow = async ({ after } = {}) => {
+        const trimmed = message.trim();
+        if (!trimmed || staged.length === 0) return;
+        closeCommitMenu();
+        setMessage('');
+        await runMaybePromise(onCommit, trimmed);
+        await runMaybePromise(after);
+    };
+
+    const renderCommitMenuItem = (label, action, { danger = false, disabled = false } = {}) => (
+        <div
+            className={`context-item ${danger ? 'danger' : ''} ${disabled ? 'disabled' : ''}`}
+            style={{ padding: '8px 12px', ...(danger ? { color: 'var(--danger)' } : {}) }}
+            onClick={async () => {
+                if (disabled) return;
+                if (action) {
+                    await action();
+                }
+                closeCommitMenu();
+            }}
+        >
+            {label}
+        </div>
+    );
 
     const handleCreateBranchConfirm = async () => {
         if (!newBranchName.trim()) return;
@@ -446,6 +512,7 @@ const SourceControlPanel = ({
         }
 
         if (id === 'staged') {
+            if (!staged || staged.length === 0) return null;
             return (
                 <StagedSection
                     expanded={expanded.staged}
@@ -472,6 +539,7 @@ const SourceControlPanel = ({
         }
 
         if (id === 'unstaged') {
+            if (!changes || changes.length === 0) return null;
             return (
                 <UnstagedSection
                     expanded={expanded.unstaged}
@@ -640,11 +708,12 @@ const SourceControlPanel = ({
                             </button>
                             <button
                                 className="sc-commit-dropdown"
-                                onClick={handleCommit}
+                                onClick={handleCommitMenuToggle}
                                 disabled={!canCommit}
                                 type="button"
-                                title="提交"
-                                aria-label="提交"
+                                title="更多操作"
+                                aria-label="更多操作"
+                                ref={commitDropdownRef}
                             >
                                 <span className="codicon codicon-chevron-down" aria-hidden />
                             </button>
@@ -741,6 +810,40 @@ const SourceControlPanel = ({
                             handleCopyRemoteUrl,
                             { disabled: !gitRemotes || gitRemotes.length === 0 }
                         )}
+                    </div>
+                </>
+            )}
+
+            {commitMenu && (
+                <>
+                    <div
+                        style={{
+                            position: 'fixed',
+                            inset: 0,
+                            zIndex: 99998
+                        }}
+                        onClick={closeCommitMenu}
+                    />
+                    <div
+                        className="context-menu"
+                        style={{
+                            position: 'fixed',
+                            top: commitMenu.y,
+                            left: commitMenu.x,
+                            background: 'var(--panel)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius)',
+                            boxShadow: 'var(--shadow-soft)',
+                            zIndex: 99999,
+                            minWidth: 220,
+                            padding: 4
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {renderCommitMenuItem('提交', async () => runCommitFlow(), { disabled: !canCommit })}
+                        {renderCommitMenuItem('提交(修改)', null, { disabled: true })}
+                        {renderCommitMenuItem('提交并推送', async () => runCommitFlow({ after: onPush }), { disabled: !canCommit || typeof onPush !== 'function' })}
+                        {renderCommitMenuItem('提交并同步', async () => runCommitFlow({ after: onSync }), { disabled: !canCommit || typeof onSync !== 'function' })}
                     </div>
                 </>
             )}
