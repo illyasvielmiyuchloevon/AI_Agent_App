@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { pluginsService } from '../services/pluginsService';
 import { outputService } from '../services/outputService';
 import { EXTENSIONS_TAB_PREFIX } from '../../utils/appDefaults';
@@ -26,10 +28,45 @@ const formatDateTime = (ts) => {
   }
 };
 
+const formatDate = (ts) => {
+  const n = Number(ts || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  try {
+    return new Date(n).toLocaleDateString();
+  } catch {
+    return '';
+  }
+};
+
 function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
   const t = (zh, en) => (language === 'zh' ? zh : en);
   const seqRef = useRef(0);
   const refreshTimerRef = useRef(null);
+  const canOpenExternalLink = useCallback(() => {
+    const api = globalThis?.window?.electronAPI || null;
+    return !!(api?.window?.openPopup || api?.shell?.openExternal);
+  }, []);
+  const openExternal = useCallback(async (url) => {
+    const target = String(url || '').trim();
+    if (!target) return;
+    const windowApi = globalThis?.window?.electronAPI?.window;
+    try {
+      if (windowApi?.openPopup) {
+        await windowApi.openPopup({ url: target });
+        return;
+      }
+    } catch {}
+    const shellApi = globalThis?.window?.electronAPI?.shell;
+    try {
+      if (shellApi?.openExternal) {
+        await shellApi.openExternal(target);
+        return;
+      }
+    } catch {}
+    try {
+      window.open(target, '_blank', 'noopener,noreferrer');
+    } catch {}
+  }, []);
 
   const pluginId = useMemo(() => {
     const p = String(tabPath || '');
@@ -41,6 +78,8 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useState(null);
   const [marketItem, setMarketItem] = useState(null);
+  const [remoteDetail, setRemoteDetail] = useState(null);
+  const [remoteCached, setRemoteCached] = useState(false);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
 
@@ -50,12 +89,49 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
     const seq = (seqRef.current += 1);
     setLoading(true);
     setError('');
+    setRemoteDetail(null);
+    setRemoteCached(false);
     try {
+      const fetchRemoteDetail = async ({ providerId, version } = {}) => {
+        const pid = normalizeText(providerId);
+        const ver = normalizeText(version);
+        if (!pid) return { ok: false, error: language === 'zh' ? '缺少 providerId，无法获取插件详情。' : 'Missing providerId, cannot fetch details.' };
+
+        const attempt = async (opts) =>
+          pluginsService
+            .getDetail(id, pid, opts)
+            .catch((e) => ({ ok: false, error: e?.message || String(e) }));
+
+        const first = await attempt({ ...(ver ? { version: ver } : {}), forceRefresh: false });
+        if (first?.ok && first?.detail) return first;
+        if (ver) {
+          const second = await attempt({ forceRefresh: false });
+          if (second?.ok && second?.detail) return second;
+        }
+        return first;
+      };
+
       const res = await pluginsService.getDetails(id).catch((e) => ({ ok: false, error: e?.message || String(e) }));
       if (seq !== seqRef.current) return;
       if (res?.ok) {
         setDetails(res);
         setMarketItem(null);
+        const providerId = normalizeText(
+          res?.marketplace?.source?.providerId
+          || res?.plugin?.installed?.source?.providerId
+          || res?.plugin?.source?.providerId
+          || res?.manifest?.source?.providerId
+          || ''
+        );
+        const version = normalizeText(res?.marketplace?.version || res?.plugin?.installedVersion || '');
+        if (providerId) {
+          const detailRes = await fetchRemoteDetail({ providerId, version });
+          if (seq !== seqRef.current) return;
+          if (detailRes?.ok && detailRes?.detail) {
+            setRemoteDetail(detailRes.detail);
+            setRemoteCached(!!detailRes.cached);
+          }
+        }
         return;
       }
       setDetails(null);
@@ -65,11 +141,28 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
       const items = Array.isArray(found?.items) ? found.items : [];
       const exact = items.find((it) => String(it?.id || '') === id) || (items.length === 1 ? items[0] : null);
       setMarketItem(exact);
-      setError(!exact && res?.error ? String(res.error) : '');
+      if (!exact) {
+        setError(res?.error ? String(res.error) : '');
+        return;
+      }
+
+      const providerId = normalizeText(exact?.source?.providerId || exact?.providerId || '');
+      const version = normalizeText(exact?.version || '');
+      const detailRes = await fetchRemoteDetail({ providerId, version });
+      if (seq !== seqRef.current) return;
+      if (detailRes?.ok && detailRes?.detail) {
+        setRemoteDetail(detailRes.detail);
+        setRemoteCached(!!detailRes.cached);
+        setError('');
+      } else {
+        setRemoteDetail(null);
+        setRemoteCached(false);
+        setError(String(detailRes?.error || (language === 'zh' ? '获取插件详情失败。' : 'Failed to fetch details.')));
+      }
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [pluginId]);
+  }, [language, pluginId]);
 
   useEffect(() => {
     void refresh();
@@ -99,6 +192,8 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
     const marketplace = details?.marketplace || null;
     const installed = !!details?.installed;
     const enabled = !!plugin?.enabled;
+
+    const remote = remoteDetail || null;
 
     const name = normalizeText(packageJson?.displayName || packageJson?.name || plugin?.name || marketItem?.name || pluginId);
     const description = normalizeText(packageJson?.description || plugin?.description || marketItem?.description);
@@ -134,14 +229,39 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
       description,
       version,
       publisher,
+      publisherUrl: normalizeText(remote?.publisher?.url || ''),
       trust,
       installedAt,
       icon,
       links,
-      readme: normalizeText(details?.readme || ''),
-      changelog: normalizeText(details?.changelog || ''),
+      readme: normalizeText(details?.readme || remote?.readme || ''),
+      changelog: normalizeText(details?.changelog || remote?.changelog || ''),
+      tags: Array.isArray(remote?.capabilities) ? remote.capabilities : [],
+      categories: Array.isArray(remote?.categories) ? remote.categories : [],
+      dependencies: Array.isArray(remote?.dependencies) ? remote.dependencies : [],
+      license: normalizeText(remote?.license || ''),
+      repository: normalizeText(remote?.repository || ''),
+      downloads: Number.isFinite(remote?.statistics?.downloads) ? remote.statistics.downloads : null,
+      rating: Number.isFinite(remote?.statistics?.rating) ? remote.statistics.rating : null,
+      reviewCount: Number.isFinite(remote?.statistics?.reviewCount) ? remote.statistics.reviewCount : null,
+      lastUpdated: Number.isFinite(remote?.lastUpdated) ? remote.lastUpdated : 0,
+      sourceProviderId: normalizeText(remote?.source?.providerId || marketplace?.source?.providerId || marketItem?.source?.providerId || ''),
+      remoteCached: !!remoteCached,
     };
-  }, [details, language, marketItem, pluginId]);
+  }, [details, language, marketItem, pluginId, remoteCached, remoteDetail]);
+
+  const autoTabRef = useRef({ id: '', done: false });
+  useEffect(() => {
+    if (autoTabRef.current.id !== pluginId) autoTabRef.current = { id: pluginId, done: false };
+    if (autoTabRef.current.done) return;
+    if (loading) return;
+
+    const hasReadme = !!normalizeText(view.readme);
+    const hasChangelog = !!normalizeText(view.changelog);
+    const next = hasReadme ? 'readme' : hasChangelog ? 'changelog' : 'features';
+    setActiveTab(next);
+    autoTabRef.current = { id: pluginId, done: true };
+  }, [loading, pluginId, view.changelog, view.readme]);
 
   const ensureMarketplaceItem = useCallback(async () => {
     if (view?.marketplace?.id) return view.marketplace;
@@ -251,10 +371,147 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
   const renderMarkdown = (value) => {
     const raw = normalizeText(value || '');
     if (!raw) return <div className="extension-details-empty">{t('暂无内容。', 'No content.')}</div>;
+
+    const schema = {
+      ...defaultSchema,
+      tagNames: Array.from(new Set([
+        ...((defaultSchema && Array.isArray(defaultSchema.tagNames)) ? defaultSchema.tagNames : []),
+        'img', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'kbd', 'details', 'summary', 'div', 'span', 'sup', 'sub',
+      ])),
+      attributes: {
+        ...(defaultSchema?.attributes || {}),
+        a: Array.from(new Set([...(defaultSchema?.attributes?.a || []), 'target', 'rel'])),
+        img: Array.from(new Set([...(defaultSchema?.attributes?.img || []), 'src', 'alt', 'title', 'width', 'height', 'align'])),
+        div: Array.from(new Set([...(defaultSchema?.attributes?.div || []), 'align'])),
+        p: Array.from(new Set([...(defaultSchema?.attributes?.p || []), 'align'])),
+        td: Array.from(new Set([...(defaultSchema?.attributes?.td || []), 'align'])),
+        th: Array.from(new Set([...(defaultSchema?.attributes?.th || []), 'align'])),
+        span: Array.from(new Set([...(defaultSchema?.attributes?.span || []), 'align'])),
+      },
+    };
+
     return (
-      <ReactMarkdown className="markdown-content">
+      <ReactMarkdown
+        className="markdown-content"
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, schema]]}
+        components={{
+          a: ({ node: _node, href, ...props }) => (
+            <a
+              {...props}
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                if (!href) return;
+                const safeHref = String(href || '').trim();
+                if (!/^https?:\/\//i.test(safeHref)) return;
+                if (!canOpenExternalLink()) return;
+                e.preventDefault();
+                e.stopPropagation();
+                void openExternal(safeHref);
+              }}
+            />
+          ),
+        }}
+      >
         {raw}
       </ReactMarkdown>
+    );
+  };
+
+  const renderFeatures = () => {
+    const contributes = view.packageJson?.contributes && typeof view.packageJson.contributes === 'object'
+      ? view.packageJson.contributes
+      : null;
+    const activationEvents = Array.isArray(view.packageJson?.activationEvents) ? view.packageJson.activationEvents : [];
+
+    if (!contributes && activationEvents.length === 0) {
+      return (
+        <div className="extension-details-empty">
+          {t('暂无贡献点信息（未提供 package.json）。', 'No contributions info (missing package.json).')}
+        </div>
+      );
+    }
+
+    const labelForKey = (key) => {
+      const map = {
+        commands: t('命令', 'Commands'),
+        languages: t('语言', 'Languages'),
+        grammars: t('语法高亮', 'Grammars'),
+        debuggers: t('调试器', 'Debuggers'),
+        configuration: t('配置', 'Configuration'),
+        configurationDefaults: t('默认配置', 'Configuration Defaults'),
+        keybindings: t('键位', 'Keybindings'),
+        menus: t('菜单', 'Menus'),
+        snippets: t('代码片段', 'Snippets'),
+        themes: t('主题', 'Themes'),
+        iconThemes: t('图标主题', 'Icon Themes'),
+        colors: t('颜色', 'Colors'),
+        views: t('视图', 'Views'),
+        viewsContainers: t('视图容器', 'View Containers'),
+        viewsWelcome: t('视图欢迎页', 'View Welcome'),
+        jsonValidation: t('JSON 校验', 'JSON Validation'),
+        semanticTokenScopes: t('语义令牌', 'Semantic Token Scopes'),
+        terminal: t('终端', 'Terminal'),
+        taskDefinitions: t('任务定义', 'Task Definitions'),
+        problemMatchers: t('问题匹配器', 'Problem Matchers'),
+        notebooks: t('Notebook', 'Notebooks'),
+        notebookRenderer: t('Notebook 渲染器', 'Notebook Renderers'),
+        walkthroughs: t('引导', 'Walkthroughs'),
+      };
+      return map[key] || key;
+    };
+
+    const countValue = (value) => {
+      if (Array.isArray(value)) return value.length;
+      if (value && typeof value === 'object') {
+        if (value.properties && typeof value.properties === 'object') return Object.keys(value.properties).length;
+        return Object.keys(value).length;
+      }
+      if (value == null) return 0;
+      return 1;
+    };
+
+    const keys = contributes ? Object.keys(contributes).sort((a, b) => a.localeCompare(b)) : [];
+    const rows = keys
+      .map((k) => ({ key: k, label: labelForKey(k), count: countValue(contributes[k]) }))
+      .filter((r) => r.count > 0);
+
+    if (rows.length === 0 && activationEvents.length === 0) {
+      return (
+        <div className="extension-details-empty">
+          {t('暂无贡献点信息。', 'No contributions info.')}
+        </div>
+      );
+    }
+
+    return (
+      <div className="extension-details-features">
+        {rows.length ? (
+          <div className="extension-details-features-section">
+            <div className="extension-details-features-title">{t('贡献点', 'Contributions')}</div>
+            <div className="extension-details-contrib-list" role="table" aria-label={t('贡献点列表', 'Contributions list')}>
+              {rows.map((r) => (
+                <div key={r.key} className="extension-details-contrib-row" role="row">
+                  <div className="extension-details-contrib-key" role="cell">{r.label}</div>
+                  <div className="extension-details-contrib-count" role="cell">{String(r.count)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {activationEvents.length ? (
+          <div className="extension-details-features-section">
+            <div className="extension-details-features-title">{t('激活事件', 'Activation Events')}</div>
+            <div className="extension-details-mono-list">
+              {activationEvents.slice(0, 80).map((ev) => (
+                <div key={String(ev)} className="extension-details-mono-item">{String(ev)}</div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
     );
   };
 
@@ -305,23 +562,108 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
 
       <div className="extension-details-body">
         <div className="extension-details-content">
-          {loading ? <div className="extension-details-empty">{t('加载中…', 'Loading…')}</div> : null}
-          {!loading && activeTab === 'readme' ? renderMarkdown(view.readme) : null}
-          {!loading && activeTab === 'changelog' ? renderMarkdown(view.changelog) : null}
-          {!loading && activeTab === 'features' ? (
-            <div className="extension-details-features">
-              {view.packageJson?.contributes ? (
-                <pre className="extension-details-pre">{JSON.stringify(view.packageJson.contributes, null, 2)}</pre>
-              ) : (
-                <div className="extension-details-empty">
-                  {t('暂无可展示的 contributes 信息（非 VS Code 扩展或未提供 package.json）。', 'No contributes info available.')}
-                </div>
-              )}
-            </div>
-          ) : null}
+          <div className="extension-details-content-inner">
+            {loading ? <div className="extension-details-empty">{t('加载中…', 'Loading…')}</div> : null}
+            {!loading && activeTab === 'readme' ? renderMarkdown(view.readme) : null}
+            {!loading && activeTab === 'changelog' ? renderMarkdown(view.changelog) : null}
+            {!loading && activeTab === 'features' ? renderFeatures() : null}
+            {!loading && view.remoteCached ? <div className="extension-details-subtle">{t('详情来自缓存。', 'Details loaded from cache.')}</div> : null}
+          </div>
         </div>
 
         <div className="extension-details-sidebar">
+          <div className="extension-details-sidebar-section">
+            <div className="extension-details-sidebar-title">{t('信息', 'Info')}</div>
+            {view.sourceProviderId ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('市场', 'Marketplace')}</div>
+                <div className="v">{view.sourceProviderId}</div>
+              </div>
+            ) : null}
+            {view.version ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('版本', 'Version')}</div>
+                <div className="v">{view.version}</div>
+              </div>
+            ) : null}
+            {view.publisher ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('发布者', 'Publisher')}</div>
+                <div className="v">
+                  {view.publisherUrl ? (
+                    <a
+                      className="extension-details-link"
+                      href={view.publisherUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => {
+                        const safeHref = String(view.publisherUrl || '').trim();
+                        if (!/^https?:\/\//i.test(safeHref)) return;
+                        if (!canOpenExternalLink()) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void openExternal(safeHref);
+                      }}
+                    >
+                      {view.publisher}
+                    </a>
+                  ) : (
+                    view.publisher
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {view.lastUpdated ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('更新时间', 'Last Updated')}</div>
+                <div className="v">{formatDate(view.lastUpdated)}</div>
+              </div>
+            ) : null}
+            {view.downloads != null ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('下载量', 'Downloads')}</div>
+                <div className="v">{String(view.downloads)}</div>
+              </div>
+            ) : null}
+            {view.rating != null ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('评分', 'Rating')}</div>
+                <div className="v">
+                  {Number(view.rating).toFixed(1)}{view.reviewCount != null ? ` (${String(view.reviewCount)})` : ''}
+                </div>
+              </div>
+            ) : null}
+            {view.license ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('许可', 'License')}</div>
+                <div className="v">{view.license}</div>
+              </div>
+            ) : null}
+            {view.repository ? (
+              <div className="extension-details-sidebar-row">
+                <div className="k">{t('仓库', 'Repository')}</div>
+                <div className="v">
+                  <a
+                    className="extension-details-link"
+                    href={view.repository}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => {
+                      const safeHref = String(view.repository || '').trim();
+                      if (!/^https?:\/\//i.test(safeHref)) return;
+                      if (!canOpenExternalLink()) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void openExternal(safeHref);
+                    }}
+                  >
+                    {t('打开', 'Open')}
+                  </a>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
           <div className="extension-details-sidebar-section">
             <div className="extension-details-sidebar-title">{t('安装', 'Installation')}</div>
             <div className="extension-details-sidebar-row">
@@ -341,9 +683,45 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
               <div className="extension-details-sidebar-title">{t('资源', 'Resources')}</div>
               <div className="extension-details-links">
                 {view.links.map((l) => (
-                  <a key={l.href} className="extension-details-link" href={l.href} target="_blank" rel="noreferrer">
+                  <a
+                    key={l.href}
+                    className="extension-details-link"
+                    href={l.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => {
+                      const safeHref = String(l.href || '').trim();
+                      if (!/^https?:\/\//i.test(safeHref)) return;
+                      if (!canOpenExternalLink()) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      void openExternal(safeHref);
+                    }}
+                  >
                     {l.label}
                   </a>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {view.categories.length ? (
+            <div className="extension-details-sidebar-section">
+              <div className="extension-details-sidebar-title">{t('类别', 'Categories')}</div>
+              <div className="extension-details-tags">
+                {view.categories.slice(0, 64).map((c) => (
+                  <span key={String(c)} className="extension-details-tag">{String(c)}</span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {view.tags.length ? (
+            <div className="extension-details-sidebar-section">
+              <div className="extension-details-sidebar-title">{t('标签', 'Tags')}</div>
+              <div className="extension-details-tags">
+                {view.tags.slice(0, 128).map((c) => (
+                  <span key={String(c)} className="extension-details-tag">{String(c)}</span>
                 ))}
               </div>
             </div>

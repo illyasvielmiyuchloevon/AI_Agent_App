@@ -1215,6 +1215,91 @@ input:focus, select:focus, textarea:focus {
   height: auto;
 }
 
+.extension-details-content-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.extension-details-editor .markdown-content {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.extension-details-editor .markdown-content p {
+  font-size: 13px;
+}
+
+.extension-details-subtle {
+  margin-top: 12px;
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.extension-details-features {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.extension-details-features-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.extension-details-features-title {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.extension-details-contrib-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-sub);
+}
+
+.extension-details-contrib-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.extension-details-contrib-row:last-child {
+  border-bottom: none;
+}
+
+.extension-details-contrib-key {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.extension-details-contrib-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.extension-details-mono-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-sub);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.extension-details-mono-item {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
 .icon-btn {
   border: 1px solid var(--border);
   background: var(--panel);

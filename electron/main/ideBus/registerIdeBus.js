@@ -77,11 +77,13 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'window/openDevTools': 500,
         'window/toggleDevTools': 500,
         'window/applySnapLayout': 150,
+        'window/openExternalUrl': 800,
         'window/openNewWindow': 300,
         'window/openTerminalWindow': 300,
         'window/close': 150,
         'shell/showItemInFolder': 250,
         'shell/openPath': 800,
+        'shell/openExternal': 800,
       },
       ignore: [
         'initialize',
@@ -226,6 +228,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'window/openDevTools',
         'window/toggleDevTools',
         'window/applySnapLayout',
+        'window/openExternalUrl',
         'window/openNewWindow',
         'window/openTerminalWindow',
         'window/close',
@@ -233,6 +236,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'window/showQuickPickResponse',
         'shell/showItemInFolder',
         'shell/openPath',
+        'shell/openExternal',
         'lsp/applyEditResponse',
         'workspace/applyEditResponse',
       ];
@@ -580,14 +584,6 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       return { ok: true, items: plugins.manager.listEnabledLanguages() };
     });
 
-    /**
-     * Get detailed plugin information including README, changelog, and metadata
-     * 
-     * Requirements: 3.1, 3.2, 3.3
-     * - Route request to PluginManager.getDetail
-     * - Return standard response format { ok, detail, error, cached }
-     * - Handle timeout within 30 seconds
-     */
     connection.onRequest('plugins/getDetail', async (payload) => {
       if (!plugins?.manager?.getDetail) return { ok: false, error: 'plugins service unavailable' };
       await ensurePluginsReady();
@@ -881,6 +877,81 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         if (res) return { ok: false, error: String(res) };
         return { ok: true };
       } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('shell/openExternal', async (url) => {
+      const target = String(url || '').trim();
+      if (!target) return { ok: false, error: 'missing url' };
+      try {
+        const ok = await shell.openExternal(target);
+        return { ok: !!ok };
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('window/openExternalUrl', async (payload) => {
+      const raw = payload && payload.url ? String(payload.url) : '';
+      const target = raw.trim();
+      if (!target) return { ok: false, error: 'missing url' };
+
+      let parsed = null;
+      try {
+        parsed = new URL(target);
+      } catch {
+        return { ok: false, error: 'invalid url' };
+      }
+      const protocol = String(parsed.protocol || '').toLowerCase();
+      if (protocol !== 'http:' && protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
+
+      const preloadPath = resolvePreloadPath(path.join(__dirname, '..', '..'));
+      const win = new BrowserWindow({
+        width: 1100,
+        height: 800,
+        frame: true,
+        autoHideMenuBar: true,
+        webPreferences: {
+          preload: preloadPath,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+
+      try {
+        try {
+          win.webContents.on('will-navigate', (evt, url) => {
+            try {
+              const u = new URL(String(url || ''));
+              if (u.protocol === 'http:' || u.protocol === 'https:') return;
+            } catch {}
+            try {
+              evt.preventDefault();
+            } catch {}
+          });
+        } catch {}
+
+        try {
+          win.webContents.setWindowOpenHandler(({ url }) => {
+            try {
+              const u = new URL(String(url || ''));
+              if (u.protocol === 'http:' || u.protocol === 'https:') {
+                win.loadURL(u.toString()).catch(() => {});
+              }
+            } catch {}
+            return { action: 'deny' };
+          });
+        } catch {}
+
+        await win.loadURL(parsed.toString());
+        win.focus();
+        return { ok: true };
+      } catch (err) {
+        try {
+          win.close();
+        } catch {}
         return { ok: false, error: err?.message || String(err) };
       }
     });

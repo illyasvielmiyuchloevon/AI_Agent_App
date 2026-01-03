@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
-const { normalizeOpenVsxDetail } = require('../providers/OpenVsxProvider');
+const { OpenVsxProvider, normalizeOpenVsxDetail } = require('../providers/OpenVsxProvider');
 
 // Arbitrary for generating valid ISO date strings
 const isoDateArb = fc.date({ min: new Date('2000-01-01'), max: new Date('2030-12-31') })
@@ -258,4 +258,57 @@ test('Property 2: Provider Response Normalization - preserves readme and changel
     ),
     { numRuns: 100 }
   );
+});
+
+test('OpenVsxProvider.getDetail fetches readme and changelog files when available', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (input) => {
+    const url = String(input);
+    calls.push(url);
+    if (url === 'https://open-vsx.org/api/ns/name') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          namespace: 'ns',
+          name: 'name',
+          displayName: 'Name',
+          description: 'Desc',
+          version: '1.2.3',
+          timestamp: new Date('2024-01-01T00:00:00.000Z').toISOString(),
+          tags: ['tag-a'],
+          categories: ['cat-a'],
+          downloadCount: 1,
+          reviewCount: 0,
+          averageRating: 4.5,
+          publishedBy: { loginName: 'pub', homepage: 'https://example.com' },
+          files: {
+            readme: 'https://files/readme.md',
+            changelog: 'https://files/changelog.md',
+          },
+        }),
+      };
+    }
+    if (url === 'https://files/readme.md') {
+      return { ok: true, status: 200, text: async () => '# README' };
+    }
+    if (url === 'https://files/changelog.md') {
+      return { ok: true, status: 200, text: async () => '## Changelog' };
+    }
+    return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
+  };
+
+  try {
+    const provider = new OpenVsxProvider();
+    const detail = await provider.getDetail('ns.name');
+    assert.ok(detail, 'detail should not be null');
+    assert.equal(detail.id, 'ns.name');
+    assert.equal(detail.readme, '# README');
+    assert.equal(detail.changelog, '## Changelog');
+    assert.ok(calls.includes('https://files/readme.md'));
+    assert.ok(calls.includes('https://files/changelog.md'));
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

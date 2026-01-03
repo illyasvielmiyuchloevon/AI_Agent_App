@@ -63,6 +63,82 @@ function createWindow() {
     },
   });
 
+  const appOrigin = (() => {
+    try {
+      if (isDev && process.env.VITE_DEV_SERVER_URL) return new URL(String(process.env.VITE_DEV_SERVER_URL)).origin;
+    } catch {}
+    return '';
+  })();
+
+  const openExternalUrlPopup = async (rawUrl) => {
+    const target = String(rawUrl || '').trim();
+    if (!target) return;
+    let parsed = null;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return;
+    }
+    const protocol = String(parsed.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') return;
+
+    const popup = new BrowserWindow({
+      width: 1100,
+      height: 800,
+      frame: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    try {
+      try {
+        popup.webContents.on('will-navigate', (evt, url) => {
+          try {
+            const u = new URL(String(url || ''));
+            if (u.protocol === 'http:' || u.protocol === 'https:') return;
+          } catch {}
+          try {
+            evt.preventDefault();
+          } catch {}
+        });
+      } catch {}
+      try {
+        popup.webContents.setWindowOpenHandler(({ url }) => {
+          try {
+            const u = new URL(String(url || ''));
+            if (u.protocol === 'http:' || u.protocol === 'https:') popup.loadURL(u.toString()).catch(() => {});
+          } catch {}
+          return { action: 'deny' };
+        });
+      } catch {}
+
+      await popup.loadURL(parsed.toString());
+      popup.focus();
+    } catch {
+      try {
+        popup.close();
+      } catch {}
+    }
+  };
+
+  try {
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      try {
+        const u = new URL(String(url || ''));
+        if ((u.protocol === 'http:' || u.protocol === 'https:') && (!appOrigin || u.origin !== appOrigin)) {
+          void openExternalUrlPopup(u.toString());
+          return { action: 'deny' };
+        }
+      } catch {}
+      return { action: 'allow' };
+    });
+  } catch {}
+
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     // DevTools can be noisy (e.g. Autofill CDP domain mismatch). Only auto-open when explicitly requested.

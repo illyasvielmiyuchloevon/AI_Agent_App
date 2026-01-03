@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import TerminalWindowApp from './TerminalWindowApp.jsx'
+import '@vscode/codicons/dist/codicon.css'
 import './index.css'
 
 const isTerminalWindow = (() => {

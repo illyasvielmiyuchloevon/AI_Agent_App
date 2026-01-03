@@ -1,10 +1,3 @@
-/**
- * Normalize OpenVSX API response to PluginDetail structure
- * @param {Object} json - Raw OpenVSX API response
- * @param {string} ns - Namespace
- * @param {string} name - Extension name
- * @returns {Object} - Normalized PluginDetail object
- */
 function normalizeOpenVsxDetail(json, ns, name) {
   const id = ns && name ? `${ns}.${name}` : '';
   const version = String(json?.version || '');
@@ -18,7 +11,7 @@ function normalizeOpenVsxDetail(json, ns, name) {
     changelog: json?.changelog != null ? String(json.changelog) : null,
     categories: Array.isArray(json?.categories) ? json.categories.map(String) : [],
     capabilities: Array.isArray(json?.tags) ? json.tags.map(String) : [],
-    dependencies: [], // OpenVSX doesn't provide dependency info in the same way
+    dependencies: [],
     repository: json?.repository != null ? String(json.repository) : null,
     license: json?.license != null ? String(json.license) : null,
     publisher: {
@@ -38,6 +31,19 @@ function normalizeOpenVsxDetail(json, ns, name) {
 class OpenVsxProvider {
   constructor() {
     this.id = 'openvsx';
+  }
+
+  async _fetchText(url) {
+    const u = url != null ? String(url || '').trim() : '';
+    if (!u) return null;
+    try {
+      const res = await fetch(u);
+      if (!res.ok) return null;
+      const text = await res.text();
+      return text != null ? String(text) : null;
+    } catch {
+      return null;
+    }
   }
 
   async search(query = '', options) {
@@ -98,17 +104,6 @@ class OpenVsxProvider {
     };
   }
 
-  /**
-   * Get detailed plugin information including README and changelog
-   * 
-   * Requirements: 2.1, 2.4
-   * - Parse OpenVSX API response and extract README, changelog, and metadata
-   * - Return null for fields not supported by provider without failing
-   * 
-   * @param {string} id - Plugin ID in format "namespace.name"
-   * @param {string} [version] - Optional version (defaults to latest)
-   * @returns {Promise<Object|null>} - PluginDetail object or null if not found
-   */
   async getDetail(id, version) {
     const key = String(id || '').trim();
     if (!key) return null;
@@ -133,9 +128,18 @@ class OpenVsxProvider {
       const json = await res.json();
       if (!json || !json.version) return null;
 
-      return normalizeOpenVsxDetail(json, ns, name);
+      const detail = normalizeOpenVsxDetail(json, ns, name);
+
+      const files = json?.files && typeof json.files === 'object' ? json.files : {};
+      const [readme, changelog] = await Promise.all([
+        this._fetchText(files.readme),
+        this._fetchText(files.changelog),
+      ]);
+      if (readme != null) detail.readme = readme;
+      if (changelog != null) detail.changelog = changelog;
+
+      return detail;
     } catch (err) {
-      // Network or parsing error - return null as per requirement 2.4
       return null;
     }
   }

@@ -191,6 +191,14 @@ const tryBus = async (busMethod, params, fallback) => {
   }
 };
 
+const coerceUrlPayload = (payloadOrUrl) => {
+  if (payloadOrUrl && typeof payloadOrUrl === 'object') {
+    const url = payloadOrUrl.url != null ? String(payloadOrUrl.url || '').trim() : '';
+    return { url };
+  }
+  return { url: String(payloadOrUrl || '').trim() };
+};
+
 contextBridge.exposeInMainWorld('electronAPI', {
   ideBus: {
     request: (method, params, options) => ideBus.request(String(method || ''), params, options),
@@ -214,6 +222,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     toggleDevTools: () => tryBus('window/toggleDevTools', undefined, () => ipcRenderer.invoke('window:toggleDevTools')),
     applySnapLayout: (layoutId, zoneIndex) =>
       tryBus('window/applySnapLayout', { layoutId, zoneIndex }, () => ipcRenderer.invoke('window:applySnapLayout', { layoutId, zoneIndex })),
+    openPopup: (payloadOrUrl) => {
+      const payload = coerceUrlPayload(payloadOrUrl);
+      return tryBus('window/openExternalUrl', payload, () => ipcRenderer.invoke('window:openExternalUrl', payload));
+    },
     openNewWindow: (payload) => tryBus('window/openNewWindow', payload, () => ipcRenderer.invoke('window:openNewWindow', payload)),
     openTerminalWindow: (payload) =>
       tryBus('window/openTerminalWindow', payload, () => ipcRenderer.invoke('window:openTerminalWindow', payload)),
@@ -222,6 +234,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   shell: {
     showItemInFolder: (fsPath) => tryBus('shell/showItemInFolder', fsPath, () => ipcRenderer.invoke('shell:showItemInFolder', fsPath)),
     openPath: (fsPath) => tryBus('shell/openPath', fsPath, () => ipcRenderer.invoke('shell:openPath', fsPath)),
+    openExternal: (url) => tryBus('shell/openExternal', url, () => ipcRenderer.invoke('shell:openExternal', url)),
   },
   workspace: {
     pickFolder: () => tryBus('workspace/pickFolder', undefined, () => ipcRenderer.invoke('workspace:pickFolder')),
@@ -383,22 +396,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	    enable: (id, trust) => tryBus('plugins/enable', { id, trust }, () => ipcRenderer.invoke('plugins:enable', id, trust)),
     disable: (id) => tryBus('plugins/disable', { id }, () => ipcRenderer.invoke('plugins:disable', id)),
     doctor: (id) => tryBus('plugins/doctor', { id }, () => ipcRenderer.invoke('plugins:doctor', id)),
-    listEnabledLanguages: () => tryBus('plugins/listEnabledLanguages', undefined, () => ipcRenderer.invoke('plugins:listEnabledLanguages')),
-    getDetail: (id, providerId, options) => {
-      const resolvedProviderId = typeof providerId === 'string' ? providerId : undefined;
-      const resolvedOptions =
-        providerId && typeof providerId === 'object' && !Array.isArray(providerId) ? providerId : options && typeof options === 'object' ? options : undefined;
+	    listEnabledLanguages: () => tryBus('plugins/listEnabledLanguages', undefined, () => ipcRenderer.invoke('plugins:listEnabledLanguages')),
+	    getDetail: (id, providerId, options) => {
+	      const resolvedProviderId = typeof providerId === 'string' ? providerId : undefined;
+	      const resolvedOptions =
+	        providerId && typeof providerId === 'object' && !Array.isArray(providerId) ? providerId : options && typeof options === 'object' ? options : undefined;
 
-      return tryBus(
-        'plugins/getDetail',
-        { id, ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}), ...(resolvedOptions ? { forceRefresh: !!resolvedOptions.forceRefresh } : {}) },
-        async () => ({ ok: false, error: 'plugins/getDetail unavailable' })
-      );
-    },
-    onProgress: (handler) => {
-      const fn = (_e, payload) => handler(payload);
-      ipcRenderer.on('plugins:progress', fn);
-      return () => ipcRenderer.off('plugins:progress', fn);
+	      return tryBus(
+	        'plugins/getDetail',
+	        {
+	          id,
+	          ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}),
+	          ...(resolvedOptions && resolvedOptions.version != null ? { version: String(resolvedOptions.version) } : {}),
+	          ...(resolvedOptions ? { forceRefresh: !!resolvedOptions.forceRefresh } : {}),
+	        },
+	        () => ipcRenderer.invoke('plugins:getDetail', id, resolvedProviderId, resolvedOptions)
+	      );
+	    },
+	    onProgress: (handler) => {
+	      const fn = (_e, payload) => handler(payload);
+	      ipcRenderer.on('plugins:progress', fn);
+	      return () => ipcRenderer.off('plugins:progress', fn);
     },
     onChanged: (handler) => {
       const fn = (_e, payload) => handler(payload);

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import Modal from '../Modal';
 import { pluginsService } from '../../workbench/services/pluginsService';
 
@@ -19,6 +21,31 @@ export default function PluginDetailPanel({
 }) {
   const t = (zh, en) => (language === 'zh' ? zh : en);
   const ref = useMemo(() => coercePluginRef(pluginRef), [pluginRef]);
+  const canOpenExternalLink = () => {
+    const api = globalThis?.window?.electronAPI || null;
+    return !!(api?.window?.openPopup || api?.shell?.openExternal);
+  };
+  const openExternal = async (url) => {
+    const target = String(url || '').trim();
+    if (!target) return;
+    const windowApi = globalThis?.window?.electronAPI?.window;
+    try {
+      if (windowApi?.openPopup) {
+        await windowApi.openPopup({ url: target });
+        return;
+      }
+    } catch {}
+    const shellApi = globalThis?.window?.electronAPI?.shell;
+    try {
+      if (shellApi?.openExternal) {
+        await shellApi.openExternal(target);
+        return;
+      }
+    } catch {}
+    try {
+      window.open(target, '_blank', 'noopener,noreferrer');
+    } catch {}
+  };
 
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
@@ -49,7 +76,13 @@ export default function PluginDetailPanel({
           if (res.detail.changelog) return 'changelog';
           return 'capabilities';
         })();
-        setActiveTab((prev) => (prev === 'readme' || prev === 'changelog' || prev === 'capabilities' ? prev : nextTab));
+        setActiveTab((prev) => {
+          const safe = (prev === 'readme' || prev === 'changelog' || prev === 'capabilities') ? prev : nextTab;
+          if (safe === 'readme' && !res.detail.readme) return res.detail.changelog ? 'changelog' : 'capabilities';
+          if (safe === 'changelog' && !res.detail.changelog) return res.detail.readme ? 'readme' : 'capabilities';
+          if (safe === 'capabilities' && (res.detail.readme || res.detail.changelog)) return res.detail.readme ? 'readme' : 'changelog';
+          return safe;
+        });
       } else {
         setDetail(null);
         setCached(false);
@@ -81,6 +114,44 @@ export default function PluginDetailPanel({
   const caps = Array.isArray(detail?.capabilities) ? detail.capabilities : [];
   const deps = Array.isArray(detail?.dependencies) ? detail.dependencies : [];
 
+  const markdownSchema = useMemo(() => ({
+    ...defaultSchema,
+    tagNames: Array.from(new Set([
+      ...((defaultSchema && Array.isArray(defaultSchema.tagNames)) ? defaultSchema.tagNames : []),
+      'img', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'kbd', 'details', 'summary', 'div', 'span', 'sup', 'sub',
+    ])),
+    attributes: {
+      ...(defaultSchema?.attributes || {}),
+      a: Array.from(new Set([...(defaultSchema?.attributes?.a || []), 'target', 'rel'])),
+      img: Array.from(new Set([...(defaultSchema?.attributes?.img || []), 'src', 'alt', 'title', 'width', 'height', 'align'])),
+      div: Array.from(new Set([...(defaultSchema?.attributes?.div || []), 'align'])),
+      p: Array.from(new Set([...(defaultSchema?.attributes?.p || []), 'align'])),
+      td: Array.from(new Set([...(defaultSchema?.attributes?.td || []), 'align'])),
+      th: Array.from(new Set([...(defaultSchema?.attributes?.th || []), 'align'])),
+      span: Array.from(new Set([...(defaultSchema?.attributes?.span || []), 'align'])),
+    },
+  }), []);
+
+  const markdownComponents = useMemo(() => ({
+    a: ({ node: _node, href, ...props }) => (
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(e) => {
+          if (!href) return;
+          const safeHref = String(href || '').trim();
+          if (!/^https?:\/\//i.test(safeHref)) return;
+          if (!canOpenExternalLink()) return;
+          e.preventDefault();
+          e.stopPropagation();
+          void openExternal(safeHref);
+        }}
+      />
+    ),
+  }), []);
+
   const renderMeta = () => {
     if (!detail) return null;
     return (
@@ -97,7 +168,20 @@ export default function PluginDetailPanel({
           {detail?.publisher?.name ? <span>{t('发布者：', 'Publisher: ')}{String(detail.publisher.name)}</span> : null}
           {detail?.license ? <span>{t('许可证：', 'License: ')}{String(detail.license)}</span> : null}
           {detail?.repository ? (
-            <a href={String(detail.repository)} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
+            <a
+              href={String(detail.repository)}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'inherit' }}
+              onClick={(e) => {
+                const safeHref = String(detail.repository || '').trim();
+                if (!/^https?:\/\//i.test(safeHref)) return;
+                if (!canOpenExternalLink()) return;
+                e.preventDefault();
+                e.stopPropagation();
+                void openExternal(safeHref);
+              }}
+            >
               {t('仓库', 'Repository')}
             </a>
           ) : null}
@@ -165,7 +249,9 @@ export default function PluginDetailPanel({
     if (activeTab === 'changelog') {
       return hasChangelog ? (
         <div className="markdown-content">
-          <ReactMarkdown>{String(detail.changelog || '')}</ReactMarkdown>
+          <ReactMarkdown rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSchema]]} components={markdownComponents}>
+            {String(detail.changelog || '')}
+          </ReactMarkdown>
         </div>
       ) : (
         <div style={{ opacity: 0.8 }}>{t('暂无 Changelog。', 'No changelog.')}</div>
@@ -207,7 +293,9 @@ export default function PluginDetailPanel({
 
     return hasReadme ? (
       <div className="markdown-content">
-        <ReactMarkdown>{String(detail.readme || '')}</ReactMarkdown>
+        <ReactMarkdown rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSchema]]} components={markdownComponents}>
+          {String(detail.readme || '')}
+        </ReactMarkdown>
       </div>
     ) : (
       <div style={{ opacity: 0.8 }}>{t('暂无 README。', 'No README.')}</div>

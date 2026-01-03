@@ -63,52 +63,21 @@
 
   - Ensure all tests pass, ask the user if questions arise.
 
-- [-] 5. 注册 IDE Bus 方法 `plugins/getDetail` (Main 进程)
-
-
-
+- [x] 5. 注册 IDE Bus 方法 `plugins/getDetail` (Main 进程)
   - [x] 5.1 在 `registerIdeBus.js` 中添加 `plugins/getDetail` 处理器
-
-
-    - 路由请求到 PluginManager.getDetail
-    - 返回标准响应格式 { ok, detail, error, cached }
-    - _Requirements: 3.1, 3.2, 3.3_
-
   - [x] 5.2 编写 IPC 完整性属性测试
+  - [x] 5.3 编写错误响应属性测试
 
-    - **Property 5: IPC Request-Response Integrity**
-    - **Validates: Requirements 3.1, 3.2**
-  - [ ] 5.3 编写错误响应属性测试
+- [x] 6. 扩展 Preload API (桥接层)
+  - [x] 6.1 在 `preload.js` 的 plugins 对象中添加 `getDetail` 方法
 
+- [x] 7. 扩展 pluginsService (Renderer 进程)
+  - [x] 7.1 在 `frontend/src/workbench/services/pluginsService.js` 中添加 `getDetail` 方法
 
-    - **Property 3: Error Response Consistency**
-    - **Validates: Requirements 1.5**
+- [x] 8. Checkpoint - 确保数据链路测试通过
 
-- [ ] 6. 扩展 Preload API (桥接层)
-  - [ ] 6.1 在 `preload.js` 的 plugins 对象中添加 `getDetail` 方法
-    - 使用 tryBus 调用 `plugins/getDetail`
-    - _Requirements: 3.4_
+- [x] 9. 实现插件详情 UI 组件 (Renderer 进程)
+  - [x] 9.1 创建 `PluginDetailPanel.jsx` 组件
+  - [x] 9.2 集成到现有插件管理页面
 
-- [ ] 7. 扩展 pluginsService (Renderer 进程)
-  - [ ] 7.1 在 `frontend/src/workbench/services/pluginsService.js` 中添加 `getDetail` 方法
-    - 调用 preload API
-    - 处理加载状态和错误
-    - _Requirements: 3.4_
-
-- [ ] 8. Checkpoint - 确保数据链路测试通过
-  - Ensure all tests pass, ask the user if questions arise.
-
-- [ ] 9. 实现插件详情 UI 组件 (Renderer 进程)
-  - [ ] 9.1 创建 `PluginDetailPanel.jsx` 组件
-    - 显示加载状态
-    - 渲染 README (Markdown)
-    - 显示 changelog 标签页
-    - 显示功能列表
-    - 显示错误信息和重试按钮
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
-  - [ ] 9.2 集成到现有插件管理页面
-    - 在 LspSettingsPage 中添加详情查看入口
-    - _Requirements: 4.1_
-
-- [ ] 10. Final Checkpoint - 确保所有测试通过
-  - Ensure all tests pass, ask the user if questions arise.
+- [x] 10. Final Checkpoint - 确保所有测试通过

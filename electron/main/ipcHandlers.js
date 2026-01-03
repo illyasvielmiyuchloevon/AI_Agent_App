@@ -295,6 +295,76 @@ function registerIpcHandlers() {
     }
   });
 
+  ipcMain.handle('shell:openExternal', async (_event, url) => {
+    const target = String(url || '').trim();
+    if (!target) return { ok: false, error: 'missing url' };
+    try {
+      const ok = await shell.openExternal(target);
+      return { ok: !!ok };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('window:openExternalUrl', async (_event, payload) => {
+    const raw = payload && payload.url ? String(payload.url) : '';
+    const target = raw.trim();
+    if (!target) return { ok: false, error: 'missing url' };
+
+    let parsed = null;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return { ok: false, error: 'invalid url' };
+    }
+    const protocol = String(parsed.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
+
+    const win = new BrowserWindow({
+      width: 1100,
+      height: 800,
+      frame: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+
+    try {
+      try {
+        win.webContents.on('will-navigate', (evt, url) => {
+          try {
+            const u = new URL(String(url || ''));
+            if (u.protocol === 'http:' || u.protocol === 'https:') return;
+          } catch {}
+          try {
+            evt.preventDefault();
+          } catch {}
+        });
+      } catch {}
+
+      win.webContents.setWindowOpenHandler(({ url }) => {
+        try {
+          const u = new URL(String(url || ''));
+          if (u.protocol === 'http:' || u.protocol === 'https:') win.loadURL(u.toString()).catch(() => {});
+        } catch {}
+        return { action: 'deny' };
+      });
+    } catch {}
+
+    try {
+      await win.loadURL(parsed.toString());
+      win.focus();
+      return { ok: true };
+    } catch (err) {
+      try { win.close(); } catch {}
+      return { ok: false, error: err?.message || String(err) };
+    }
+  });
+
   ipcMain.handle('window:openNewWindow', async (_event, payload) => {
     const openFile = payload && payload.openFile ? String(payload.openFile) : '';
     const openMode = payload && payload.openMode ? String(payload.openMode) : '';
