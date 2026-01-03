@@ -2,14 +2,12 @@ import React, { useMemo } from 'react';
 import { List } from 'react-window';
 import { useSyncExternalStore } from 'react';
 import { outputService } from '../../services/outputService';
-import { useMeasuredHeight } from '../_shared/useMeasuredHeight';
 
 const RowHeight = 20;
 
 export default function OutputView({ channelId = 'Workbench', filter = '' }) {
   useSyncExternalStore(outputService.subscribe, outputService.getSnapshot, outputService.getSnapshot);
   const all = outputService.getChannelLines(channelId);
-  const [containerRef, height] = useMeasuredHeight();
 
   const filtered = useMemo(() => {
     const q = String(filter || '').trim().toLowerCase();
@@ -33,9 +31,11 @@ export default function OutputView({ channelId = 'Workbench', filter = '' }) {
   );
 
   return (
-    <div ref={containerRef} style={{ height: '100%' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <List
-        style={{ height: Math.max(120, height || 0), width: '100%' }}
+        defaultHeight={240}
+        overscanCount={8}
+        style={{ height: '100%', width: '100%' }}
         rowCount={filtered.length}
         rowHeight={RowHeight}
         rowComponent={Row}

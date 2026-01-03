@@ -436,8 +436,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:error', fn);
       return () => ipcRenderer.off('plugins:error', fn);
+	    },
+	  },
+    tasks: {
+      list: () => tryBus('tasks/list', undefined, async () => ({ ok: false, error: 'tasks unavailable' })),
+      run: (payload) => tryBus('tasks/run', payload, async () => ({ ok: false, error: 'tasks unavailable' })),
+      terminate: (taskId) => tryBus('tasks/terminate', { taskId }, async () => ({ ok: false, error: 'tasks unavailable' })),
     },
-  },
   dap: {
     startSession: (payload) => tryBus('debug/startSession', payload, () => ipcRenderer.invoke('dap:startSession', payload)),
     stopSession: (sessionId) => tryBus('debug/stopSession', { sessionId }, () => ipcRenderer.invoke('dap:stopSession', sessionId)),

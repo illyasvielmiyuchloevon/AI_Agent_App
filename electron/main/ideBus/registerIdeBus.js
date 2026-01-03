@@ -1,5 +1,8 @@
 const { app, BrowserWindow, dialog, screen, shell } = require('electron');
 const path = require('path');
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const { spawn } = require('node:child_process');
 const { JsonRpcConnection } = require('../lsp/jsonrpc/JsonRpcConnection');
 const commandsService = require('../commands/commandsService');
 const { resolvePreloadPath } = require('../preloadPath');
@@ -43,6 +46,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
   if (!ipcMain) throw new Error('registerIdeBus: ipcMain is required');
 
   const connections = new Map();
+  const runningTasks = new Map();
 
   const ensureConnection = (event) => {
     const sender = event?.sender;
@@ -239,6 +243,9 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'shell/openExternal',
         'lsp/applyEditResponse',
         'workspace/applyEditResponse',
+        'tasks/list',
+        'tasks/run',
+        'tasks/terminate',
       ];
       if (dapService) {
         methods.push('debug/startSession', 'debug/stopSession', 'debug/sendRequest', 'debug/listSessions');
@@ -427,6 +434,209 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       }
       const result = await commandsService.executeCommand(command, args);
       return { ok: true, result };
+    });
+
+    const getWorkspaceFsPath = () => String(workspaceService?.getCurrent?.()?.fsPath || '').trim();
+    const isWorkspaceTrusted = (fsPath) => {
+      const p = String(fsPath || '').trim();
+      if (!p) return false;
+      return !!recentStore?.getTrustedByFsPath?.(p);
+    };
+
+    const resolveTaskCwd = (workspaceFsPath, cwd) => {
+      const base = String(workspaceFsPath || '').trim();
+      const raw = cwd != null ? String(cwd || '').trim() : '';
+      if (!raw) return base || process.cwd();
+      if (path.isAbsolute(raw)) return raw;
+      if (!base) return raw;
+      return path.join(base, raw);
+    };
+
+    const loadTasksJson = async (workspaceFsPath) => {
+      const root = String(workspaceFsPath || '').trim();
+      if (!root) return { ok: true, exists: false, version: '2.0.0', tasks: [] };
+      const filePath = path.join(root, '.vscode', 'tasks.json');
+      try {
+        const st = await fsp.stat(filePath).catch(() => null);
+        if (!st || !st.isFile()) return { ok: true, exists: false, version: '2.0.0', tasks: [] };
+      } catch {
+        return { ok: true, exists: false, version: '2.0.0', tasks: [] };
+      }
+
+      try {
+        const raw = await fsp.readFile(filePath, 'utf8');
+        const json = JSON.parse(String(raw || ''));
+        const version = json?.version != null ? String(json.version) : '2.0.0';
+        const arr = Array.isArray(json?.tasks) ? json.tasks : [];
+        const tasks = arr.map((t) => {
+          const label = t?.label != null ? String(t.label) : '';
+          const command = t?.command != null ? String(t.command) : '';
+          const args = Array.isArray(t?.args) ? t.args.map((a) => String(a)) : [];
+          const type = t?.type != null ? String(t.type) : '';
+          const cwd = t?.options?.cwd != null ? String(t.options.cwd) : '';
+          const env = t?.options?.env && typeof t.options.env === 'object' ? t.options.env : null;
+          return {
+            label,
+            command,
+            args,
+            type,
+            options: {
+              cwd,
+              env,
+            },
+          };
+        }).filter((t) => t.label || t.command);
+        return { ok: true, exists: true, version, tasks, filePath };
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err), exists: true, version: '2.0.0', tasks: [] };
+      }
+    };
+
+    const sendTaskOutput = (text) => {
+      const line = text == null ? '' : String(text);
+      if (!line) return;
+      transport.send({
+        jsonrpc: '2.0',
+        method: 'output/append',
+        params: { channelId: 'Tasks', label: '任务', text: line, ts: Date.now() },
+      });
+    };
+
+    const watchTaskStream = (stream, onLine) => {
+      if (!stream || typeof stream.on !== 'function') return () => {};
+      let buf = '';
+      const flush = () => {
+        const rest = buf;
+        buf = '';
+        if (rest) onLine(rest);
+      };
+      const onData = (chunk) => {
+        const s = chunk == null ? '' : chunk.toString('utf8');
+        if (!s) return;
+        buf += s;
+        const parts = buf.split(/\r?\n/);
+        buf = parts.pop() || '';
+        for (const p of parts) {
+          if (p) onLine(p);
+        }
+      };
+      const onEnd = () => flush();
+      stream.on('data', onData);
+      stream.on('end', onEnd);
+      stream.on('close', onEnd);
+      stream.on('error', onEnd);
+      return () => {
+        try { stream.off('data', onData); } catch {}
+        try { stream.off('end', onEnd); } catch {}
+        try { stream.off('close', onEnd); } catch {}
+        try { stream.off('error', onEnd); } catch {}
+      };
+    };
+
+    connection.onRequest('tasks/list', async () => {
+      const fsPath = getWorkspaceFsPath();
+      return await loadTasksJson(fsPath);
+    });
+
+    connection.onRequest('tasks/run', async (payload) => {
+      const fsPath = getWorkspaceFsPath();
+      if (!isWorkspaceTrusted(fsPath)) return { ok: false, error: 'workspace not trusted' };
+
+      const p = payload && typeof payload === 'object' ? payload : {};
+      const requestedLabel = p?.label != null ? String(p.label) : '';
+      const requestedCommand = p?.command != null ? String(p.command) : '';
+      const requestedArgs = Array.isArray(p?.args) ? p.args.map((a) => String(a)) : [];
+      const requestedType = p?.type != null ? String(p.type) : '';
+      const requestedCwd = p?.cwd != null ? String(p.cwd) : '';
+      const requestedEnv = p?.env && typeof p.env === 'object' ? p.env : null;
+
+      let task = null;
+      if (requestedLabel && !requestedCommand) {
+        const listed = await loadTasksJson(fsPath);
+        if (listed?.ok) {
+          const tasksArr = Array.isArray(listed?.tasks) ? listed.tasks : [];
+          task = tasksArr.find((t) => String(t?.label || '') === requestedLabel) || null;
+        }
+      }
+
+      const label = requestedLabel || (task?.label ? String(task.label) : '');
+      const command = requestedCommand || (task?.command ? String(task.command) : '');
+      const args = requestedArgs.length ? requestedArgs : (Array.isArray(task?.args) ? task.args.map((a) => String(a)) : []);
+      const type = requestedType || (task?.type ? String(task.type) : '');
+      const cwd = resolveTaskCwd(fsPath, requestedCwd || task?.options?.cwd);
+      const envPatch = requestedEnv || task?.options?.env || null;
+      const env = envPatch ? { ...(process.env || {}), ...envPatch } : process.env;
+
+      if (!command) return { ok: false, error: 'missing command' };
+
+      const taskId = `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
+      const shouldUseShell = type ? (String(type).toLowerCase() !== 'process') : args.length === 0;
+      let child = null;
+      try {
+        if (shouldUseShell) {
+          const cmdStr = [command, ...args].filter(Boolean).join(' ');
+          child = spawn(cmdStr, {
+            cwd,
+            env,
+            shell: true,
+            windowsHide: true,
+          });
+        } else {
+          child = spawn(command, args, {
+            cwd,
+            env,
+            shell: false,
+            windowsHide: true,
+          });
+        }
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+
+      if (!child || typeof child.pid !== 'number') return { ok: false, error: 'failed to start task' };
+
+      runningTasks.set(taskId, { senderId, child, startedAt: Date.now(), label: label || command });
+
+      const prefix = label || command;
+      sendTaskOutput(`[task] started ${taskId} ${prefix}`);
+
+      const disposeStdout = watchTaskStream(child.stdout, (line) => sendTaskOutput(`[task] ${prefix} ${line}`));
+      const disposeStderr = watchTaskStream(child.stderr, (line) => sendTaskOutput(`[task] ${prefix} ${line}`));
+
+      const cleanup = () => {
+        disposeStdout();
+        disposeStderr();
+        runningTasks.delete(taskId);
+      };
+
+      child.on('exit', (code, signal) => {
+        sendTaskOutput(`[task] exited ${taskId} ${prefix} code=${code == null ? '' : String(code)} signal=${signal || ''}`.trim());
+        cleanup();
+      });
+      child.on('error', (err) => {
+        sendTaskOutput(`[task] error ${taskId} ${prefix} ${err?.message || String(err)}`.trim());
+        cleanup();
+      });
+
+      return { ok: true, taskId, pid: child.pid, cwd };
+    });
+
+    connection.onRequest('tasks/terminate', async (payload) => {
+      const taskId = payload?.taskId != null ? String(payload.taskId) : '';
+      if (!taskId) return { ok: false, error: 'missing taskId' };
+      const entry = runningTasks.get(taskId);
+      if (!entry) return { ok: false, error: 'task not found' };
+      if (entry.senderId !== senderId) return { ok: false, error: 'task not owned by sender' };
+
+      const child = entry.child;
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+
+      return { ok: true, taskId };
     });
 
     connection.onRequest('extensions/getStatus', async () => {
@@ -1053,6 +1263,11 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     });
 
     const dispose = () => {
+      for (const [taskId, entry] of Array.from(runningTasks.entries())) {
+        if (entry?.senderId !== senderId) continue;
+        try { entry.child?.kill?.(); } catch {}
+        runningTasks.delete(taskId);
+      }
       try {
         connection.dispose();
       } catch {}
