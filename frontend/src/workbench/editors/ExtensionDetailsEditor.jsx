@@ -95,11 +95,11 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
       const fetchRemoteDetail = async ({ providerId, version } = {}) => {
         const pid = normalizeText(providerId);
         const ver = normalizeText(version);
-        if (!pid) return { ok: false, error: language === 'zh' ? '缺少 providerId，无法获取插件详情。' : 'Missing providerId, cannot fetch details.' };
+        const resolvedProviderId = pid || undefined;
 
         const attempt = async (opts) =>
           pluginsService
-            .getDetail(id, pid, opts)
+            .getDetail(id, resolvedProviderId, opts)
             .catch((e) => ({ ok: false, error: e?.message || String(e) }));
 
         const first = await attempt({ ...(ver ? { version: ver } : {}), forceRefresh: false });
@@ -124,13 +124,11 @@ function ExtensionDetailsEditor({ tabPath, language = 'zh', onClose }) {
           || ''
         );
         const version = normalizeText(res?.marketplace?.version || res?.plugin?.installedVersion || '');
-        if (providerId) {
-          const detailRes = await fetchRemoteDetail({ providerId, version });
-          if (seq !== seqRef.current) return;
-          if (detailRes?.ok && detailRes?.detail) {
-            setRemoteDetail(detailRes.detail);
-            setRemoteCached(!!detailRes.cached);
-          }
+        const detailRes = await fetchRemoteDetail({ providerId, version });
+        if (seq !== seqRef.current) return;
+        if (detailRes?.ok && detailRes?.detail) {
+          setRemoteDetail(detailRes.detail);
+          setRemoteCached(!!detailRes.cached);
         }
         return;
       }

@@ -414,16 +414,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	      );
 	    },
 	    onProgress: (handler) => {
+        if (ideBus?.onNotification) {
+          return ideBus.onNotification('plugins/progress', (payload) => handler(payload));
+        }
 	      const fn = (_e, payload) => handler(payload);
 	      ipcRenderer.on('plugins:progress', fn);
 	      return () => ipcRenderer.off('plugins:progress', fn);
     },
     onChanged: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('plugins/changed', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:changed', fn);
       return () => ipcRenderer.off('plugins:changed', fn);
     },
     onError: (handler) => {
+      if (ideBus?.onNotification) {
+        return ideBus.onNotification('plugins/error', (payload) => handler(payload));
+      }
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:error', fn);
       return () => ipcRenderer.off('plugins:error', fn);
