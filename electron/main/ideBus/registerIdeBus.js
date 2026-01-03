@@ -251,6 +251,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
           'plugins/disable',
           'plugins/doctor',
           'plugins/listEnabledLanguages',
+          'plugins/getDetail',
         );
       }
 
@@ -577,6 +578,42 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       if (!plugins?.manager?.listEnabledLanguages) return { ok: false, error: 'plugins service unavailable' };
       await ensurePluginsReady();
       return { ok: true, items: plugins.manager.listEnabledLanguages() };
+    });
+
+    /**
+     * Get detailed plugin information including README, changelog, and metadata
+     * 
+     * Requirements: 3.1, 3.2, 3.3
+     * - Route request to PluginManager.getDetail
+     * - Return standard response format { ok, detail, error, cached }
+     * - Handle timeout within 30 seconds
+     */
+    connection.onRequest('plugins/getDetail', async (payload) => {
+      if (!plugins?.manager?.getDetail) return { ok: false, error: 'plugins service unavailable' };
+      await ensurePluginsReady();
+      const id = payload?.id != null ? String(payload.id) : '';
+      const providerId = payload?.providerId != null ? String(payload.providerId) : undefined;
+      const version = payload?.version != null ? String(payload.version) : undefined;
+      const forceRefresh = !!payload?.forceRefresh;
+
+      if (!id) return { ok: false, error: 'plugin id is required' };
+
+      // Implement 30 second timeout (Requirement 3.3)
+      const timeoutMs = 30000;
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('request timeout')), timeoutMs);
+      });
+
+      try {
+        const result = await Promise.race([
+          plugins.manager.getDetail({ id, providerId, version, forceRefresh }),
+          timeoutPromise,
+        ]);
+        return result;
+      } catch (err) {
+        const message = err?.message || String(err);
+        return { ok: false, error: message };
+      }
     });
 
     connection.onRequest('app/getInfo', async () => {

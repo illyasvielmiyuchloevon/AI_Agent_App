@@ -384,6 +384,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     disable: (id) => tryBus('plugins/disable', { id }, () => ipcRenderer.invoke('plugins:disable', id)),
     doctor: (id) => tryBus('plugins/doctor', { id }, () => ipcRenderer.invoke('plugins:doctor', id)),
     listEnabledLanguages: () => tryBus('plugins/listEnabledLanguages', undefined, () => ipcRenderer.invoke('plugins:listEnabledLanguages')),
+    getDetail: (id, providerId, options) => {
+      const resolvedProviderId = typeof providerId === 'string' ? providerId : undefined;
+      const resolvedOptions =
+        providerId && typeof providerId === 'object' && !Array.isArray(providerId) ? providerId : options && typeof options === 'object' ? options : undefined;
+
+      return tryBus(
+        'plugins/getDetail',
+        { id, ...(resolvedProviderId ? { providerId: resolvedProviderId } : {}), ...(resolvedOptions ? { forceRefresh: !!resolvedOptions.forceRefresh } : {}) },
+        async () => ({ ok: false, error: 'plugins/getDetail unavailable' })
+      );
+    },
     onProgress: (handler) => {
       const fn = (_e, payload) => handler(payload);
       ipcRenderer.on('plugins:progress', fn);

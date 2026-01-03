@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import SectionCard from './SectionCard';
 import SettingRow from './SettingRow';
 import Switch from './Switch';
+import PluginDetailPanel from './PluginDetailPanel';
 import { pluginsService } from '../../workbench/services/pluginsService';
 
 const DEFAULT_PROVIDERS = ['official', 'github', 'openvsx'];
@@ -41,6 +42,8 @@ export default function LspSettingsPage({
   const [localVsixPath, setLocalVsixPath] = useState('');
   const [localPluginId, setLocalPluginId] = useState('');
   const [localPluginVersion, setLocalPluginVersion] = useState('local');
+
+  const [detailPluginRef, setDetailPluginRef] = useState(null);
 
   const [configText, setConfigText] = useState(() => safeStringify(lspConfig));
   const [configError, setConfigError] = useState('');
@@ -183,6 +186,15 @@ export default function LspSettingsPage({
         return next;
       });
     }
+  };
+
+  const openDetail = (it) => {
+    const id = String(it?.id || '').trim();
+    if (!id) return;
+    const providerId = String(it?.source?.providerId || it?.providerId || '').trim();
+    const name = String(it?.name || '').trim();
+    const version = String(it?.version || it?.installedVersion || '').trim();
+    setDetailPluginRef({ id, providerId, name, version });
   };
 
   const enablePlugin = async (it) => {
@@ -386,15 +398,20 @@ export default function LspSettingsPage({
                   </div>
                   {it?.description ? <div style={{ opacity: 0.85, fontSize: '0.9rem', overflowWrap: 'anywhere' }}>{String(it.description)}</div> : null}
                 </div>
-                <button
-                  type="button"
-                  className="primary-btn"
-                  style={{ height: 34, flex: '0 0 auto' }}
-                  onClick={() => installPlugin(it)}
-                  disabled={installingIds.has(String(it?.id || ''))}
-                >
-                  {installingIds.has(String(it?.id || '')) ? t('安装中…', 'Installing…') : t('安装', 'Install')}
-                </button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: '0 0 auto' }}>
+                  <button type="button" className="ghost-btn" style={{ height: 34 }} onClick={() => openDetail(it)}>
+                    {t('详情', 'Details')}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-btn"
+                    style={{ height: 34 }}
+                    onClick={() => installPlugin(it)}
+                    disabled={installingIds.has(String(it?.id || ''))}
+                  >
+                    {installingIds.has(String(it?.id || '')) ? t('安装中…', 'Installing…') : t('安装', 'Install')}
+                  </button>
+                </div>
               </div>
             ))}
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 6 }}>
@@ -442,6 +459,9 @@ export default function LspSettingsPage({
                     onChange={() => (it?.enabled ? disablePlugin(it) : enablePlugin(it))}
                     label={it?.enabled ? t('启用', 'Enabled') : t('禁用', 'Disabled')}
                   />
+                  <button type="button" className="ghost-btn" style={{ height: 34 }} onClick={() => openDetail(it)}>
+                    {t('详情', 'Details')}
+                  </button>
                   <button type="button" className="ghost-btn" style={{ height: 34 }} onClick={() => uninstallPlugin(it)}>
                     {t('卸载', 'Uninstall')}
                   </button>
@@ -567,6 +587,12 @@ export default function LspSettingsPage({
             : activeTab === 'errors'
               ? renderErrors()
               : renderConfig()}
+      <PluginDetailPanel
+        isOpen={!!detailPluginRef}
+        pluginRef={detailPluginRef}
+        onClose={() => setDetailPluginRef(null)}
+        language={language}
+      />
     </>
   );
 }

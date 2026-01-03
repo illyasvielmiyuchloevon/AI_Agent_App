@@ -1,3 +1,40 @@
+/**
+ * Normalize OpenVSX API response to PluginDetail structure
+ * @param {Object} json - Raw OpenVSX API response
+ * @param {string} ns - Namespace
+ * @param {string} name - Extension name
+ * @returns {Object} - Normalized PluginDetail object
+ */
+function normalizeOpenVsxDetail(json, ns, name) {
+  const id = ns && name ? `${ns}.${name}` : '';
+  const version = String(json?.version || '');
+
+  return {
+    id,
+    name: String(json?.displayName || name || ''),
+    version,
+    description: String(json?.description || ''),
+    readme: json?.readme != null ? String(json.readme) : null,
+    changelog: json?.changelog != null ? String(json.changelog) : null,
+    categories: Array.isArray(json?.categories) ? json.categories.map(String) : [],
+    capabilities: Array.isArray(json?.tags) ? json.tags.map(String) : [],
+    dependencies: [], // OpenVSX doesn't provide dependency info in the same way
+    repository: json?.repository != null ? String(json.repository) : null,
+    license: json?.license != null ? String(json.license) : null,
+    publisher: {
+      name: String(json?.publishedBy?.loginName || json?.namespace || ns || ''),
+      url: json?.publishedBy?.homepage != null ? String(json.publishedBy.homepage) : null,
+    },
+    statistics: {
+      downloads: typeof json?.downloadCount === 'number' ? json.downloadCount : 0,
+      rating: typeof json?.averageRating === 'number' ? json.averageRating : null,
+      reviewCount: typeof json?.reviewCount === 'number' ? json.reviewCount : 0,
+    },
+    lastUpdated: json?.timestamp ? new Date(json.timestamp).getTime() : Date.now(),
+    source: { providerId: 'openvsx', namespace: ns, name },
+  };
+}
+
 class OpenVsxProvider {
   constructor() {
     this.id = 'openvsx';
@@ -60,6 +97,48 @@ class OpenVsxProvider {
       metadataOnly: true,
     };
   }
+
+  /**
+   * Get detailed plugin information including README and changelog
+   * 
+   * Requirements: 2.1, 2.4
+   * - Parse OpenVSX API response and extract README, changelog, and metadata
+   * - Return null for fields not supported by provider without failing
+   * 
+   * @param {string} id - Plugin ID in format "namespace.name"
+   * @param {string} [version] - Optional version (defaults to latest)
+   * @returns {Promise<Object|null>} - PluginDetail object or null if not found
+   */
+  async getDetail(id, version) {
+    const key = String(id || '').trim();
+    if (!key) return null;
+
+    const parts = key.split('.');
+    if (parts.length < 2) return null;
+
+    const ns = parts[0];
+    const name = parts.slice(1).join('.');
+    if (!ns || !name) return null;
+
+    try {
+      // Build URL - if version specified, fetch that specific version
+      let url = `https://open-vsx.org/api/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
+      if (version) {
+        url += `/${encodeURIComponent(version)}`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) return null;
+
+      const json = await res.json();
+      if (!json || !json.version) return null;
+
+      return normalizeOpenVsxDetail(json, ns, name);
+    } catch (err) {
+      // Network or parsing error - return null as per requirement 2.4
+      return null;
+    }
+  }
 }
 
-module.exports = { OpenVsxProvider };
+module.exports = { OpenVsxProvider, normalizeOpenVsxDetail };
