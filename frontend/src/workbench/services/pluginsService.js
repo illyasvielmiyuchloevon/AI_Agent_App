@@ -122,5 +122,11 @@ export const pluginsService = (() => {
       ensureSubscriptions();
       return a.listEnabledLanguages();
     },
+    getDetail: async (id, providerId, options) => {
+      const a = api();
+      if (!a?.getDetail) return { ok: false, error: 'plugins.getDetail unavailable' };
+      ensureSubscriptions();
+      return a.getDetail(id, providerId, options);
+    },
   };
 })();

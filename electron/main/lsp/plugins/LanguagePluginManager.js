@@ -2,6 +2,7 @@ const path = require('node:path');
 const semver = require('semver');
 const { normalizePluginId, isTrustLevel } = require('./types');
 const { isPathInside } = require('./PluginInstaller');
+const { DetailCache } = require('./DetailCache');
 
 function guessFileExtension(filePath) {
   const p = String(filePath || '').trim().toLowerCase();
@@ -38,11 +39,12 @@ function isAllowedCommand(command, { pluginDir, allowNode = true } = {}) {
 }
 
 class LanguagePluginManager {
-  constructor({ registry, installer, providers, logger } = {}) {
+  constructor({ registry, installer, providers, logger, detailCache } = {}) {
     this.registry = registry;
     this.installer = installer;
     this.providers = new Map();
     this.logger = logger;
+    this.detailCache = detailCache || new DetailCache();
     for (const p of Array.isArray(providers) ? providers : []) {
       if (!p?.id) continue;
       this.providers.set(String(p.id), p);
@@ -92,6 +94,92 @@ class LanguagePluginManager {
       }
     }
     return list;
+  }
+
+  /**
+   * Get detailed plugin information including README, changelog, and metadata
+   * 
+   * Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 5.4
+   * - Return plugin's README content in Markdown format
+   * - Return plugin's feature list and capabilities
+   * - Return plugin's changelog if available
+   * - Return plugin's dependencies and requirements
+   * - Return error message with failure reason if request fails
+   * - Support forceRefresh to bypass cache
+   * 
+   * @param {Object} params
+   * @param {string} params.id - Plugin ID
+   * @param {string} [params.providerId] - Provider ID (optional, defaults to auto-detect)
+   * @param {string} [params.version] - Version (optional, defaults to latest)
+   * @param {boolean} [params.forceRefresh] - Force refresh cache
+   * @returns {Promise<{ok: boolean, detail?: Object, error?: string, cached?: boolean}>}
+   */
+  async getDetail({ id, providerId, version, forceRefresh } = {}) {
+    const pluginId = normalizePluginId(id);
+    if (!pluginId) {
+      return { ok: false, error: 'plugin id is required' };
+    }
+
+    // Determine provider ID - use provided, or try to detect from installed plugin
+    let resolvedProviderId = String(providerId || '').trim();
+    if (!resolvedProviderId) {
+      // Try to get provider from installed plugin
+      const installed = this.registry?.getPlugin?.(pluginId);
+      resolvedProviderId = installed?.installed?.source?.providerId || installed?.source?.providerId || '';
+    }
+
+    // If still no provider, try default providers in order
+    const providerIdsToTry = resolvedProviderId
+      ? [resolvedProviderId]
+      : ['openvsx', 'github', 'official'];
+
+    // Build cache key
+    const cacheKey = `${pluginId}:${version || 'latest'}:${providerIdsToTry.join(',')}`;
+
+    // Check cache unless forceRefresh is true
+    if (!forceRefresh) {
+      const cached = this.detailCache.get(cacheKey);
+      if (cached) {
+        return { ok: true, detail: cached.detail, cached: true };
+      }
+    } else {
+      // Invalidate cache if forceRefresh
+      this.detailCache.invalidate(cacheKey);
+    }
+
+    // Try each provider until one succeeds
+    let lastError = null;
+    for (const pid of providerIdsToTry) {
+      const provider = this.providers.get(pid);
+      if (!provider) {
+        lastError = `unknown provider: ${pid}`;
+        continue;
+      }
+
+      if (!provider.getDetail) {
+        lastError = `provider ${pid} does not support getDetail`;
+        continue;
+      }
+
+      try {
+        const detail = await provider.getDetail(pluginId, version);
+        if (detail) {
+          // Cache the successful result
+          this.detailCache.set(cacheKey, detail);
+          return { ok: true, detail, cached: false };
+        }
+        lastError = `plugin not found: ${pluginId}`;
+      } catch (err) {
+        lastError = err?.message || String(err);
+        this.logger?.warn?.('plugin getDetail failed', {
+          providerId: pid,
+          pluginId,
+          error: lastError,
+        });
+      }
+    }
+
+    return { ok: false, error: lastError || `plugin not found: ${pluginId}` };
   }
 
   async install({ providerId, id, version, filePath } = {}, { onProgress } = {}) {
