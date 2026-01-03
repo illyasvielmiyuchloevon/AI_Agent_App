@@ -7,6 +7,45 @@ import { ReadFileTool, WriteFileTool, ListFilesTool, EditFileTool, CreateFolderT
 import { ExecuteShellTool } from './tools/shell';
 import { ScreenCaptureTool } from './tools/screen_capture';
 import { KeyboardControlTool, MouseControlTool } from './tools/desktop';
+import { WorkspaceSemanticSearchTool } from './tools/rag_tools';
+import { RagIndex } from './ai-engine/rag_index';
+import { AiEngineRuntimeConfig } from './ai-engine/runtime_config';
+
+let cachedEncoder: any = null;
+let cachedEncoderTried = false;
+function getOptionalEncoder() {
+    if (cachedEncoderTried) return cachedEncoder;
+    cachedEncoderTried = true;
+    try {
+        const mod = require('js-tiktoken');
+        if (mod && typeof mod.getEncoding === 'function') {
+            cachedEncoder = mod.getEncoding('cl100k_base');
+            return cachedEncoder;
+        }
+        if (mod && typeof mod.encoding_for_model === 'function') {
+            cachedEncoder = mod.encoding_for_model('gpt-4');
+            return cachedEncoder;
+        }
+    } catch {
+    }
+    try {
+        const mod = require('tiktoken');
+        if (mod && typeof mod.getEncoding === 'function') {
+            cachedEncoder = mod.getEncoding('cl100k_base');
+            return cachedEncoder;
+        }
+    } catch {
+    }
+    cachedEncoder = null;
+    return cachedEncoder;
+}
+
+export interface AgentOptions {
+    sessionId?: string;
+    contextMaxLength?: number;
+    getRagIndex?: (root: string) => RagIndex;
+    getConfig?: () => AiEngineRuntimeConfig;
+}
 
 export class Agent {
     private llm: LLMClient;
@@ -16,6 +55,7 @@ export class Agent {
     private tools: BaseTool[] = [];
     private activeToolNames: Set<string> = new Set();
     private systemPrompt: string = getPrompt('chat');
+    private systemContext: string = '';
     private contextMaxLength: number = 128000;
     private registry: ToolRegistry;
 
@@ -23,11 +63,12 @@ export class Agent {
     private fileTools: BaseTool[];
     private shellTool: BaseTool;
     private agentTools: BaseTool[];
+    private ragTool?: WorkspaceSemanticSearchTool;
 
-    constructor(llm: LLMClient, sessionId?: string, contextMaxLength: number = 128000) {
+    constructor(llm: LLMClient, opts: AgentOptions = {}) {
         this.llm = llm;
-        this.sessionId = sessionId;
-        this.contextMaxLength = contextMaxLength;
+        this.sessionId = opts.sessionId;
+        this.contextMaxLength = opts.contextMaxLength || 128000;
         this.registry = new ToolRegistry();
         
         this.fileTools = [
@@ -43,6 +84,13 @@ export class Agent {
         ];
         this.shellTool = new ExecuteShellTool();
         
+        if (opts.getRagIndex && opts.getConfig) {
+            const cfg = opts.getConfig();
+            if (cfg.features?.workspaceSemanticSearch !== false) {
+                this.ragTool = new WorkspaceSemanticSearchTool(opts.getRagIndex, opts.getConfig);
+            }
+        }
+
         // Agent tools include file tools, shell, and desktop control/capture
         this.agentTools = [
             ...this.fileTools, 
@@ -52,12 +100,16 @@ export class Agent {
             new MouseControlTool()
         ];
 
+        if (this.ragTool) {
+            this.agentTools.push(this.ragTool);
+        }
+
         // Register all tools
         this.agentTools.forEach(tool => this.registry.register(tool));
         // Enable verbose logging for debugging tool execution paths
         this.registry.debugMode = true;
 
-        if (sessionId) {
+        if (this.sessionId) {
             this.loadHistory();
         }
     }
@@ -76,6 +128,7 @@ export class Agent {
         // In a real implementation, we'd need more robust hydration of tool calls from DB JSON
         // For PoC, we assume mostly text or simple content
         this.ensureSystemPrompt();
+        this.trimHistory();
     }
 
     setMode(mode: string, enabledTools?: string[]) {
@@ -90,6 +143,9 @@ export class Agent {
         } else if (mode === 'canva') {
             // Canva mode still needs shell for quick builds/verification
             activeTools = [...this.fileTools, this.shellTool];
+            if (this.ragTool) {
+                activeTools.push(this.ragTool);
+            }
         }
         
         if (enabledTools && enabledTools.length > 0) {
@@ -109,11 +165,19 @@ export class Agent {
 
     private ensureSystemPrompt() {
         const existingSystem = this.history.find(m => m.role === 'system');
+        const combined = this.systemContext && this.systemContext.trim().length > 0
+          ? `${this.systemPrompt}\n\n${this.systemContext}`
+          : this.systemPrompt;
         if (existingSystem) {
-            existingSystem.content = this.systemPrompt;
+            existingSystem.content = combined;
         } else {
-            this.history.unshift({ role: 'system', content: this.systemPrompt });
+            this.history.unshift({ role: 'system', content: combined });
         }
+    }
+
+    setSystemContext(context: string) {
+        this.systemContext = context || '';
+        this.ensureSystemPrompt();
     }
 
     private async saveMessage(message: UnifiedMessage) {
@@ -128,11 +192,47 @@ export class Agent {
     }
 
     private estimateTokens(content: any): number {
-        if (typeof content === 'string') return Math.ceil(content.length / 4);
+        const estimateFromText = (text: string): number => {
+            if (!text) return 0;
+            const enc = getOptionalEncoder();
+            if (enc && typeof enc.encode === 'function') {
+                try {
+                    const out = enc.encode(text);
+                    if (Array.isArray(out)) return out.length;
+                } catch {
+                }
+            }
+            let ascii = 0;
+            let nonAscii = 0;
+            for (let i = 0; i < text.length; i += 1) {
+                const code = text.charCodeAt(i);
+                if (code <= 0x7f) ascii += 1;
+                else nonAscii += 1;
+            }
+            return Math.ceil(ascii / 4 + nonAscii / 2);
+        };
+
+        if (content === null || content === undefined) return 0;
+        if (typeof content === 'string') return estimateFromText(content);
+        if (typeof content === 'number' || typeof content === 'boolean') return estimateFromText(String(content));
+
         if (Array.isArray(content)) {
-            return content.reduce((acc, part) => acc + (part.text ? Math.ceil(part.text.length / 4) : 0), 0);
+            return content.reduce((acc, part) => {
+                if (typeof part === 'string') return acc + estimateFromText(part);
+                if (part && typeof part === 'object' && typeof (part as any).text === 'string') return acc + estimateFromText((part as any).text);
+                try {
+                    return acc + estimateFromText(JSON.stringify(part));
+                } catch {
+                    return acc;
+                }
+            }, 0);
         }
-        return 0;
+
+        try {
+            return estimateFromText(JSON.stringify(content));
+        } catch {
+            return estimateFromText(String(content));
+        }
     }
 
     getActiveTools(): BaseTool[] {

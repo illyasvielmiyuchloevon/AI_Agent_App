@@ -8,6 +8,7 @@ export const translations = {
     window: 'Window',
     help: 'Help',
     newFile: 'New File',
+    newWindow: 'New Window',
     newFolder: 'New Folder',
     openFolder: 'Open Folder',
     closeFolder: 'Close Folder',
@@ -54,7 +55,9 @@ export const translations = {
     
     // NavSidebar
     sessionList: 'Session List',
+    chat: 'Chat',
     explorer: 'Explorer',
+    extensions: 'Extensions',
     sourceControl: 'Source Control',
     newSession: 'New Session',
     expandChat: 'Expand Chat',
@@ -91,6 +94,7 @@ export const translations = {
     window: '窗口',
     help: '帮助',
     newFile: '新建文件',
+    newWindow: '新建窗口',
     newFolder: '新建文件夹',
     openFolder: '打开文件夹',
     closeFolder: '关闭文件夹',
@@ -137,7 +141,9 @@ export const translations = {
     
     // NavSidebar
     sessionList: '会话列表',
+    chat: '聊天',
     explorer: '资源管理器',
+    extensions: '扩展',
     sourceControl: '源代码管理',
     newSession: '新建会话',
     expandChat: '展开聊天区',
@@ -174,6 +180,7 @@ export const translations = {
     window: 'ウィンドウ',
     help: 'ヘルプ',
     newFile: '新規ファイル',
+    newWindow: '新しいウィンドウ',
     newFolder: '新規フォルダ',
     openFolder: 'フォルダを開く',
     closeFolder: 'フォルダを閉じる',
@@ -220,7 +227,9 @@ export const translations = {
     
     // NavSidebar
     sessionList: 'セッションリスト',
+    chat: 'チャット',
     explorer: 'エクスプローラー',
+    extensions: '拡張機能',
     sourceControl: 'ソース管理',
     newSession: '新しいセッション',
     expandChat: 'チャットを展開',

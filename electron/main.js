@@ -1,52 +1,84 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const simpleGit = require('simple-git');
 const { registerIpcHandlers } = require('./main/ipcHandlers');
+const { resolvePreloadPath } = require('./main/preloadPath');
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
-
-const getOverlayColors = (theme = 'light') => {
-  const isDark = theme === 'dark';
-  return {
-    color: isDark ? '#252526' : '#ffffff',
-    symbolColor: isDark ? '#e5e7eb' : '#111827',
-    height: 40,
-  };
-};
-
-const applyOverlayTheme = (win, theme) => {
-  if (!win?.setTitleBarOverlay) return;
-  const overlay = getOverlayColors(theme);
-  win.setTitleBarOverlay(overlay);
-};
 
 // Remove native application menu
 Menu.setApplicationMenu(null);
 
+const CSP = (
+  "default-src 'self'; base-uri 'self'; object-src 'none'; " +
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: http: https:; " +
+  "style-src 'self' 'unsafe-inline' http: https:; " +
+  "img-src 'self' data: blob: http: https:; " +
+  "font-src 'self' data: http: https:; " +
+  "connect-src 'self' ws: wss: http: https:; " +
+  "worker-src 'self' blob: data:; " +
+  "frame-src 'self' blob: data: http: https:;"
+);
+
+function installCspHeaders() {
+  try {
+    const ses = session && session.defaultSession ? session.defaultSession : null;
+    if (!ses || !ses.webRequest || typeof ses.webRequest.onHeadersReceived !== 'function') return;
+
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      try {
+        const type = details && details.resourceType ? String(details.resourceType) : '';
+        if (type !== 'mainFrame' && type !== 'subFrame') {
+          callback({ cancel: false, responseHeaders: details.responseHeaders });
+          return;
+        }
+
+        const headers = details.responseHeaders || {};
+        headers['Content-Security-Policy'] = [CSP];
+        callback({ cancel: false, responseHeaders: headers });
+      } catch {
+        callback({ cancel: false, responseHeaders: details.responseHeaders });
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
 function createWindow() {
   const initialTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
-  const overlay = getOverlayColors(initialTheme);
+  const preloadPath = resolvePreloadPath(__dirname);
 
   const win = new BrowserWindow({
     width: 1400,
-    height: 900,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: overlay,
+    height: 800,
+    frame: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   });
 
-  applyOverlayTheme(win, initialTheme);
-
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools({ mode: 'detach' });
+    // DevTools can be noisy (e.g. Autofill CDP domain mismatch). Only auto-open when explicitly requested.
+    if (process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
+      win.webContents.openDevTools({ mode: 'right' });
+      win.webContents.once('devtools-opened', () => {
+        const devtools = win.webContents.devToolsWebContents;
+        if (!devtools) return;
+        devtools.executeJavaScript(`
+          try {
+            localStorage.setItem('showSizeOnResize', 'false');
+            localStorage.setItem('emulation.showSizeOnResize', 'false');
+          } catch {}
+        `, true).catch(() => {});
+      });
+    }
   } else {
     const indexPath = path.join(__dirname, '../frontend/dist/index.html');
     win.loadFile(indexPath);
@@ -55,6 +87,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   registerIpcHandlers();
+  installCspHeaders();
 
   ipcMain.handle('open-folder', async () => {
     const res = await dialog.showOpenDialog({
@@ -69,7 +102,6 @@ app.whenReady().then(() => {
     if (!win) return;
     const nextTheme = theme === 'dark' ? 'dark' : 'light';
     nativeTheme.themeSource = nextTheme;
-    applyOverlayTheme(win, nextTheme);
   });
 
   // --- Git IPC Handlers ---
@@ -93,6 +125,8 @@ app.whenReady().then(() => {
       return { success: false, error: message };
     }
   };
+
+  const normalizeGitPath = (value) => String(value || '').replace(/\\/g, '/');
 
   const sanitizeFolderName = (name) => {
     const raw = String(name || '').trim();
@@ -163,24 +197,24 @@ app.whenReady().then(() => {
       hasHead = false;
     }
 
-    const isAll = files === '.' || files === undefined || files === null;
+    const isAll = files === '.' || files === undefined || files === null || (Array.isArray(files) && files.length === 1 && files[0] === '.');
     const targetList = isAll ? stagedFiles : stagedFiles.filter(p => new Set(Array.isArray(files) ? files : [files]).has(p));
 
     if (targetList.length === 0) {
       return { success: true };
     }
 
-    if (files === '.') {
+    if (isAll) {
       if (hasHead) {
         await git.reset(['HEAD']);
       } else {
-        await git.raw(['restore', '--staged', '--', '.']);
+        await git.raw(['rm', '--cached', '-r', '--', '.']);
       }
     } else {
       if (hasHead) {
         await git.reset(['HEAD', '--', ...targetList]);
       } else {
-        await git.raw(['restore', '--staged', '--', ...targetList]);
+        await git.raw(['rm', '--cached', '--', ...targetList]);
       }
     }
     return { success: true };
@@ -228,6 +262,25 @@ app.whenReady().then(() => {
     return { success: true, branches: JSON.parse(JSON.stringify(branches)) };
   }));
 
+  ipcMain.handle('git:createBranch', (e, { cwd, name }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    await git.checkoutLocalBranch(name);
+    return { success: true };
+  }));
+
+  ipcMain.handle('git:deleteBranch', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    try {
+      await git.deleteLocalBranch(branch);
+      return { success: true };
+    } catch (err) {
+      // Force delete if needed or return error
+      return { success: false, error: err.message };
+    }
+  }));
+
   ipcMain.handle('git:checkout', (e, { cwd, branch }) => handleGit(cwd, async (git) => {
     const isRepo = await ensureRepo(git);
     if (!isRepo) return { success: false, error: 'Not a git repository' };
@@ -244,11 +297,78 @@ app.whenReady().then(() => {
           log: { all: [], latest: null, total: 0 },
         };
       }
-      const log = await git.log({ maxCount: 50 });
+      const log = await git.log({
+        maxCount: 200,
+        format: {
+          hash: '%H',
+          date: '%ai',
+          message: '%s',
+          refs: '%D',
+          body: '%b',
+          author_name: '%an',
+          author_email: '%ae',
+          parents: '%P',
+        },
+      });
       return { success: true, log: JSON.parse(JSON.stringify(log)) };
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
       if (/does not have any commits yet/i.test(message)) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+      throw err;
+    }
+  }));
+
+  ipcMain.handle('git:logFile', (e, { cwd, file }) => handleGit(cwd, async (git) => {
+    try {
+      const isRepo = await ensureRepo(git);
+      if (!isRepo) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+
+      const rawFile = String(file || '').trim();
+      if (!rawFile) {
+        return {
+          success: true,
+          log: { all: [], latest: null, total: 0 },
+        };
+      }
+
+      let target = rawFile;
+      if (path.isAbsolute(target)) {
+        target = path.relative(cwd, target);
+      }
+      target = normalizeGitPath(target);
+
+      const log = await git.log({
+        file: target,
+        maxCount: 200,
+        format: {
+          hash: '%H',
+          date: '%ai',
+          message: '%s',
+          refs: '%D',
+          body: '%b',
+          author_name: '%an',
+          author_email: '%ae',
+          parents: '%P',
+        },
+      });
+      return { success: true, log: JSON.parse(JSON.stringify(log)) };
+    } catch (err) {
+      const message = err && err.message ? String(err.message) : String(err);
+      if (
+        /does not have any commits yet/i.test(message) ||
+        /unknown revision or path not in the working tree/i.test(message) ||
+        /pathspec/i.test(message)
+      ) {
         return {
           success: true,
           log: { all: [], latest: null, total: 0 },
@@ -281,6 +401,19 @@ app.whenReady().then(() => {
      if (!isRepo) return { success: false, error: 'Not a git repository' };
      const diff = await git.diff(file ? [file] : []);
      return { success: true, diff: JSON.parse(JSON.stringify(diff)) };
+  }));
+
+  ipcMain.handle('git:resolve', (e, { cwd, file, type }) => handleGit(cwd, async (git) => {
+    const isRepo = await ensureRepo(git);
+    if (!isRepo) return { success: false, error: 'Not a git repository' };
+    if (!['ours', 'theirs'].includes(type)) return { success: false, error: 'Invalid resolution type' };
+    
+    // Use checkout to resolve
+    await git.checkout([`--${type}`, file]);
+    // After checkout, we usually need to add the file to mark it as resolved
+    await git.add([file]);
+    
+    return { success: true };
   }));
 
   ipcMain.handle('git:getCommitDetails', (e, { cwd, hash }) => handleGit(cwd, async (git) => {

@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { getWorkspaceRoot } from './context';
 
 const DATA_FILE_NAME = "sessions.json";
 const LLM_CONFIG_FILE = "llm_config.json";
@@ -60,17 +60,16 @@ function getDefaultState(): DBState {
     };
 }
 
-function getDataDir(create = false): string {
-    const root = getWorkspaceRoot();
-    const dataDir = path.join(root, ".aichat");
-    // We rely on the caller or init to ensure existence usually, but for safe access:
-    // fs.mkdir is async, so this helper is a bit tricky if used synchronously in path generation.
-    // But we just return string here.
-    return dataDir;
+function getGlobalDataDir(): string {
+    const isWin = process.platform === 'win32';
+    const baseDir = isWin
+        ? (process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir())
+        : os.homedir();
+    return path.join(baseDir, ".aichat", "global");
 }
 
 async function ensureDataDir(): Promise<string> {
-    const dir = getDataDir();
+    const dir = getGlobalDataDir();
     try {
         await fs.mkdir(dir, { recursive: true });
     } catch (e) {
@@ -80,7 +79,64 @@ async function ensureDataDir(): Promise<string> {
 }
 
 function getDataFilePath(): string {
-    return path.join(getDataDir(), DATA_FILE_NAME);
+    return path.join(getGlobalDataDir(), DATA_FILE_NAME);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function safeWriteJsonFile(filePath: string, payload: string, { tag = 'DB' } = {}): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    await fs.writeFile(tempPath, payload, 'utf-8');
+
+    const tryRename = async () => {
+        const isWin = process.platform === 'win32';
+        const retryableCodes = new Set(['EPERM', 'EACCES', 'EBUSY']);
+        const maxAttempts = isWin ? 6 : 1;
+
+        let lastErr: any = null;
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+            try {
+                await fs.rename(tempPath, filePath);
+                return { ok: true as const, err: null };
+            } catch (e: any) {
+                lastErr = e;
+                const code = String(e?.code || '');
+
+                if (isWin && (code === 'EEXIST' || retryableCodes.has(code))) {
+                    try {
+                        await fs.unlink(filePath);
+                    } catch (rmErr: any) {
+                        if (String(rmErr?.code || '') !== 'ENOENT') {
+                            // ignore and retry rename
+                        }
+                    }
+                    await sleep(20 * (attempt + 1));
+                    continue;
+                }
+
+                if (code === 'EXDEV') break;
+                break;
+            }
+        }
+        return { ok: false as const, err: lastErr };
+    };
+
+    try {
+        const renamed = await tryRename();
+        if (renamed.ok) return;
+
+        try {
+            await fs.copyFile(tempPath, filePath);
+            return;
+        } catch (copyErr: any) {
+            const code = renamed.err?.code || renamed.err?.message || copyErr?.code || copyErr?.message;
+            console.warn(`[${tag}] atomic replace failed (${code}), fallback to direct write`);
+            await fs.writeFile(filePath, payload, 'utf-8');
+        }
+    } finally {
+        try { await fs.unlink(tempPath); } catch {}
+    }
 }
 
 async function loadState(): Promise<DBState> {
@@ -119,33 +175,15 @@ function normalizeState(raw: any): DBState {
 async function saveState(state: DBState): Promise<void> {
     const dir = await ensureDataDir();
     const filePath = path.join(dir, DATA_FILE_NAME);
-    const tempPath = `${filePath}.tmp`;
     const payload = JSON.stringify(state, null, 2);
-    await fs.writeFile(tempPath, payload, 'utf-8');
-    try {
-        await fs.rename(tempPath, filePath);
-    } catch (e: any) {
-        console.warn(`[DB] rename failed (${e?.code || e?.message}), fallback to direct write`);
-        try {
-            await fs.writeFile(filePath, payload, 'utf-8');
-        } catch (inner) {
-            console.error(`[DB] direct write failed: ${(inner as any)?.message}`);
-            throw inner;
-        } finally {
-            try { await fs.unlink(tempPath); } catch {}
-        }
-    }
+    await safeWriteJsonFile(filePath, payload, { tag: 'DB' });
 }
 
 // --- Public API ---
 
 export async function initDb(): Promise<void> {
-    try {
-        await ensureDataDir();
-        await loadState();
-    } catch (e) {
-        // ignore workspace error
-    }
+    await ensureDataDir();
+    await loadState();
 }
 
 export async function createSession(title = "New Chat", mode = "chat"): Promise<Session> {
@@ -348,7 +386,7 @@ export async function getDiffs(options: { session_id?: string, path?: string, li
 // LLM Config
 
 function getLlmConfigPath(): string {
-    return path.join(getDataDir(), LLM_CONFIG_FILE);
+    return path.join(getGlobalDataDir(), LLM_CONFIG_FILE);
 }
 
 export async function loadLlmConfig(): Promise<any | null> {
@@ -370,21 +408,7 @@ export async function saveLlmConfig(config: any): Promise<any> {
     const filePath = path.join(dir, LLM_CONFIG_FILE);
     console.log(`[DB] Saving LLM config to: ${filePath}`);
     console.log(`[DB] Saving config provider: ${config.provider}`);
-    const tempPath = `${filePath}.tmp`;
     const payload = JSON.stringify(config, null, 2);
-    await fs.writeFile(tempPath, payload, 'utf-8');
-    try {
-        await fs.rename(tempPath, filePath);
-    } catch (e: any) {
-        console.warn(`[DB] rename config failed (${e?.code || e?.message}), fallback to direct write`);
-        try {
-            await fs.writeFile(filePath, payload, 'utf-8');
-        } catch (inner) {
-            console.error(`[DB] direct write config failed: ${(inner as any)?.message}`);
-            throw inner;
-        } finally {
-            try { await fs.unlink(tempPath); } catch {}
-        }
-    }
+    await safeWriteJsonFile(filePath, payload, { tag: 'DB' });
     return config;
 }

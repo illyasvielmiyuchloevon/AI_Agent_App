@@ -4,7 +4,12 @@ const isAbsolutePath = (p = '') => {
   return /^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\') || s.startsWith('/');
 };
 
-const normalizeRelPath = (p = '') => String(p || '').replace(/^[./\\]+/, '').replace(/\\/g, '/');
+const normalizeRelPath = (p = '') => {
+  const raw = String(p || '').replace(/\\/g, '/');
+  // Remove leading "./" segments but keep dotfolders like ".trae" or ".git"
+  const withoutDotSlash = raw.replace(/^(?:\.\/)+/, '');
+  return withoutDotSlash.replace(/^\/+/, '');
+};
 
 const denyEscapes = (p) => {
   const path = normalizeRelPath(p);
@@ -20,6 +25,19 @@ const basename = (abs = '') => {
   const idx2 = s.lastIndexOf('\\');
   const idx = Math.max(idx1, idx2);
   return idx >= 0 ? s.slice(idx + 1) : s;
+};
+
+const resolveBackendUrl = (url) => {
+  const u = String(url || '');
+  if (!u.startsWith('/')) return u;
+  if (typeof window === 'undefined') return u;
+  const proto = window.location?.protocol;
+  const origin = window.location?.origin;
+  if (proto === 'file:' || origin === 'null') {
+    const rewritten = u.startsWith('/api') ? u.replace(/^\/api/, '') : u;
+    return `http://127.0.0.1:8000${rewritten || '/'}`;
+  }
+  return u;
 };
 
 async function readJsonResponse(res) {
@@ -74,14 +92,14 @@ export class BackendWorkspaceDriver {
   }
 
   async _getJson(url) {
-    const res = await fetch(url, { method: 'GET', headers: this._headers() });
+    const res = await fetch(resolveBackendUrl(url), { method: 'GET', headers: this._headers() });
     const data = await readJsonResponse(res);
     if (!res.ok) throw new Error(data?.detail || res.statusText || 'Request failed');
     return data;
   }
 
   async _postJson(url, body) {
-    const res = await fetch(url, {
+    const res = await fetch(resolveBackendUrl(url), {
       method: 'POST',
       headers: this._headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body || {}),
@@ -91,10 +109,19 @@ export class BackendWorkspaceDriver {
     return data;
   }
 
-  async readFile(path) {
+  async readFile(path, options = {}) {
     const safe = denyEscapes(path);
-    const data = await this._getJson(`/api/workspace/read?path=${encodeURIComponent(safe)}`);
-    return { path: safe, content: String(data?.content ?? ''), truncated: !!data?.truncated };
+    const allowMissing = !!options?.allowMissing;
+    const qs = new URLSearchParams();
+    qs.set('path', safe);
+    if (allowMissing) qs.set('allow_missing', '1');
+    const data = await this._getJson(`/api/workspace/read?${qs.toString()}`);
+    return {
+      path: safe,
+      content: String(data?.content ?? ''),
+      truncated: !!data?.truncated,
+      exists: data?.exists !== false,
+    };
   }
 
   async writeFile(path, content, { createDirectories = false } = {}) {
@@ -134,8 +161,13 @@ export class BackendWorkspaceDriver {
     if (includeContent) {
       const fileEntries = entries.filter((e) => e && e.type === 'file' && typeof e.path === 'string');
       for (const entry of fileEntries) {
-        const data = await this.readFile(entry.path);
-        files.push(data);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const data = await this.readFile(entry.path);
+          files.push(data);
+        } catch {
+          // Ignore missing/unreadable files (dotfolders, races, permissions, etc.)
+        }
       }
     }
     return {
@@ -150,6 +182,22 @@ export class BackendWorkspaceDriver {
   async updatePathLabel(label) {
     this.pathLabel = String(label || '').trim() || this.pathLabel;
     return true;
+  }
+
+  async search(query, options = {}) {
+    const { caseSensitive = false, isRegex = false } = options;
+    const data = await this._postJson('/api/workspace/search', { 
+        query,
+        case_sensitive: caseSensitive,
+        regex: isRegex
+    });
+    if (data.status === 'error') throw new Error(data.message);
+    const results = (data.results || []).map(r => ({
+        path: r.file,
+        line: r.line,
+        preview: r.context ? r.context.trim() : ''
+    }));
+    return { query, results };
   }
 
   async touchRecent() {

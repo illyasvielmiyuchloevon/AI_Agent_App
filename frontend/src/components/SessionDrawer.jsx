@@ -7,8 +7,7 @@ function SessionDrawer({
     onDeleteSession,
     onRenameSession,
     onCreateSession,
-    onSwitchProject,
-    projectPath,
+    setActiveSidebarPanel,
     width,
     collapsed,
     isResizing = false
@@ -36,8 +35,8 @@ function SessionDrawer({
         <div style={{ 
             width: '100%',
             minWidth: collapsed ? '0' : `${Math.max(width || 220, 220)}px`,
-            borderRight: '1px solid var(--border)',
-            background: 'var(--panel)',
+            borderRight: 'none',
+            background: 'transparent',
             display: collapsed ? 'none' : 'flex', 
             flexDirection: 'column',
             overflow: 'hidden',
@@ -49,27 +48,15 @@ function SessionDrawer({
                     <header className="explorer-header">
                         <div className="explorer-title">
                             <div className="explorer-label">SESSIONS</div>
-                            <div className="explorer-sub" title={projectPath || ''}>
-                                {projectPath || '当前工作区'}
-                            </div>
                         </div>
                         <div className="explorer-actions">
                             <button
                                 onClick={onCreateSession}
-                                className="ghost-btn tiny"
+                                className="explorer-action-btn"
                                 title="新建会话"
                             >
-                                +
+                                <span className="codicon codicon-add" aria-hidden />
                             </button>
-                            {onSwitchProject && (
-                                <button
-                                    onClick={onSwitchProject}
-                                    className="ghost-btn tiny"
-                                    title="切换工作区"
-                                >
-                                    <span className="codicon codicon-folder-opened" aria-hidden />
-                                </button>
-                            )}
                         </div>
                     </header>
 
@@ -79,7 +66,10 @@ function SessionDrawer({
                         {sessions.map(session => (
                             <div 
                                 key={session.id}
-                                onClick={() => onSelectSession(session.id)}
+                                onClick={() => {
+                                    onSelectSession(session.id);
+                                    if (setActiveSidebarPanel) setActiveSidebarPanel('chat');
+                                }}
                                 className={`session-item${currentSessionId === session.id ? ' active' : ''}`}
                             >
                                     <div className="session-item-main">
@@ -106,8 +96,7 @@ function SessionDrawer({
                                     ) : (
                                         <div 
                                             className="session-item-title"
-                                            onDoubleClick={(e) => { e.stopPropagation(); startEdit(session); }}
-                                            title="双击重命名"
+                                            title={session.title || 'Untitled'}
                                         >
                                             {session.title || 'Untitled'}
                                         </div>

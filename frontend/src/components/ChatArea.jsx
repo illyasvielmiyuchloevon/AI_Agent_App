@@ -70,8 +70,10 @@ function ChatArea({
     onTaskKeepAll = () => {},
     onTaskRevertAll = () => {},
     onTaskKeepFile = () => {},
-    onTaskRevertFile = () => {}
-}) {
+     onTaskRevertFile = () => {},
+     onTaskResetFile = () => {},
+     onOpenFile
+ }) {
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
     const recognitionRef = useRef(null);
@@ -355,12 +357,12 @@ function ChatArea({
             {/* Chat Header */}
             <div style={{ 
                 padding: '0 0.5rem', 
-                borderBottom: '1px solid var(--border)', 
+                borderBottom: 'none', 
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center', 
-                background: 'var(--panel)',
-                height: '50px',
+                background: 'transparent',
+                height: '40px',
                 boxSizing: 'border-box'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', overflow: 'hidden' }}>
@@ -371,13 +373,13 @@ function ChatArea({
                 {currentSession && (
                     <button 
                         onClick={onToggleLogs} 
-                        className="ghost-btn"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', padding: '0 0.3rem', height: '28px' }}
+                        className="chat-log-btn"
                         title="查看本会话 API 日志"
                     >
-                        <span style={{ fontSize: '1.2rem' }}>📋</span>
+                        <span style={{ fontSize: '1rem', lineHeight: 1 }}>📋</span>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 500 }}>Logs</span>
                         {logStatus && (
-                            <span style={{ display: 'inline-flex', gap: '0.15rem', alignItems: 'center' }}>
+                            <span style={{ display: 'inline-flex', gap: '0.15rem', alignItems: 'center', marginLeft: '2px' }}>
                                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: logStatus.requestOk ? 'var(--success)' : 'var(--danger)', display: 'inline-block' }} />
                                 <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: logStatus.parseOk ? 'var(--success)' : 'var(--warning)', display: 'inline-block' }} />
                             </span>
@@ -387,7 +389,7 @@ function ChatArea({
             </div>
 
             {/* Messages */}
-            <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--panel-sub)' }}>
+            <div className="chat-messages" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', background: 'transparent' }}>
                 {!currentSession ? (
                     <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: '2rem' }}>
                         Select a chat to start messaging
@@ -416,10 +418,10 @@ function ChatArea({
                                     maxWidth: bubbleMaxWidth,
                                     padding: '0.8rem 1rem',
                                     borderRadius: 'var(--radius)',
-                                    backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--panel)',
+                                    backgroundColor: isUserMessage ? 'var(--accent)' : 'var(--bg)',
                                     color: isUserMessage ? '#fff' : 'var(--text)',
-                                    border: isUserMessage ? '1px solid var(--accent-2)' : '1px solid var(--border)',
-                                    boxShadow: 'var(--shadow-soft)',
+                                    border: 'none',
+                                    boxShadow: 'none',
                                     fontSize: isUserMessage ? '0.9rem' : '0.85rem',
                                     lineHeight: '1.5',
                                     wordBreak: 'break-word',
@@ -458,29 +460,31 @@ function ChatArea({
                                         return (
                                             <div
                                                 onClick={() => setExpandedRuns((prev) => ({ ...prev, [toolKey]: !toolExpanded }))}
+                                                className={`tool-run-chip ${status}`}
                                                 title="点击展开/收起工具调用详情"
                                                 style={{
-                                                    fontFamily: 'monospace',
+                                                    fontFamily: 'inherit',
                                                     whiteSpace: 'pre-wrap',
                                                     fontSize: '0.82rem',
-                                                    background: 'var(--panel-sub)',
-                                                    padding: '0.6rem',
-                                                    borderRadius: 'var(--radius)',
-                                                    color: statusColor,
-                                                    border: `1px solid ${statusColor}`,
                                                     width: '100%',
                                                     boxSizing: 'border-box',
                                                     cursor: 'pointer',
-                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                                    margin: '0.25rem 0'
                                                 }}
                                             >
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', justifyContent: 'space-between' }}>
-                                                    <span>{statusLabel}</span>
+                                                    <span style={{ 
+                                                        color: status === 'error' ? 'var(--danger)' : 'var(--text)',
+                                                        fontWeight: 500,
+                                                        fontSize: '0.85rem'
+                                                    }}>
+                                                        {statusLabel}
+                                                    </span>
                                                     {shouldShowDiffButton && (
                                                         <button
                                                             type="button"
-                                                            className="ghost-btn"
-                                                            style={{ padding: '0.25rem 0.5rem', height: 'auto', fontSize: '0.78rem' }}
+                                                            className="tool-run-chip-action"
+                                                            style={{ marginLeft: 'auto' }}
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 if (diffTarget) {
@@ -490,24 +494,22 @@ function ChatArea({
                                                                 }
                                                             }}
                                                         >
-                                                            查看 Diff
+                                                            <Icon name="diff" size={14} />
                                                         </button>
                                                     )}
                                                 </div>
                                                 {toolExpanded && (
-                                                    <div className="tool-run-chip-detail" style={{ marginTop: '0.5rem' }}>
+                                                    <div className="tool-run-chip-detail">
                                                         {argsSource && (
                                                             <div className="tool-run-chip-block">
                                                                 <div className="tool-run-chip-label">入参</div>
                                                                 <pre>{typeof argsSource === 'string' ? argsSource : JSON.stringify(argsSource, null, 2)}</pre>
                                                             </div>
                                                         )}
-                                                        {detailSource && (
-                                                            <div className="tool-run-chip-block">
-                                                                <div className="tool-run-chip-label">{detailLabel}</div>
-                                                                <pre>{typeof detailSource === 'string' ? detailSource : JSON.stringify(detailSource, null, 2)}</pre>
-                                                            </div>
-                                                        )}
+                                                        <div className="tool-run-chip-block">
+                                                            <div className="tool-run-chip-label">{detailLabel}</div>
+                                                            <pre>{typeof detailSource === 'string' ? detailSource : JSON.stringify(detailSource, null, 2)}</pre>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -564,22 +566,21 @@ function ChatArea({
                 onDragOver={(e) => { e.preventDefault(); setDragActive(true); }} 
                 onDragLeave={() => setDragActive(false)} 
                 onDrop={handleDrop}
-                style={{ padding: '1rem', borderTop: '1px solid var(--border)', background: 'var(--panel)' }}
+                style={{ padding: '1rem', borderTop: 'none', background: 'transparent' }}
             >
                 {showTaskReview && (
-                    <div className="task-review-shell">
+                    <div className={`task-review-shell ${!taskReview?.expanded ? 'collapsed' : ''}`}>
                         <div className="task-review-head">
                             <button
                                 type="button"
                                 className="task-review-toggle"
                                 onClick={onTaskToggle}
                                 title="展开/收起本次任务的改动列表"
-                                disabled={reviewBusy}
                             >
                                 <span className="codicon codicon-versions" aria-hidden />
                                 <span className="task-review-pill">{reviewSummary}</span>
                                 {reviewPending > 0 && <span className="task-review-muted">{reviewPending} 未处理</span>}
-                                <span className={`codicon ${taskReview?.expanded ? 'codicon-chevron-down' : 'codicon-chevron-right'}`} aria-hidden />
+                                <span className={`codicon ${taskReview?.expanded ? 'codicon-chevron-up' : 'codicon-chevron-right'}`} aria-hidden />
                             </button>
                             <div className="task-review-actions">
                                 <button
@@ -606,14 +607,25 @@ function ChatArea({
                                     <div key={file.path} className="task-review-row">
                                         <div className="task-review-file">
                                             <span className={`task-review-dot ${file.changeType}`} aria-hidden />
-                                            <div className="task-review-path" title={file.path}>{file.path}</div>
+                                            <div 
+                                                 className="task-review-path" 
+                                                 title={file.path}
+                                                 onClick={() => onOpenFile?.(file.path)}
+                                                 style={{ cursor: 'pointer' }}
+                                             >
+                                                {file.path}
+                                            </div>
                                             <div className="task-review-stat">
                                                 <span className="add">+{file.stat?.added ?? 0}</span>
                                                 <span className="del">-{file.stat?.removed ?? 0}</span>
                                             </div>
-                                            {file.action !== 'pending' && (
+                                             {file.action !== 'pending' ? (
                                                 <span className={`task-review-state ${file.action === 'reverted' ? 'danger' : 'muted'}`}>
-                                                    {file.action === 'reverted' ? '已撤销' : '已保留'}
+                                                    {file.action === 'reverted' ? '已撤销' : (file.action === 'mixed' ? '部分处理' : '已保留')}
+                                                </span>
+                                            ) : (
+                                                <span className="task-review-state running">
+                                                    进行中
                                                 </span>
                                             )}
                                         </div>
@@ -627,14 +639,25 @@ function ChatArea({
                                                 撤销
                                             </button>
                                             <button
-                                                type="button"
-                                                className="task-review-btn primary"
-                                                onClick={() => onTaskKeepFile(file.path)}
-                                                disabled={reviewBusy || file.action === 'kept'}
-                                            >
-                                                保留
-                                            </button>
-                                        </div>
+                                                 type="button"
+                                                 className="task-review-btn primary"
+                                                 onClick={() => onTaskKeepFile(file.path)}
+                                                 disabled={reviewBusy || file.action === 'kept'}
+                                             >
+                                                 保留
+                                             </button>
+                                             {typeof onTaskResetFile === 'function' && (
+                                                 <button
+                                                     type="button"
+                                                     className="task-review-btn subtle"
+                                                     onClick={() => onTaskResetFile(file.path)}
+                                                     title="还原到 Diff 状态"
+                                                     disabled={reviewBusy || file.action === 'pending'}
+                                                 >
+                                                     还原
+                                                 </button>
+                                             )}
+                                         </div>
                                     </div>
                                 ))}
                             </div>
@@ -642,110 +665,91 @@ function ChatArea({
                     </div>
                 )}
 
-                <div 
-                    className={`input-shell ${dragActive ? 'dragging' : ''}`} 
-                    style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--panel-sub)', padding: 0, borderRadius: 'var(--radius)', border: '1px solid var(--border)', position: 'relative', cursor: 'text', overflow: 'visible' }}
+                {attachments.length > 0 && (
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+                        {attachments.map((att, idx) => (
+                            <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.4rem', background: 'var(--panel)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                {att.type === 'image' ? (
+                                    <img src={att.data} alt={att.name} style={{ width: '56px', height: '42px', objectFit: 'cover', borderRadius: 'var(--radius)' }} />
+                                ) : (
+                                    <Icon name="paperclip" size={18} />
+                                )}
+                                <span style={{ fontSize: '0.85rem' }}>{att.name}</span>
+                                <button type="button" onClick={() => removeAttachment(idx)} className="chat-icon-btn" style={{ fontSize: '0.85rem', width: '26px', height: '26px', borderRadius: '6px', padding: 0 }}>×</button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div
+                    className={`input-shell ${dragActive ? 'dragging' : ''}`}
                     onClick={(e) => {
                         const tag = e.target?.tagName?.toLowerCase();
-                        if (tag !== 'button' && tag !== 'svg' && tag !== 'path' && tag !== 'line' && tag !== 'polygon' && tag !== 'rect') {
+                        if (tag !== 'button' && tag !== 'textarea' && tag !== 'svg' && tag !== 'path' && tag !== 'line' && tag !== 'polygon' && tag !== 'rect') {
                             focusInput();
                         }
                     }}
                 >
-                    <div style={{ padding: 0 }}>
-                        <textarea
-                            className="chat-textarea"
-                            ref={inputRef}
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            onPaste={handlePaste}
-                            placeholder=""
-                            style={{ 
-                                width: '100%',
-                                padding: '0.85rem 3.25rem 0.85rem 1rem',
-                                borderRadius: 0,
-                                border: 'none',
-                                background: 'transparent',
-                                resize: 'none',
-                                outline: 'none',
-                                fontFamily: 'inherit',
-                                fontSize: '0.9rem',
-                                minHeight: '5rem',
-                                lineHeight: 1.5,
-                                color: 'var(--text)'
-                            }}
-                            disabled={loading}
-                        />
-                    </div>
+                    <textarea
+                        className="chat-textarea"
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        onPaste={handlePaste}
+                        placeholder=""
+                        disabled={loading}
+                    />
 
-                    {attachments.length > 0 && (
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', padding: '0 1rem' }}>
-                            {attachments.map((att, idx) => (
-                                <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.4rem', background: 'var(--panel)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                    {att.type === 'image' ? (
-                                        <img src={att.data} alt={att.name} style={{ width: '56px', height: '42px', objectFit: 'cover', borderRadius: 'var(--radius)' }} />
-                                    ) : (
-                                        <Icon name="paperclip" size={18} />
-                                    )}
-                                    <span style={{ fontSize: '0.85rem' }}>{att.name}</span>
-                                    <button type="button" onClick={() => removeAttachment(idx)} className="chat-icon-btn" style={{ fontSize: '0.85rem', width: '26px', height: '26px', borderRadius: '6px', padding: 0 }}>×</button>
+                    <div className="chat-composer-toolbar">
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+                                className="chat-icon-btn"
+                                title="添加图片/文件"
+                            >
+                                <Icon name="plus" size={20} />
+                            </button>
+                            {showAttachmentMenu && (
+                                <div className="attachment-menu">
+                                    <div className="attachment-item" onClick={() => imageInputRef.current?.click()}>上传图片</div>
+                                    <div className="attachment-item" onClick={() => fileInputRef.current?.click()}>上传文件</div>
+                                    <div className="attachment-item" onClick={() => inputRef.current?.focus()}>粘贴图片</div>
                                 </div>
-                            ))}
+                            )}
                         </div>
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0 5px 5px 5px', minHeight: '40px', boxSizing: 'border-box' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0, height: '40px' }}>
-                            <div style={{ position: 'relative' }}>
-                                <button 
-                                    type="button"
-                                    onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-                                    className="chat-icon-btn"
-                                    title="添加图片/文件"
-                                >
-                                    <Icon name="plus" size={20} />
-                                </button>
-                                {showAttachmentMenu && (
-                                    <div className="attachment-menu">
-                                        <div className="attachment-item" onClick={() => imageInputRef.current?.click()}>上传图片</div>
-                                        <div className="attachment-item" onClick={() => fileInputRef.current?.click()}>上传文件</div>
-                                        <div className="attachment-item" onClick={() => inputRef.current?.focus()}>粘贴图片</div>
-                                    </div>
-                                )}
-                            </div>
-                            <button 
+                        <div style={{ flex: 1 }} />
+                        <div className="chat-composer-right">
+                            <ModeSelector value={mode} options={modeOptions} onChange={onModeChange} />
+                            <button
                                 type="button"
                                 onClick={recording ? handleMicStop : handleMicStart}
-                                className="chat-icon-btn"
+                                className={`chat-icon-btn chat-mic-btn ${recording ? 'recording' : ''}`}
                                 title="语音输入"
-                                style={{ background: recording ? 'var(--danger-pill)' : 'var(--panel)', color: recording ? 'var(--danger)' : 'var(--muted)' }}
                             >
                                 <Icon name="mic" size={20} />
                             </button>
+                            {loading ? (
+                                <button
+                                    type="button"
+                                    onClick={onStop}
+                                    className="chat-stop-btn"
+                                    title="Stop Generation"
+                                >
+                                    <Icon name="stop" size={20} />
+                                </button>
+                            ) : (
+                                <button
+                                    type="submit"
+                                    disabled={!input.trim() && attachments.length === 0}
+                                    className="chat-send-btn"
+                                    title="Send"
+                                >
+                                    <Icon name="send" size={20} />
+                                </button>
+                            )}
                         </div>
-                        <ModeSelector value={mode} options={modeOptions} onChange={onModeChange} />
-                    </div>
-                    <div style={{ position: 'absolute', right: '5px', bottom: '5px', display: 'flex', alignItems: 'center', gap: '0.4rem', pointerEvents: 'auto' }}>
-                        {loading ? (
-                            <button 
-                                type="button"
-                                onClick={onStop}
-                                className="chat-stop-btn"
-                                title="Stop Generation"
-                            >
-                                <Icon name="stop" size={20} />
-                            </button>
-                        ) : (
-                            <button 
-                                type="submit" 
-                                disabled={!input.trim() && attachments.length === 0} 
-                                className="chat-send-btn"
-                                title="Send"
-                            >
-                                <Icon name="send" size={20} />
-                            </button>
-                        )}
                     </div>
                 </div>
                 <input ref={imageInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />

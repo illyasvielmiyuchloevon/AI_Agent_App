@@ -92,6 +92,76 @@ export const GitDriver = {
         }
     },
 
+    async fetch(cwd) {
+        if (!this.isAvailable()) return false;
+        if (typeof window.electronAPI.git.fetch !== 'function') {
+            console.error('Git fetch is not available');
+            return false;
+        }
+        try {
+            const res = await window.electronAPI.git.fetch(cwd);
+            return res.success;
+        } catch (e) {
+            console.error('Git fetch failed', e);
+            return false;
+        }
+    },
+
+    async branch(cwd) {
+        if (!this.isAvailable()) return null;
+        try {
+            const res = await window.electronAPI.git.branch(cwd);
+            return res.success ? res.branches : null;
+        } catch (e) {
+            console.error('Git branch failed', e);
+            return null;
+        }
+    },
+
+    async createBranch(cwd, name) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.createBranch(cwd, name);
+            return res.success;
+        } catch (e) {
+            console.error('Git createBranch failed', e);
+            return false;
+        }
+    },
+
+    async deleteBranch(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.deleteBranch(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git deleteBranch failed', e);
+            return false;
+        }
+    },
+
+    async checkout(cwd, branch) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.checkout(cwd, branch);
+            return res.success;
+        } catch (e) {
+            console.error('Git checkout failed', e);
+            return false;
+        }
+    },
+
+    async resolve(cwd, file, type) {
+        if (!this.isAvailable()) return false;
+        try {
+            const res = await window.electronAPI.git.resolve(cwd, file, type);
+            return res.success;
+        } catch (e) {
+            console.error('Git resolve failed', e);
+            return false;
+        }
+    },
+
     async publishBranch(cwd, branch) {
         if (!this.isAvailable()) return false;
         if (typeof window.electronAPI.git.publishBranch !== 'function') {
@@ -174,6 +244,22 @@ export const GitDriver = {
         } catch (e) {
             console.error('Git log failed', e);
             return [];
+        }
+    },
+
+    async logFile(cwd, file) {
+        const empty = { all: [], latest: null, total: 0 };
+        if (!this.isAvailable()) return empty;
+        if (typeof window.electronAPI.git.logFile !== 'function') {
+            console.error('Missing git.logFile in preload. Restart required.');
+            return empty;
+        }
+        try {
+            const res = await window.electronAPI.git.logFile(cwd, file);
+            return res.success ? (res.log || empty) : empty;
+        } catch (e) {
+            console.error('Git logFile failed', e);
+            return empty;
         }
     },
 

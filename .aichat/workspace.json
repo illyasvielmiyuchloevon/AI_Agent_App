@@ -1,0 +1,20 @@
+{
+  "id": "D:\\Copilot\\v0.1.07 dev01",
+  "name": "v0.1.07 dev01",
+  "folders": [
+    {
+      "path": "D:\\Copilot\\v0.1.07 dev01"
+    }
+  ],
+  "settings": {
+    "provider": "openai",
+    "model": "",
+    "llmConfig": {
+      "provider": "openai"
+    },
+    "toolSettings": {}
+  },
+  "state": {},
+  "openedAt": "2025-12-16T12:55:59.249Z",
+  "closedAt": null
+}

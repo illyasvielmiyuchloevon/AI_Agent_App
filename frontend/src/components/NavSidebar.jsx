@@ -17,6 +17,14 @@ const FolderIcon = ({ open = false }) => (
   </svg>
 );
 
+const SessionsIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 7h12" />
+    <path d="M6 12h12" />
+    <path d="M6 17h12" />
+  </svg>
+);
+
 const ChatIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-4l-3 3-3-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />
@@ -25,11 +33,10 @@ const ChatIcon = () => (
   </svg>
 );
 
-const PlusIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="7.5" />
-    <line x1="12" y1="9" x2="12" y2="15" />
-    <line x1="9" y1="12" x2="15" y2="12" />
+const SearchIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="8"></circle>
+    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
   </svg>
 );
 
@@ -45,17 +52,17 @@ function NavSidebar({
     sidebarCollapsed,
     explorerOpen,
     onSelectSidebar,
-    onToggleChatPanel,
-    chatPanelCollapsed,
-    onCreateSession,
     onToggleConfig,
     apiStatus,
     gitBadgeCount = 0,
     language = 'en'
 }) {
     const isSessionsActive = activeSidebar === 'sessions' && !sidebarCollapsed;
+    const isChatActive = activeSidebar === 'chat' && !sidebarCollapsed;
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
+    const isSearchActive = activeSidebar === 'search' && !sidebarCollapsed;
     const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
+    const isExtensionsActive = activeSidebar === 'extensions' && !sidebarCollapsed;
     const t = (key) => getTranslation(language, key);
 
     return (
@@ -65,6 +72,13 @@ function NavSidebar({
                 onClick={() => onSelectSidebar('sessions')}
                 title={t('sessionList')}
             >
+                <SessionsIcon />
+            </button>
+            <button 
+                className={`activity-item ${isChatActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('chat')}
+                title={t('chat')}
+            >
                 <ChatIcon />
             </button>
             <button 
@@ -73,6 +87,13 @@ function NavSidebar({
                 title={t('explorer')}
             >
                 <FolderIcon open={explorerOpen} />
+            </button>
+            <button 
+                className={`activity-item ${isSearchActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('search')}
+                title={t('search') || 'Search'}
+            >
+                <SearchIcon />
             </button>
             <button 
                 className={`activity-item ${isGitActive ? 'active' : ''}`} 
@@ -86,35 +107,13 @@ function NavSidebar({
                 )}
             </button>
             <button 
-                className="activity-item ghost" 
-                onClick={onCreateSession} 
-                title={t('newSession')} 
+                className={`activity-item ${isExtensionsActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('extensions')}
+                title={t('extensions') || 'Extensions'}
             >
-                <PlusIcon />
+                <span className="codicon codicon-extensions" style={{ fontSize: 22 }} aria-hidden />
             </button>
-
             <div className="activity-spacer" />
-
-            <button 
-                className="activity-item ghost" 
-                onClick={onToggleChatPanel} 
-                title={chatPanelCollapsed ? t('expandChat') : t('collapseChat')}
-            >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 5h14a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-5l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
-                    {chatPanelCollapsed ? (
-                        <>
-                            <polyline points="10 9 12 11 10 13" />
-                            <polyline points="6 9 8 11 6 13" />
-                        </>
-                    ) : (
-                        <>
-                            <polyline points="14 9 12 11 14 13" />
-                            <polyline points="18 9 16 11 18 13" />
-                        </>
-                    )}
-                </svg>
-            </button>
 
             <button 
                 className="activity-item ghost" 

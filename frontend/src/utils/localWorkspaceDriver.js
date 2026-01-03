@@ -143,8 +143,13 @@ export class LocalWorkspaceDriver {
     this.rootName = rootHandle?.name || 'workspace';
     this.projectId = meta.id || null;
     this.pathLabel = meta.pathLabel || rootHandle?.name || '';
+    this.fileOpsHooks = meta.fileOpsHooks && typeof meta.fileOpsHooks === 'object' ? meta.fileOpsHooks : null;
     this.handleMap = new Map([['', rootHandle]]);
     this.gitignore = [];
+  }
+
+  setFileOperationsHooks(hooks) {
+    this.fileOpsHooks = hooks && typeof hooks === 'object' ? hooks : null;
   }
 
   static async fromPersisted(projectId = null, { allowPrompt = true } = {}) {
@@ -257,51 +262,100 @@ export class LocalWorkspaceDriver {
     return fileHandle;
   }
 
-  async readFile(path) {
-    const fileHandle = await this.getFileHandle(path, { create: false });
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    return { path: denyEscapes(path), content: text, truncated: false };
+  async readFile(path, options = {}) {
+    const allowMissing = !!options?.allowMissing;
+    try {
+      const fileHandle = await this.getFileHandle(path, { create: false });
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      return { path: denyEscapes(path), content: text, truncated: false, exists: true };
+    } catch (err) {
+      if (allowMissing && err?.name === 'NotFoundError') {
+        return { path: denyEscapes(path), content: '', truncated: false, exists: false };
+      }
+      if (allowMissing) {
+        // Best-effort: treat missing/unreadable as absent.
+        return { path: denyEscapes(path), content: '', truncated: false, exists: false };
+      }
+      throw err;
+    }
   }
 
-  async writeFile(path, content, { createDirectories = true } = {}) {
-    const fileHandle = await this.getFileHandle(path, { create: createDirectories });
+  async writeFile(path, content, { createDirectories = true, notifyCreate = true } = {}) {
+    const safe = denyEscapes(path);
+    let existed = false;
+    try {
+      await this.getFileHandle(safe, { create: false });
+      existed = true;
+    } catch {
+      existed = false;
+    }
+    const shouldNotifyCreate = !!notifyCreate && !existed;
+    if (shouldNotifyCreate && this.fileOpsHooks && typeof this.fileOpsHooks.willCreateFiles === 'function') {
+      try { await this.fileOpsHooks.willCreateFiles([safe]); } catch {}
+    }
+    const fileHandle = await this.getFileHandle(safe, { create: createDirectories });
     const writable = await fileHandle.createWritable();
     await writable.write(content || '');
     await writable.close();
-    return { path: denyEscapes(path), bytes: (content || '').length };
+    if (shouldNotifyCreate && this.fileOpsHooks && typeof this.fileOpsHooks.didCreateFiles === 'function') {
+      try { await this.fileOpsHooks.didCreateFiles([safe]); } catch {}
+    }
+    return { path: safe, bytes: (content || '').length };
   }
 
-  async createFolder(path) {
-    await this.ensureTree(path, { create: true });
-    return { path: denyEscapes(path), created: true };
-  }
-
-  async deletePath(path) {
+  async createFolder(path, { notifyCreate = true } = {}) {
     const safe = denyEscapes(path);
+    if (notifyCreate && this.fileOpsHooks && typeof this.fileOpsHooks.willCreateFiles === 'function') {
+      try { await this.fileOpsHooks.willCreateFiles([safe]); } catch {}
+    }
+    await this.ensureTree(safe, { create: true });
+    if (notifyCreate && this.fileOpsHooks && typeof this.fileOpsHooks.didCreateFiles === 'function') {
+      try { await this.fileOpsHooks.didCreateFiles([safe]); } catch {}
+    }
+    return { path: safe, created: true };
+  }
+
+  async deletePath(path, { notify = true } = {}) {
+    const safe = denyEscapes(path);
+    if (notify && this.fileOpsHooks && typeof this.fileOpsHooks.willDeleteFiles === 'function') {
+      try { await this.fileOpsHooks.willDeleteFiles([safe]); } catch {}
+    }
     const parts = safe.split('/').filter(Boolean);
     const name = parts.pop();
     const dirHandle = await this.ensureTree(parts.join('/'), { create: false });
     await dirHandle.removeEntry(name, { recursive: true });
     this.handleMap.delete(safe);
+    if (notify && this.fileOpsHooks && typeof this.fileOpsHooks.didDeleteFiles === 'function') {
+      try { await this.fileOpsHooks.didDeleteFiles([safe]); } catch {}
+    }
     return { path: safe, deleted: true };
   }
 
   async renamePath(oldPath, newPath) {
     const oldSafe = denyEscapes(oldPath);
     const newSafe = denyEscapes(newPath);
+    if (this.fileOpsHooks && typeof this.fileOpsHooks.willRenameFiles === 'function') {
+      try { await this.fileOpsHooks.willRenameFiles([{ from: oldSafe, to: newSafe }]); } catch {}
+    }
     const oldHandle = await this.getFileHandle(oldSafe, { create: false }).catch(() => null);
     const isFile = !!oldHandle;
     if (isFile) {
       const file = await oldHandle.getFile();
       const content = await file.text();
-      await this.writeFile(newSafe, content, { createDirectories: true });
-      await this.deletePath(oldSafe);
+      await this.writeFile(newSafe, content, { createDirectories: true, notifyCreate: false });
+      await this.deletePath(oldSafe, { notify: false });
+      if (this.fileOpsHooks && typeof this.fileOpsHooks.didRenameFiles === 'function') {
+        try { await this.fileOpsHooks.didRenameFiles([{ from: oldSafe, to: newSafe }]); } catch {}
+      }
       return { from: oldSafe, to: newSafe, migrated: true };
     }
     // Fallback for directories: shallow copy by recreating tree
     await this._copyDirectory(oldSafe, newSafe);
-    await this.deletePath(oldSafe);
+    await this.deletePath(oldSafe, { notify: false });
+    if (this.fileOpsHooks && typeof this.fileOpsHooks.didRenameFiles === 'function') {
+      try { await this.fileOpsHooks.didRenameFiles([{ from: oldSafe, to: newSafe }]); } catch {}
+    }
     return { from: oldSafe, to: newSafe, migrated: true };
   }
 
@@ -320,7 +374,7 @@ export class LocalWorkspaceDriver {
         } else {
           const file = await entry.getFile();
           const text = await file.text();
-          await this.writeFile(`${safeTo}/${nextRel}`, text, { createDirectories: true });
+          await this.writeFile(`${safeTo}/${nextRel}`, text, { createDirectories: true, notifyCreate: false });
         }
       }
     }
@@ -349,20 +403,45 @@ export class LocalWorkspaceDriver {
     return entries;
   }
 
-  async search(query, path = '.') {
+  async search(query, options = {}) {
     if (!query) throw new Error('缺少搜索关键字');
-    const entries = await this.listFiles(path);
-    const results = [];
-    for (const entry of entries) {
-      if (entry.type !== 'file') continue;
-      const { content } = await this.readFile(entry.path);
-      const lines = content.split('\n');
-      lines.forEach((line, idx) => {
-        if (line.toLowerCase().includes(query.toLowerCase())) {
-          results.push({ path: entry.path, line: idx + 1, preview: line.trim() });
-        }
-      });
-      if (results.length > 200) return { query, results };
+    const path = options.path || '.';
+    const caseSensitive = !!options.caseSensitive;
+    const isRegex = !!options.isRegex;
+    
+    let regexPattern;
+     if (isRegex) {
+         try {
+             regexPattern = new RegExp(query, caseSensitive ? '' : 'i');
+         } catch (e) {
+             throw new Error('无效的正则表达式');
+         }
+     }
+
+     const entries = await this.listFiles(path);
+     const results = [];
+     
+     for (const entry of entries) {
+       if (entry.type !== 'file') continue;
+       const { content } = await this.readFile(entry.path);
+       const lines = content.split('\n');
+       lines.forEach((line, idx) => {
+         let match = false;
+         if (isRegex) {
+             match = regexPattern.test(line);
+         } else {
+             if (caseSensitive) {
+                 match = line.includes(query);
+             } else {
+                 match = line.toLowerCase().includes(query.toLowerCase());
+             }
+         }
+
+         if (match) {
+           results.push({ path: entry.path, line: idx + 1, preview: line.trim() });
+         }
+       });
+      if (results.length > 500) return { query, results };
     }
     return { query, results };
   }

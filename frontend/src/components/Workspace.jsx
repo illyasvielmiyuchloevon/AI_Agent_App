@@ -1,210 +1,53 @@
-import React, { useMemo, useState, useEffect, Suspense } from 'react';
+import React, { useMemo, useState, useEffect, Suspense, useCallback, useRef } from 'react';
+import { useSyncExternalStore } from 'react';
+import PanelShell from '../workbench/bottom-panel/PanelShell';
+import { lspService } from '../workbench/services/lspService';
+import { debugService } from '../workbench/services/debugService';
+import ManagedDiffEditor from './ManagedDiffEditor';
+import WorkspaceEditorGroups from './WorkspaceEditorGroups';
+import { useWorkspaceAi, WorkspaceAiOverlay } from './WorkspaceAiOverlay';
+import WorkspaceTaskReviewFloating from './WorkspaceTaskReviewFloating';
+import { useWorkspaceTaskReviewMonaco } from './useWorkspaceTaskReviewMonaco';
+import { useWorkspaceMonacoBinding } from './useWorkspaceMonacoBinding';
+import { useWorkspaceLspEditorActions } from './useWorkspaceLspEditorActions';
+import { useWorkbenchEditorEvents } from './useWorkbenchEditorEvents';
+import { useStatusBarEditorPatch } from './useStatusBarEditorPatch';
+import WorkspacePreviewPane from './WorkspacePreviewPane';
+import { loadMonacoEditorWithUndoRedoPatch } from '../utils/appMonaco';
+import { buildMonacoOptions, normalizeEditorSettings, resolveEditorNavigationMode } from '../utils/workspaceMonaco';
+import { normalizeWorkspaceGroups, resolveActiveGroupId } from '../utils/workspaceGroups';
+import {
+  copyToClipboard,
+  getFileIconClass,
+  getKeybindingValue,
+  getTabTitle,
+  inferMonacoLanguage,
+  isSpecialTabPath,
+  parseMonacoKeybinding,
+  pathJoinAbs,
+  resolveDiffModelBaseForPath,
+  resolveBlockPosition,
+  toLines,
+} from '../utils/appAlgorithms';
 
-const MonacoEditor = React.lazy(() => import('@monaco-editor/react'));
-const MonacoDiffEditor = React.lazy(() =>
-  import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
-);
+const MonacoEditor = React.lazy(() => loadMonacoEditorWithUndoRedoPatch());
 
-const EXT_ICONS = {
-  js: 'codicon-file-code',
-  jsx: 'codicon-file-code',
-  ts: 'codicon-file-code',
-  tsx: 'codicon-file-code',
-  html: 'codicon-code',
-  css: 'codicon-symbol-color',
-  json: 'codicon-json',
-  md: 'codicon-markdown',
-  txt: 'codicon-file-text',
-  py: 'codicon-symbol-keyword',
-};
-
-const LANG_MAP = {
-  js: 'javascript',
-  jsx: 'javascript',
-  ts: 'typescript',
-  tsx: 'typescript',
-  css: 'css',
-  html: 'html',
-  json: 'json',
-  md: 'markdown',
-  py: 'python',
-};
-
-const getIconClass = (path) => {
-  const ext = path.split('.').pop();
-  return EXT_ICONS[ext] || 'codicon-file';
-};
-
-const inferLanguage = (path) => LANG_MAP[path.split('.').pop()] || 'plaintext';
-
-const themedFallback = (message) => `
-  <style>
-    body { margin: 0; }
-    .__preview-fallback { font-family: Inter, Arial, sans-serif; padding: 1.5rem; color: #111827; background: #f3f4f6; min-height: 100vh; }
-    @media (prefers-color-scheme: dark) {
-      .__preview-fallback { color: #e5e7eb; background: #1e1e1e; }
-    }
-  </style>
-  <div class="__preview-fallback">${message}</div>
-`;
-
-const stripExternalScripts = (html = '') =>
-  html.replace(/<script[^>]*src=["'][^"']+["'][^>]*>\s*<\/script>/gi, '');
-
-const wrapHtml = (content, css, scripts, headExtras = '') => {
-  const base =
-    content && content.includes('<html')
-      ? stripExternalScripts(content)
-      : `<!doctype html><html><head></head><body>${
-          content || themedFallback('Nothing to preview')
-        }</body></html>`;
-
-  const headInjected = base.includes('</head>')
-    ? base.replace(
-        '</head>',
-        `${headExtras || ''}<style>${css || ''}</style></head>`
-      )
-    : `${headExtras || ''}<style>${css || ''}</style>${base}`;
-
-  if (headInjected.includes('</body>')) {
-    return headInjected.replace('</body>', `${scripts || ''}</body>`);
-  }
-  return `${headInjected}${scripts || ''}`;
-};
-
-const buildPreviewDoc = ({ files, liveContent, entryCandidates, preferredEntry }) => {
-  const fileMap = Object.fromEntries(files.map((f) => [f.path, f]));
-  if (liveContent && liveContent.trim().length > 0) {
-    return wrapHtml(liveContent, '', '');
-  }
-
-  const css = files
-    .filter((f) => f.path.toLowerCase().endsWith('.css'))
-    .map((f) => f.content || '')
-    .join('\n');
-
-  const resolveEntry = () => {
-    if (preferredEntry && fileMap[preferredEntry]) return preferredEntry;
-    const htmlEntry =
-      (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
-      files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
-    if (htmlEntry) return htmlEntry;
-    const jsxEntry =
-      (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.jsx') || f.toLowerCase().endsWith('.tsx')) ||
-      files.find((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))?.path;
-    if (jsxEntry) return jsxEntry;
-    const jsEntry = files.find((f) => f.path.toLowerCase().endsWith('.js'))?.path;
-    if (jsEntry) return jsEntry;
-    const pyEntry = (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.py'));
-    if (pyEntry) return pyEntry;
-    return null;
-  };
-
-  const entry = resolveEntry();
-  const entryFile = entry ? fileMap[entry] : null;
-  const entryExt = entry ? entry.toLowerCase().split('.').pop() : '';
-
-  // If HTML entry
-  if (entryFile && entryExt === 'html') {
-    const sanitizedHtml = stripExternalScripts(entryFile.content || '');
-    const htmlHasInlineScript = sanitizedHtml ? /<script[\s\S]*?>[\s\S]*?<\/script>/i.test(sanitizedHtml) : false;
-    const scripts = htmlHasInlineScript ? '' : '';
-    return wrapHtml(
-      sanitizedHtml || themedFallback('请选择文件以预览'),
-      css,
-      scripts,
-      ''
-    );
-  }
-
-  // If JSX/TSX entry
-  if (entryFile && (entryExt === 'jsx' || entryExt === 'tsx')) {
-    const jsx = entryFile.content || '';
-    const headExtras = `
-      <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-      <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-      <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    `;
-    const scripts = `
-      <script type="text/babel">
-        ${jsx}
-      </script>
-    `;
-    return wrapHtml(`<div id="root"></div>`, css, scripts, headExtras);
-  }
-
-  // If JS entry
-  if (entryFile && entryExt === 'js') {
-    const js = entryFile.content || '';
-    const scripts = `<script>${js}</script>`;
-    return wrapHtml(`<div id="root"></div>`, css, scripts, '');
-  }
-
-  // If Python entry fallback
-  if (entry && entryExt === 'py') {
-    const html = `<main style="font-family:Inter,Arial,sans-serif;padding:2rem;line-height:1.6;">
-      <h2 style="margin-top:0;">Python entry detected: ${entry}</h2>
-      <p>Run the backend or start the script locally to preview the app. Frontend preview shows files only.</p>
-    </main>`;
-    return wrapHtml(html, css, '', '');
-  }
-
-  // Fallback: auto aggregate
-  const htmlCandidate =
-    (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.html')) ||
-    files.find((f) => f.path.toLowerCase().endsWith('.html'))?.path;
-
-  const jsxCandidate =
-    (entryCandidates || []).find((f) => f.toLowerCase().endsWith('.jsx') || f.toLowerCase().endsWith('.tsx')) ||
-    files.find((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))?.path;
-
-  const js = files
-    .filter((f) => f.path.toLowerCase().endsWith('.js'))
-    .map((f) => f.content || '')
-    .join('\n');
-  const jsx = files
-    .filter((f) => f.path.toLowerCase().endsWith('.jsx') || f.path.toLowerCase().endsWith('.tsx'))
-    .map((f) => f.content || '')
-    .join('\n');
-
-  let htmlSource = htmlCandidate ? fileMap[htmlCandidate]?.content : null;
-
-  if (!htmlSource && jsxCandidate) {
-    htmlSource = `<div id="root"></div>`;
-  }
-
-  const sanitizedHtml = htmlSource ? stripExternalScripts(htmlSource) : htmlSource;
-  const htmlHasInlineScript = sanitizedHtml ? /<script[\s\S]*?>[\s\S]*?<\/script>/i.test(sanitizedHtml) : false;
-
-  const needsBabel = jsx.trim().length > 0 && !htmlHasInlineScript;
-  const headExtras = needsBabel
-    ? `
-      <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-      <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-      <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    `
-    : '';
-
-  const shouldInjectAppScripts = !htmlHasInlineScript;
-  const scripts = shouldInjectAppScripts
-    ? `
-    ${js ? `<script>${js}</script>` : ''}
-    ${jsx ? `<script type="text/babel">${jsx}</script>` : ''}
-  `
-    : '';
-
-  return wrapHtml(
-    sanitizedHtml || themedFallback('请选择文件以预览'),
-    css,
-    scripts,
-    headExtras
-  );
+const normalizeFileKey = (filePath) => {
+  const raw = String(filePath || '');
+  const cleaned = raw.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+  return cleaned;
 };
 
 function Workspace({
   files,
-  openTabs,
-  activeFile,
+  openTabs: legacyOpenTabs,
+  activeFile: legacyActiveFile,
+  editorGroups,
+  activeGroupId: activeGroupIdProp,
+  editorLayout,
+  previewEditorEnabled,
+  tabMeta,
+  tabHistory,
   viewMode,
   livePreviewContent,
   entryCandidates,
@@ -217,6 +60,9 @@ function Workspace({
   hotReloadToken,
   theme,
   backendRoot,
+  keybindings,
+  editorSettings,
+  onChangeEditorNavigationMode,
   welcomeTabPath,
   renderWelcomeTab,
   onOpenWelcomeTab,
@@ -227,78 +73,93 @@ function Workspace({
   onCloseFile,
   onFileChange,
   onActiveFileChange,
+  onActiveGroupChange,
+  onOpenEditorNavigation,
   onTabReorder,
+  onToggleGroupLocked,
+  onTogglePreviewEditorEnabled,
+  onToggleTabPinned,
+  onToggleTabKeptOpen,
+  onCloseEditors,
+  onSplitEditor,
   onAddFile,
   onAddFolder,
   onRefreshPreview,
   onToggleTheme,
   onToggleView,
   onSyncStructure,
-  onPreviewEntryChange,
-  settingsTabPath,
-  renderSettingsTab,
+  onWorkspaceCreateFile,
+  onWorkspaceRenamePath,
+  onWorkspaceDeletePath,
+  onWorkspaceReadFile,
+  onWorkspaceWriteFile,
+	  onPreviewEntryChange,
+	  settingsTabPath,
+	  renderSettingsTab,
+	  extensionsTabPrefix,
+	  renderExtensionsTab,
+	  terminalSettingsTabPath,
+	  renderTerminalSettingsTab,
+	  terminalEditorTabPath,
+	  renderTerminalEditorTab,
+  taskReview,
+  onTaskKeepFile,
+  onTaskRevertFile,
+  onTaskKeepBlock,
+  onTaskRevertBlock,
+  onTaskResetBlock,
+  onTaskResetFile,
+  onTaskSetCursor,
   diffTabPrefix,
   diffTabs,
+  diffViewMode = 'compact',
+  aiEngineClient,
+  getBackendConfig,
+  currentSessionId,
+  backendWorkspaceId,
+  onRegisterEditorAiInvoker,
+  undoRedoLimit = 16,
 }) {
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
     return theme === 'dark' ? 'vs-dark' : 'vs';
   }, [theme]);
 
+  const normalizedEditorSettings = useMemo(() => normalizeEditorSettings(editorSettings), [editorSettings]);
+
+  const editorNavigationMode = useMemo(() => resolveEditorNavigationMode(editorSettings), [editorSettings]);
+
   const monacoOptions = useMemo(
-    () => ({
-      minimap: { enabled: true, renderCharacters: false },
-      glyphMargin: true,
-      folding: true,
-      renderLineHighlight: 'all',
-      lineNumbers: 'on',
-      wordWrap: 'off',
-      automaticLayout: true,
-      scrollBeyondLastLine: true,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
-      fontLigatures: true,
-      fontSize: 14,
-      lineHeight: 20,
-      letterSpacing: 0,
-      tabSize: 4,
-      contextmenu: true,
-      smoothScrolling: true,
-      renderWhitespace: 'none',
-      bracketPairColorization: { enabled: true },
-      guides: { indentation: true, highlightActiveIndentation: true },
-      quickSuggestions: true,
-      cursorBlinking: 'blink',
-    }),
-    []
+    () => buildMonacoOptions(normalizedEditorSettings, editorNavigationMode),
+    [editorNavigationMode, normalizedEditorSettings]
   );
+  const compactDiff = diffViewMode === 'compact';
 
-  const previewOptions = useMemo(
-    () =>
-      files
-        .filter((f) => {
-          const ext = f.path.toLowerCase();
-          return ext.endsWith('.html') || ext.endsWith('.jsx') || ext.endsWith('.tsx') || ext.endsWith('.js') || ext.endsWith('.py');
-        })
-        .map((f) => f.path),
-    [files]
-  );
+  const previewEnabled = previewEditorEnabled !== false;
 
-  const previewDoc = useMemo(
-    () => buildPreviewDoc({ files, liveContent: livePreviewContent, entryCandidates, preferredEntry: previewEntry }),
-    [files, livePreviewContent, entryCandidates, previewEntry]
-  );
+  const groups = useMemo(() => {
+    return normalizeWorkspaceGroups(editorGroups, legacyOpenTabs, legacyActiveFile);
+  }, [editorGroups, legacyActiveFile, legacyOpenTabs]);
+
+  const activeGroupId = useMemo(() => {
+    return resolveActiveGroupId(activeGroupIdProp, groups);
+  }, [activeGroupIdProp, groups]);
+
+  const activeGroup = useMemo(() => groups.find((g) => g.id === activeGroupId) || groups[0] || { id: activeGroupId, openTabs: [], activeFile: '' }, [activeGroupId, groups]);
+  const openTabs = activeGroup?.openTabs || [];
+  const activeFile = activeGroup?.activeFile || '';
 
   const activeContent = files.find((f) => f.path === activeFile)?.content || '';
+  const diffModelBase = useMemo(() => {
+    if (!diffTabPrefix || !activeFile || !activeFile.startsWith(diffTabPrefix)) return activeFile || 'diff';
+    const diff = diffTabs && diffTabs[activeFile];
+    return (diff && (diff.id || diff.diff_id || diff.path)) || activeFile || 'diff';
+  }, [activeFile, diffTabPrefix, diffTabs]);
   
   const updatedPaths = useMemo(
-    () => new Set(files.filter((f) => f.updated).map((f) => f.path)),
+    () => new Set(files.filter((f) => f.dirty).map((f) => f.path)),
     [files]
   );
-
-  const breadcrumbParts = useMemo(() => {
-    if (!activeFile) return [];
-    return activeFile.split('/').filter(Boolean);
-  }, [activeFile]);
 
   const projectLabel = useMemo(() => {
     if (workspaceRoots && Array.isArray(workspaceRoots) && workspaceRoots.length > 1) {
@@ -308,165 +169,470 @@ function Workspace({
     return workspaceRootLabel;
   }, [workspaceRootLabel, workspaceRoots]);
 
-  const editorPane = (
-    <div className="workspace-editor">
-          <div className="tab-row">
-            {openTabs.map((path, idx) => {
-              const isSettingsTab = settingsTabPath && path === settingsTabPath;
-              const isWelcomeTab = welcomeTabPath && path === welcomeTabPath;
-              const isDiffTab = diffTabPrefix && path.startsWith(diffTabPrefix);
-              const diff = isDiffTab && diffTabs ? diffTabs[path] : null;
-              const diffLabel = diff
-                ? (diff.path ? `Diff: ${diff.path}` : (diff.files ? 'Diff (multi-file)' : 'Diff'))
-                : 'Diff';
-              return (
-              // VS Code tab styling: icon + title, dirty dot, close button on hover
-              <div
-                key={path}
-                className={`tab ${activeFile === path ? 'active' : ''} ${updatedPaths.has(path) ? 'tab-updated' : ''}`}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData('text/plain', idx.toString())}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const from = Number(e.dataTransfer.getData('text/plain'));
-                  onTabReorder(from, idx);
-                }}
-              >
-                <button
-                  className="tab-main"
-                  onClick={() => onActiveFileChange(path)}
-                  title={path}
-                  type="button"
-                >
-                  <span className="tab-text">
-                    {isSettingsTab
-                      ? 'Settings'
-                      : (isWelcomeTab ? 'Welcome' : (isDiffTab ? diffLabel : path.split('/').pop()))}
-                  </span>
-                  {updatedPaths.has(path) && <span className="tab-dirty codicon codicon-circle-filled" aria-label="未保存更改" />}
-                </button>
-                <button onClick={() => onCloseFile(path)} className="tab-close" title="Close tab">
-                  <i className="codicon codicon-close" aria-hidden />
-                </button>
+  const canUseEditorAi = !!aiEngineClient && !!activeFile
+    && !(settingsTabPath && activeFile === settingsTabPath)
+    && !(welcomeTabPath && activeFile === welcomeTabPath)
+    && !(extensionsTabPrefix && activeFile.startsWith(extensionsTabPrefix))
+    && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix));
+
+  const filesRef = useRef(files);
+  const activeGroupIdRef = useRef(activeGroupId);
+  const lspHandlersRef = useRef({
+    onFileChange: null,
+    onOpenFile: null,
+    onSyncStructure: null,
+    onWorkspaceCreateFile: null,
+    onWorkspaceRenamePath: null,
+    onWorkspaceDeletePath: null,
+    onWorkspaceReadFile: null,
+    onWorkspaceWriteFile: null,
+  });
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    activeGroupIdRef.current = activeGroupId;
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    lspHandlersRef.current = {
+      onFileChange,
+      onOpenFile,
+      onSyncStructure,
+      onWorkspaceCreateFile,
+      onWorkspaceRenamePath,
+      onWorkspaceDeletePath,
+      onWorkspaceReadFile,
+      onWorkspaceWriteFile,
+    };
+  }, [
+    onFileChange,
+    onOpenFile,
+    onSyncStructure,
+    onWorkspaceCreateFile,
+    onWorkspaceDeletePath,
+    onWorkspaceReadFile,
+    onWorkspaceRenamePath,
+    onWorkspaceWriteFile,
+  ]);
+
+  const getFilesForLsp = useCallback(() => filesRef.current, []);
+  const getActiveGroupIdForLsp = useCallback(() => activeGroupIdRef.current || 'group-1', []);
+
+  const onFileChangeForLsp = useCallback((...args) => lspHandlersRef.current.onFileChange?.(...args), []);
+  const onOpenFileForLsp = useCallback((...args) => lspHandlersRef.current.onOpenFile?.(...args), []);
+  const onSyncStructureForLsp = useCallback((...args) => lspHandlersRef.current.onSyncStructure?.(...args), []);
+  const onWorkspaceCreateFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceCreateFile?.(...args), []);
+  const onWorkspaceRenamePathForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceRenamePath?.(...args), []);
+  const onWorkspaceDeletePathForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceDeletePath?.(...args), []);
+  const onWorkspaceReadFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceReadFile?.(...args), []);
+  const onWorkspaceWriteFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceWriteFile?.(...args), []);
+
+  const lspUiContext = useMemo(() => ({
+    getFiles: getFilesForLsp,
+    onFileChange: onFileChangeForLsp,
+    onOpenFile: onOpenFileForLsp,
+    onSyncStructure: onSyncStructureForLsp,
+    onWorkspaceCreateFile: onWorkspaceCreateFileForLsp,
+    onWorkspaceRenamePath: onWorkspaceRenamePathForLsp,
+    onWorkspaceDeletePath: onWorkspaceDeletePathForLsp,
+    onWorkspaceReadFile: onWorkspaceReadFileForLsp,
+    onWorkspaceWriteFile: onWorkspaceWriteFileForLsp,
+    getActiveGroupId: getActiveGroupIdForLsp,
+  }), [
+    getActiveGroupIdForLsp,
+    getFilesForLsp,
+    onFileChangeForLsp,
+    onOpenFileForLsp,
+    onSyncStructureForLsp,
+    onWorkspaceCreateFileForLsp,
+    onWorkspaceDeletePathForLsp,
+    onWorkspaceReadFileForLsp,
+    onWorkspaceRenamePathForLsp,
+    onWorkspaceWriteFileForLsp,
+  ]);
+
+  useEffect(() => {
+    lspService.updateUiContext(lspUiContext);
+  }, [lspUiContext]);
+
+  const taskReviewFile = useMemo(() => {
+    const list = taskReview?.files;
+    if (!activeFile || !Array.isArray(list)) return null;
+    return list.find((f) => f && f.path === activeFile) || null;
+  }, [activeFile, taskReview]);
+
+  const taskBlocks = useMemo(() => (
+    taskReviewFile && Array.isArray(taskReviewFile.blocks) ? taskReviewFile.blocks : []
+  ), [taskReviewFile]);
+
+  const taskCursorIndex = useMemo(() => {
+    const raw = taskReview?.cursorByPath && activeFile ? taskReview.cursorByPath[activeFile] : 0;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.floor(n));
+  }, [activeFile, taskReview]);
+
+  const taskActiveIndex = useMemo(() => {
+    if (!taskBlocks.length) return 0;
+    return Math.min(taskCursorIndex, taskBlocks.length - 1);
+  }, [taskBlocks.length, taskCursorIndex]);
+
+  const pendingBlocks = useMemo(() => (
+    taskBlocks.filter(b => b.action === 'pending')
+  ), [taskBlocks]);
+
+  const currentPendingIndex = useMemo(() => {
+    if (!pendingBlocks.length) return -1;
+    const activeBlockId = taskBlocks[taskActiveIndex]?.id;
+    return pendingBlocks.findIndex(b => b.id === activeBlockId);
+  }, [pendingBlocks, taskBlocks, taskActiveIndex]);
+
+  const hasTaskReview = !!activeFile
+    && !(settingsTabPath && activeFile === settingsTabPath)
+    && !(welcomeTabPath && activeFile === welcomeTabPath)
+    && !(extensionsTabPrefix && activeFile.startsWith(extensionsTabPrefix))
+    && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix))
+    && !!taskReviewFile
+    && taskBlocks.length > 0;
+
+  const shouldShowTaskReviewUI = hasTaskReview && taskBlocks.some(b => b.action === 'pending');
+
+  const normalizedUndoRedoLimit = useMemo(() => {
+    const raw = Number(undoRedoLimit);
+    const normalized = Number.isFinite(raw) ? Math.max(8, Math.min(64, Math.round(raw))) : 16;
+    return normalized;
+  }, [undoRedoLimit]);
+
+  const debugSnap = useSyncExternalStore(debugService.subscribe, debugService.getSnapshot, debugService.getSnapshot);
+
+  const {
+    editorRef,
+    monacoRef,
+    editorVersion,
+    handleEditorMountForGroup,
+    getEditorInstanceByGroupId,
+  } = useWorkspaceMonacoBinding({
+    backendRoot,
+    backendWorkspaceId,
+    lspUiContext,
+    normalizedUndoRedoLimit,
+    activeGroupId,
+    onOpenFile,
+  });
+
+  const ai = useWorkspaceAi({
+    canUseEditorAi,
+    editorRef,
+    monacoRef,
+    editorVersion,
+    activeFile,
+    keybindings,
+    aiEngineClient,
+    getBackendConfig,
+    currentSessionId,
+    backendWorkspaceId,
+    backendRoot,
+    onRegisterEditorAiInvoker,
+  });
+
+  const getKeybinding = useCallback((id, fallback = '') => {
+    return getKeybindingValue(keybindings, id, fallback);
+  }, [keybindings]);
+
+  const taskActiveBlock = useMemo(() => {
+    if (!taskBlocks.length) return null;
+    return taskBlocks[taskActiveIndex] || null;
+  }, [taskActiveIndex, taskBlocks]);
+
+  const { setTaskCursor } = useWorkspaceTaskReviewMonaco({
+    editorRef,
+    monacoRef,
+    editorVersion,
+    activeFile,
+    hasTaskReview,
+    taskBlocks,
+    pendingBlocks,
+    taskActiveIndex,
+    taskActiveBlock,
+    getKeybinding,
+    onTaskSetCursor,
+    onTaskKeepBlock,
+    onTaskRevertBlock,
+    onTaskResetBlock,
+    resolveBlockPosition,
+    toLines,
+    parseMonacoKeybinding,
+  });
+
+  useWorkspaceLspEditorActions({ editorRef, monacoRef, editorVersion });
+
+  useStatusBarEditorPatch({ editorRef, monacoRef, activeFile, editorVersion });
+
+  useWorkbenchEditorEvents({
+    activeGroupId,
+    getEditorInstanceByGroupId,
+    onOpenFile,
+  });
+
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const updateDecorations = () => {
+      const model = editor.getModel?.();
+      if (!model) return;
+
+      const fileKey = normalizeFileKey(activeFile);
+      if (!fileKey) {
+        try { editor.createDecorationsCollection([]); } catch {}
+        return;
+      }
+
+      const map = (debugSnap?.breakpoints && typeof debugSnap.breakpoints === 'object') ? debugSnap.breakpoints : {};
+      const lines = Array.isArray(map[fileKey]) ? map[fileKey] : [];
+      const lineCount = model.getLineCount?.() || 0;
+      const decorations = lines
+        .map((n) => Math.max(1, Math.floor(Number(n) || 0)))
+        .filter((n) => n > 0 && n <= lineCount)
+        .map((lineNumber) => ({
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            isWholeLine: true,
+            className: 'debug-breakpoint-line',
+            glyphMarginClassName: 'debug-breakpoint-glyph',
+          },
+        }));
+
+      try {
+        if (!editor.__debugBreakpointDecorations) {
+          editor.__debugBreakpointDecorations = editor.createDecorationsCollection(decorations);
+        } else {
+          editor.__debugBreakpointDecorations.set(decorations);
+        }
+      } catch {
+      }
+    };
+
+    updateDecorations();
+
+    const subs = [];
+    try { subs.push(editor.onDidChangeModel?.(() => updateDecorations())); } catch {}
+    try { subs.push(editor.onDidChangeModelContent?.(() => updateDecorations())); } catch {}
+
+    return () => {
+      subs.forEach((d) => d?.dispose?.());
+      try { editor.__debugBreakpointDecorations?.clear?.(); } catch {}
+      try { editor.__debugBreakpointDecorations = null; } catch {}
+    };
+  }, [activeFile, debugSnap?.version, editorRef, editorVersion, monacoRef]);
+
+  useEffect(() => {
+    if (!editorVersion) return undefined;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return undefined;
+
+    const handler = (e) => {
+      const target = e?.target || null;
+      const mouseType = target?.type;
+      const want = monaco?.editor?.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+      if (want == null || mouseType !== want) return;
+      const pos = target?.position || null;
+      const lineNumber = Number(pos?.lineNumber);
+      if (!Number.isFinite(lineNumber) || lineNumber <= 0) return;
+      const fileKey = normalizeFileKey(activeFile);
+      if (!fileKey) return;
+      try {
+        e.event?.preventDefault?.();
+        e.event?.stopPropagation?.();
+      } catch {
+      }
+      debugService.toggleBreakpoint(fileKey, lineNumber, { workspaceRoot: backendRoot }).catch(() => {});
+    };
+
+    const d = editor.onMouseDown?.(handler);
+    return () => {
+      try { d?.dispose?.(); } catch {}
+    };
+  }, [activeFile, backendRoot, editorRef, editorVersion, monacoRef]);
+
+  const renderEditorForGroup = (group) => {
+    const filePath = String(group.activeFile || '');
+    const diffModelBaseForGroup = resolveDiffModelBaseForPath(filePath, { diffTabPrefix, diffTabs });
+    const content = files.find((f) => f.path === filePath)?.content || '';
+
+    if (!filePath) {
+      return (
+        <div className="monaco-empty" aria-label="No file open" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {!hasWorkspace && onOpenWelcomeTab ? (
+            <div style={{ textAlign: 'center', padding: 24 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No editor open</div>
+              <div style={{ color: 'var(--muted)', marginBottom: 12 }}>打开 Welcome 或选择项目文件夹开始</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button className="primary-btn" onClick={onOpenWelcomeTab}>Open Welcome</button>
+                <button className="ghost-btn" onClick={onSelectFolder}>📁 Open Folder</button>
               </div>
-            );})}
-          </div>
-          <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs">
-            {activeFile && projectLabel && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && (
-              <span className="breadcrumb-root">
-                {projectLabel}
-              </span>
-            )}
-            {activeFile && activeFile !== settingsTabPath && activeFile !== welcomeTabPath && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix)) && breadcrumbParts.map((part, idx) => (
-              <span key={`${part}-${idx}`} className="breadcrumb-part">
-                <i className="codicon codicon-chevron-right" aria-hidden />
-                <span>{part}</span>
-              </span>
-            ))}
-          </div>
-          <div className="monaco-shell">
-            {activeFile ? (
-                settingsTabPath && activeFile === settingsTabPath && renderSettingsTab
-                  ? renderSettingsTab()
-                  : (welcomeTabPath && activeFile === welcomeTabPath && renderWelcomeTab
-                      ? renderWelcomeTab()
-                      : (diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix) && diffTabs && diffTabs[activeFile]
-                          ? (
-                            <Suspense fallback={<div className="monaco-fallback">Loading Diff Editor…</div>}>
-                              {diffTabs[activeFile].files ? (
-                                <div style={{ height: '100%', overflowY: 'auto' }}>
-                                  {diffTabs[activeFile].files.map((file) => (
-                                    <div key={file.path} style={{ height: '300px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
-                                      <div style={{ 
-                                          padding: '8px 16px', 
-                                          background: 'var(--panel-sub)', 
-                                          borderBottom: '1px solid var(--border)',
-                                          fontSize: '13px',
-                                          fontWeight: '600',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          gap: '8px'
-                                      }}>
-                                          <span style={{ 
-                                              color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')), 
-                                              fontWeight: 'bold',
-                                              width: '16px',
-                                              textAlign: 'center'
-                                          }}>
-                                              {file.status}
-                                          </span>
-                                          {file.path}
-                                      </div>
-                                      <div style={{ flex: 1, minHeight: 0 }}>
-                                          <MonacoDiffEditor
-                                              height="100%"
-                                              language={inferLanguage(file.path || '')}
-                                              original={file.before || ''}
-                                              modified={file.after || ''}
-                                              theme={monacoTheme}
-                                              options={{
-                                                  ...monacoOptions,
-                                                  readOnly: true,
-                                                  renderSideBySide: true,
-                                                  wordWrap: 'off',
-                                                  minimap: { enabled: false },
-                                                  scrollBeyondLastLine: false,
-                                                  padding: { top: 8, bottom: 8 }
-                                              }}
-                                          />
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <MonacoDiffEditor
-                                  height="100%"
-                                  language={inferLanguage(diffTabs[activeFile].path || '')}
-                                  original={diffTabs[activeFile].before || ''}
-                                  modified={diffTabs[activeFile].after || ''}
-                                  theme={monacoTheme}
-                                  options={{
-                                    ...monacoOptions,
-                                    readOnly: true,
-                                    renderSideBySide: true,
-                                    wordWrap: 'off'
-                                  }}
-                                />
-                              )}
-                            </Suspense>
-                          )
-                          : (
-                            <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
-                              <MonacoEditor
-                                key={`editor-${activeFile}`}
-                                height="100%"
-                                language={inferLanguage(activeFile)}
-                                theme={monacoTheme}
-                                value={activeContent}
-                                options={monacoOptions}
-                                onChange={(value) => onFileChange(activeFile, value ?? '')}
-                              />
-                            </Suspense>
-                          )
-                        )
-                    )
-            ) : (
-              <div className="monaco-empty" aria-label="No file open" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {!hasWorkspace && onOpenWelcomeTab ? (
-                  <div style={{ textAlign: 'center', padding: 24 }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No editor open</div>
-                    <div style={{ color: 'var(--muted)', marginBottom: 12 }}>打开 Welcome 或选择项目文件夹开始</div>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                      <button className="primary-btn" onClick={onOpenWelcomeTab}>Open Welcome</button>
-                      <button className="ghost-btn" onClick={onSelectFolder}>📁 Open Folder</button>
-                    </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (settingsTabPath && filePath === settingsTabPath && renderSettingsTab) return renderSettingsTab();
+    if (terminalSettingsTabPath && filePath === terminalSettingsTabPath && renderTerminalSettingsTab) return renderTerminalSettingsTab();
+    if (terminalEditorTabPath && filePath === terminalEditorTabPath && renderTerminalEditorTab) return renderTerminalEditorTab();
+    if (welcomeTabPath && filePath === welcomeTabPath && renderWelcomeTab) return renderWelcomeTab();
+    if (extensionsTabPrefix && filePath.startsWith(extensionsTabPrefix) && renderExtensionsTab) return renderExtensionsTab(filePath, { groupId: group.id });
+
+    if (diffTabPrefix && filePath.startsWith(diffTabPrefix) && diffTabs && diffTabs[filePath]) {
+      const diff = diffTabs[filePath];
+      return (
+        <Suspense fallback={<div className="monaco-fallback">Loading Diff Editor…</div>}>
+          {diff.files ? (
+            <div style={{ height: '100%', overflowY: 'auto' }}>
+              {diff.files.map((file) => (
+                <div key={file.path} style={{ height: '300px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{
+                    padding: '8px 16px',
+                    background: 'var(--panel-sub)',
+                    borderBottom: '1px solid var(--border)',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    <span style={{
+                      color: file.status === 'M' ? '#e2c08d' : (file.status === 'A' ? '#73c991' : (file.status === 'D' ? '#f14c4c' : '#999')),
+                      fontWeight: 'bold',
+                      width: '16px',
+                      textAlign: 'center'
+                    }}>
+                      {file.status}
+                    </span>
+                    {file.path}
                   </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-    </div>
+                  <div style={{ flex: 1, minHeight: 0 }}>
+                    <ManagedDiffEditor
+                      height="100%"
+                      language={inferMonacoLanguage(file.path || '')}
+                      original={file.before || ''}
+                      modified={file.after || ''}
+                      theme={monacoTheme}
+                      originalModelPath={`diff-tab-original://${diffModelBaseForGroup}/${file.path}`}
+                      modifiedModelPath={`diff-tab-modified://${diffModelBaseForGroup}/${file.path}`}
+                      options={{
+                        ...monacoOptions,
+                        readOnly: true,
+                        renderSideBySide: true,
+                        wordWrap: 'off',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        padding: { top: 8, bottom: 8 },
+                        hideUnchangedRegions: compactDiff ? { enabled: true, revealLinePadding: 3, contextLineCount: 3 } : { enabled: false }
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ManagedDiffEditor
+              height="100%"
+              language={inferMonacoLanguage(diff.path || filePath)}
+              original={diff.before || ''}
+              modified={diff.after || ''}
+              theme={monacoTheme}
+              originalModelPath={`diff-tab-original://${diffModelBaseForGroup}`}
+              modifiedModelPath={`diff-tab-modified://${diffModelBaseForGroup}`}
+              options={{
+                ...monacoOptions,
+                readOnly: true,
+                renderSideBySide: true,
+                wordWrap: 'off',
+                hideUnchangedRegions: compactDiff ? { enabled: true, revealLinePadding: 3, contextLineCount: 3 } : { enabled: false }
+              }}
+            />
+          )}
+        </Suspense>
+      );
+    }
+
+    return (
+      <Suspense fallback={<div className="monaco-fallback">Loading Monaco Editor…</div>}>
+        <div style={{ height: '100%', width: '100%' }}>
+          <MonacoEditor
+            height="100%"
+            path={filePath}
+            language={inferMonacoLanguage(filePath)}
+            theme={monacoTheme}
+            value={content}
+            options={monacoOptions}
+            saveViewState
+            keepCurrentModel
+            onMount={handleEditorMountForGroup(group.id)}
+            onChange={(value) => onFileChange?.(filePath, value ?? '', { groupId: group.id })}
+          />
+        </div>
+      </Suspense>
+    );
+  };
+
+  const editorPane = (
+    <WorkspaceEditorGroups
+      groups={groups}
+      activeGroupId={activeGroupId}
+      editorLayout={editorLayout}
+      editorNavigationMode={editorNavigationMode}
+      previewEnabled={previewEnabled}
+      tabMeta={tabMeta}
+      updatedPaths={updatedPaths}
+      backendRoot={backendRoot}
+      diffTabPrefix={diffTabPrefix}
+      diffTabs={diffTabs}
+      settingsTabPath={settingsTabPath}
+      terminalSettingsTabPath={terminalSettingsTabPath}
+      terminalEditorTabPath={terminalEditorTabPath}
+      welcomeTabPath={welcomeTabPath}
+      extensionsTabPrefix={extensionsTabPrefix}
+      onActiveGroupChange={onActiveGroupChange}
+      onActiveFileChange={onActiveFileChange}
+      onTabReorder={onTabReorder}
+      onCloseFile={onCloseFile}
+      onCloseEditors={onCloseEditors}
+      onToggleTabPinned={onToggleTabPinned}
+      onToggleTabKeptOpen={onToggleTabKeptOpen}
+      onOpenFile={onOpenFile}
+      onSplitEditor={onSplitEditor}
+      onToggleGroupLocked={onToggleGroupLocked}
+      onTogglePreviewEditorEnabled={onTogglePreviewEditorEnabled}
+      onChangeEditorNavigationMode={onChangeEditorNavigationMode}
+      onOpenEditorNavigation={onOpenEditorNavigation}
+      renderGroupMain={(group, { isActiveGroup }) => (
+        <>
+          <WorkspaceTaskReviewFloating
+            visible={isActiveGroup && shouldShowTaskReviewUI}
+            activeFile={group?.activeFile || activeFile}
+            pendingBlocks={pendingBlocks}
+            currentPendingIndex={currentPendingIndex}
+            taskBlocks={taskBlocks}
+            onTaskRevertFile={onTaskRevertFile}
+            onTaskKeepFile={onTaskKeepFile}
+            onTaskResetFile={onTaskResetFile}
+            setTaskCursor={setTaskCursor}
+          />
+
+          {renderEditorForGroup(group)}
+
+          <WorkspaceAiOverlay enabled={isActiveGroup && canUseEditorAi} ai={ai} />
+        </>
+      )}
+    />
   );
 
   return (
@@ -475,47 +641,24 @@ function Workspace({
         {viewMode === 'code' || viewMode === 'diff' ? (
           editorPane
         ) : (
-          <div className="workspace-preview fullscreen-preview">
-            <div className="preview-header">
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <span>Live Preview</span>
-                  <select
-                    value={previewEntry}
-                    onChange={(e) => onPreviewEntryChange?.(e.target.value)}
-                    className="ghost-input"
-                    style={{ minWidth: '200px', padding: '0.2rem 0.4rem' }}
-                    title="选择要预览的入口文件"
-                  >
-                    <option value="">自动选择入口</option>
-                    {previewOptions.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  {entryCandidates?.length ? (
-                    <span className="preview-entry">默认入口: {entryCandidates[0]}</span>
-                  ) : null}
-                </div>
-              </div>
-              <div className="preview-actions">
-                <button onClick={onToggleView} className="ghost-btn">
-                  返回编辑
-                </button>
-                <button onClick={onRefreshPreview} className="ghost-btn">
-                  ⟳
-                </button>
-              </div>
-            </div>
-            <iframe
-              key={`preview-${hotReloadToken}`}
-              title="live-preview"
-              srcDoc={previewDoc}
-              sandbox="allow-scripts"
-              className="preview-frame"
-            />
-          </div>
+          <WorkspacePreviewPane
+            files={files}
+            livePreviewContent={livePreviewContent}
+            entryCandidates={entryCandidates}
+            previewEntry={previewEntry}
+            onPreviewEntryChange={onPreviewEntryChange}
+            onToggleView={onToggleView}
+            onRefreshPreview={onRefreshPreview}
+            hotReloadToken={hotReloadToken}
+          />
         )}
       </div>
+      <PanelShell
+        workspacePath={backendRoot || workspaceRoots?.[0]?.path || workspaceRoots?.[0] || ''}
+        onOpenFile={onOpenFile}
+        terminalSettingsTabPath={terminalSettingsTabPath}
+        terminalEditorTabPath={terminalEditorTabPath}
+      />
     </div>
   );
 }

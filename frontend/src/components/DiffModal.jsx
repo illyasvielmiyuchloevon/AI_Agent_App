@@ -1,25 +1,6 @@
 import React, { Suspense, useMemo, useRef, useEffect, useCallback, useState } from 'react';
-
-const MonacoDiffEditor = React.lazy(() =>
-  import('@monaco-editor/react').then((mod) => ({ default: mod.DiffEditor }))
-);
-
-const LANG_MAP = {
-  js: 'javascript',
-  jsx: 'javascript',
-  ts: 'typescript',
-  tsx: 'typescript',
-  css: 'css',
-  html: 'html',
-  json: 'json',
-  md: 'markdown',
-  py: 'python',
-};
-
-const inferLanguage = (path = '') => {
-  const ext = path.split('.').pop();
-  return LANG_MAP[ext] || 'plaintext';
-};
+import { inferMonacoLanguage } from '../utils/appAlgorithms';
+import ManagedDiffEditor from './ManagedDiffEditor';
 
 class EditorErrorBoundary extends React.Component {
   constructor(props) {
@@ -55,7 +36,7 @@ const findFirstDiffLine = (before = '', after = '') => {
   return null;
 };
 
-function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) {
+function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace, diffViewMode = 'compact', onDiffViewModeChange }) {
   const hasDiff = !!diff && typeof diff === 'object';
   const path = hasDiff ? diff.path : '';
   const before = hasDiff ? diff.before || '' : '';
@@ -63,10 +44,10 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
   const beforeTruncated = hasDiff ? !!diff.before_truncated : false;
   const afterTruncated = hasDiff ? !!diff.after_truncated : false;
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [compactView, setCompactView] = useState(true); // true: 仅改动块；false: 全量文件
+  const [compactView, setCompactView] = useState(diffViewMode === 'compact'); // true: 仅改动块；false: 全量文件
   const editorKey = useMemo(
-    () => `${(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}-${compactView ? 'compact' : 'full'}`,
-    [diff, compactView]
+    () => `${(diff && (diff.id || diff.diff_id || diff.path)) || 'diff-view'}`,
+    [diff]
   );
   const editorRef = useRef(null);
   const modifiedEditorRef = useRef(null);
@@ -85,11 +66,15 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
     }
   }, []);
 
-  const language = useMemo(() => inferLanguage(path || ''), [path]);
+  const language = useMemo(() => inferMonacoLanguage(path || ''), [path]);
   const monacoTheme = useMemo(() => {
     if (theme === 'high-contrast') return 'hc-black';
     return theme === 'dark' ? 'vs-dark' : 'vs';
   }, [theme]);
+
+  useEffect(() => {
+    setCompactView(diffViewMode === 'compact');
+  }, [diffViewMode]);
 
   const handleMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -184,7 +169,14 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
             <button
               className="ghost-btn"
               title={compactView ? '切换为全量文件对比' : '仅显示改动块'}
-              onClick={() => setCompactView((v) => !v)}
+              onClick={() => {
+                setCompactView((v) => {
+                  const next = !v;
+                  const nextMode = next ? 'compact' : 'full';
+                  if (onDiffViewModeChange) onDiffViewModeChange(nextMode);
+                  return next;
+                });
+              }}
             >
               <span className="codicon codicon-diff" aria-hidden />
               <span style={{ marginLeft: '0.35rem' }}>{compactView ? '全量对比' : '仅改动'}</span>
@@ -222,7 +214,7 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
               // Single-file View
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
                 <Suspense fallback={<div className="monaco-fallback">Loading Diff Viewer…</div>}>
-                  <MonacoDiffEditor
+                  <ManagedDiffEditor
                     key={editorKey}
                     height="100%"
                     language={language}
@@ -230,8 +222,6 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
                     modified={after}
                     theme={monacoTheme}
                     onMount={handleMount}
-                    keepCurrentOriginalModel={true}
-                    keepCurrentModifiedModel={true}
                     originalModelPath={`diff-original-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
                     modifiedModelPath={`diff-modified-${(diff && (diff.id || diff.diff_id || diff.path)) || 'default'}`}
                     options={{
@@ -261,7 +251,7 @@ function DiffModal({ diff, onClose, theme, onOpenFile, onOpenDiffInWorkspace }) 
 
 const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDiffInWorkspace, onCloseModal }) => {
     const [expanded, setExpanded] = useState(true);
-    const language = useMemo(() => inferLanguage(file.path || ''), [file.path]);
+    const language = useMemo(() => inferMonacoLanguage(file.path || ''), [file.path]);
     
     // Lazy load logic: only render editor when expanded
     return (
@@ -318,7 +308,7 @@ const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDi
                 <div style={{ height: '300px' }}>
                     <EditorErrorBoundary>
                         <Suspense fallback={<div className="monaco-fallback">Loading...</div>}>
-                            <MonacoDiffEditor
+                            <ManagedDiffEditor
                                 height="300px"
                                 language={language}
                                 original={file.before || ''}
@@ -326,8 +316,6 @@ const FileDiffSection = ({ file, theme, compactView, index, onOpenFile, onOpenDi
                                 theme={theme}
                                 originalModelPath={`original://${file.path}`}
                                 modifiedModelPath={`modified://${file.path}`}
-                                keepCurrentOriginalModel={true}
-                                keepCurrentModifiedModel={true}
                                 options={{
                                     renderSideBySide: true,
                                     readOnly: true,
