@@ -26,9 +26,19 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
   const [lastProgress, setLastProgress] = useState(null);
   const [lastError, setLastError] = useState(null);
   const [installingIds, setInstallingIds] = useState(() => new Set());
+  const [extHostStatus, setExtHostStatus] = useState(null);
+  const [extHostExtensions, setExtHostExtensions] = useState(null);
+  const [extHostBusy, setExtHostBusy] = useState(false);
+  const [showExtHost, setShowExtHost] = useState(false);
 
   const searchReqRef = useRef(0);
   const searchTimerRef = useRef(null);
+  const extHostReqRef = useRef(0);
+
+  const extensionsApi = useMemo(() => {
+    const api = globalThis?.window?.electronAPI?.extensions || null;
+    return api && typeof api.getStatus === 'function' ? api : null;
+  }, []);
 
   useEffect(() => {
     if (!pluginsService.isAvailable()) return () => {};
@@ -41,6 +51,51 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
     void pluginsService.listUpdates().then((res) => setUpdates(res?.items || [])).catch(() => {});
     return () => unsub?.();
   }, []);
+
+  const refreshExtHostStatus = async () => {
+    if (!extensionsApi) return;
+    const reqId = (extHostReqRef.current += 1);
+    try {
+      const res = await extensionsApi.getStatus();
+      if (reqId !== extHostReqRef.current) return;
+      setExtHostStatus(res && typeof res === 'object' ? res : null);
+    } catch (err) {
+      if (reqId !== extHostReqRef.current) return;
+      setExtHostStatus({ ok: false, error: err?.message || String(err) });
+    }
+  };
+
+  const restartExtHost = async () => {
+    if (!extensionsApi?.restart) return;
+    setExtHostBusy(true);
+    try {
+      await extensionsApi.restart('ui');
+      await refreshExtHostStatus();
+      setExtHostExtensions(null);
+    } catch (err) {
+      setLastError({ message: err?.message || String(err) });
+    } finally {
+      setExtHostBusy(false);
+    }
+  };
+
+  const loadExtHostExtensions = async () => {
+    if (!extensionsApi?.listExtensions) return;
+    setExtHostBusy(true);
+    try {
+      const res = await extensionsApi.listExtensions();
+      setExtHostExtensions(res && typeof res === 'object' ? res : null);
+      await refreshExtHostStatus();
+    } catch (err) {
+      setExtHostExtensions({ ok: false, error: err?.message || String(err) });
+    } finally {
+      setExtHostBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshExtHostStatus();
+  }, [extensionsApi]);
 
   useEffect(() => () => {
     try { clearTimeout(searchTimerRef.current); } catch {}
@@ -167,7 +222,7 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
     }
   };
 
-  const headerTitle = t('扩展', 'Extensions');
+  const headerTitle = t('插件', 'Plugins');
 
   return (
     <div className="extensions-panel">
@@ -201,7 +256,7 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
           className="extensions-search-input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('在扩展市场中搜索', 'Search Extensions in Marketplace')}
+          placeholder={t('搜索语言插件（LSP）', 'Search language plugins (LSP)')}
           spellCheck={false}
         />
       </div>
@@ -304,7 +359,7 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
             </>
           ) : (
             <>
-              <div className="extensions-section-title">{t('扩展市场', 'Marketplace')}</div>
+              <div className="extensions-section-title">{t('插件市场', 'Marketplace')}</div>
               {searching ? (
                 <div className="extensions-empty">{t('搜索中…', 'Searching…')}</div>
               ) : searchItems.length === 0 ? (
@@ -384,6 +439,51 @@ export default function ExtensionsPanel({ language = 'zh', onOpenDetails = null 
               </div>
             </>
           )}
+
+          {extensionsApi ? (
+            <div className="extensions-footer">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div className="extensions-footer-title" style={{ marginBottom: 0 }}>
+                  {t('扩展宿主（开发者）', 'Extension Host (Dev)')}
+                </div>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setShowExtHost((v) => !v)}
+                  style={{ height: 30 }}
+                >
+                  {showExtHost ? t('收起', 'Collapse') : t('展开', 'Expand')}
+                </button>
+              </div>
+              {showExtHost ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+                    <div style={{ opacity: 0.85, fontSize: '0.86rem', whiteSpace: 'pre-wrap' }}>
+                      {extHostStatus?.ok
+                        ? `${t('运行中', 'Running')}: ${extHostStatus?.running ? t('是', 'Yes') : t('否', 'No')}  •  ${t('已信任', 'Trusted')}: ${extHostStatus?.trusted ? t('是', 'Yes') : t('否', 'No')}`
+                        : String(extHostStatus?.error || t('不可用', 'Unavailable'))}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button type="button" className="ghost-btn" disabled={extHostBusy} onClick={() => void refreshExtHostStatus()} style={{ height: 30 }}>
+                        {t('刷新', 'Refresh')}
+                      </button>
+                      <button type="button" className="ghost-btn" disabled={extHostBusy} onClick={() => void loadExtHostExtensions()} style={{ height: 30 }}>
+                        {t('列出', 'List')}
+                      </button>
+                      <button type="button" className="ghost-btn danger" disabled={extHostBusy} onClick={() => void restartExtHost()} style={{ height: 30 }}>
+                        {t('重启', 'Restart')}
+                      </button>
+                    </div>
+                  </div>
+                  {extHostExtensions ? (
+                    <pre className="extensions-footer-pre" style={{ marginTop: 8 }}>
+                      {JSON.stringify(extHostExtensions, null, 2)}
+                    </pre>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
           {lastProgress ? (
             <div className="extensions-footer">
