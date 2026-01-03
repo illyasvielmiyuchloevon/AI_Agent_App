@@ -11,6 +11,15 @@ export function useWorkspaceFileOps({
   syncLegacyTabsFromGroups,
   setWorkspaceBindingStatus,
 } = {}) {
+  const ideBus = globalThis?.window?.electronAPI?.ideBus || null;
+  const notifyBus = (method, payload) => {
+    try {
+      ideBus?.notify?.(String(method || ''), payload && typeof payload === 'object' ? payload : {});
+    } catch {
+      // ignore
+    }
+  };
+
   const handleAddFile = useCallback(() => {
     if (!workspaceDriver) {
       alert('请先选择项目文件夹');
@@ -34,6 +43,7 @@ export function useWorkspaceFileOps({
           if (!workspaceDriver?.setFileOperationsHooks) {
             try { await lspService?.didCreateFiles?.([name]); } catch {}
           }
+          notifyBus('workspace/didCreateFiles', { paths: [name], source: 'ui' });
           await syncWorkspaceFromDisk?.({ includeContent: true, highlight: true });
           openFile?.(name);
         } catch {
@@ -67,6 +77,7 @@ export function useWorkspaceFileOps({
           if (!workspaceDriver?.setFileOperationsHooks) {
             try { await lspService?.didCreateFiles?.([name]); } catch {}
           }
+          notifyBus('workspace/didCreateFiles', { paths: [name], source: 'ui' });
           await syncWorkspaceFromDisk?.({ includeContent: false, highlight: false });
         } catch {
         }
@@ -91,6 +102,7 @@ export function useWorkspaceFileOps({
       if (!workspaceDriver?.setFileOperationsHooks) {
         try { await lspService?.didDeleteFiles?.([path]); } catch {}
       }
+      notifyBus('workspace/didDeleteFiles', { paths: [path], source: 'ui' });
       await syncWorkspaceFromDisk?.({ includeContent: true, highlight: false });
       setWorkspaceState?.((prevRaw) => {
         const prev = syncLegacyTabsFromGroups(prevRaw);
@@ -136,6 +148,7 @@ export function useWorkspaceFileOps({
         if (!workspaceDriver?.setFileOperationsHooks) {
           try { await lspService?.didRenameFiles?.([{ from: oldPath, to: nextPathInput }]); } catch {}
         }
+        notifyBus('workspace/didRenameFiles', { files: [{ from: oldPath, to: nextPathInput }], source: 'ui' });
         await syncWorkspaceFromDisk?.({ includeContent: true, highlight: true });
       } catch {
       }
@@ -163,6 +176,7 @@ export function useWorkspaceFileOps({
           if (!workspaceDriver?.setFileOperationsHooks) {
             try { await lspService?.didRenameFiles?.([{ from: oldPath, to: nextPath }]); } catch {}
           }
+          notifyBus('workspace/didRenameFiles', { files: [{ from: oldPath, to: nextPath }], source: 'ui' });
           await syncWorkspaceFromDisk?.({ includeContent: true, highlight: true });
         } catch {
         }
@@ -189,6 +203,7 @@ export function useWorkspaceFileOps({
       ? meta.initialContent
       : (typeof meta?.content === 'string' ? meta.content : '');
     await workspaceDriver.writeFile(relPath, initial, { createDirectories: true, notifyCreate: false });
+    notifyBus('workspace/didCreateFiles', { paths: [relPath], source: 'lsp' });
     setWorkspaceState?.((prevRaw) => {
       const prev = syncLegacyTabsFromGroups(prevRaw);
       const prevFiles = Array.isArray(prev.files) ? prev.files : [];
@@ -245,6 +260,7 @@ export function useWorkspaceFileOps({
     } catch {
       await workspaceDriver.deletePath(from);
     }
+    notifyBus('workspace/didRenameFiles', { files: [{ from, to }], source: 'lsp' });
 
     setWorkspaceState?.((prevRaw) => {
       const prev = syncLegacyTabsFromGroups(prevRaw);
@@ -298,6 +314,7 @@ export function useWorkspaceFileOps({
     } catch {
       await workspaceDriver.deletePath(relPath);
     }
+    notifyBus('workspace/didDeleteFiles', { paths: [relPath], source: 'lsp' });
     setWorkspaceState?.((prevRaw) => {
       const prev = syncLegacyTabsFromGroups(prevRaw);
       const { groups, activeGroupId } = ensureEditorGroups(prev);
@@ -344,4 +361,3 @@ export function useWorkspaceFileOps({
     applyWorkspaceEditDeletePath,
   };
 }
-

@@ -900,6 +900,26 @@ export const lspService = (() => {
     });
 
     const ideBus = globalThis?.window?.electronAPI?.ideBus || null;
+    const workspaceApi = globalThis?.window?.electronAPI?.workspace || null;
+    const disposeConfig = ideBus?.onNotification
+      ? ideBus.onNotification('workspace/configurationChanged', (payload) => {
+        void didChangeConfiguration(payload?.settings).catch(() => {});
+      })
+      : null;
+
+    // Best-effort: seed initial LSP configuration snapshot for this workspaceId.
+    try {
+      if (workspaceApi?.getConfiguration) {
+        Promise.resolve(workspaceApi.getConfiguration('', rootFsPath))
+          .then((res) => {
+            if (res?.ok) return didChangeConfiguration(res.settings);
+            return null;
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
     const disposeWorkspaceApplyEdit = ideBus?.onNotification
       ? ideBus.onNotification('workspace/applyEditRequest', async (payload) => {
         const requestId = String(payload?.requestId || '').trim();
@@ -974,6 +994,7 @@ export const lspService = (() => {
       disposeExtDiagnostics?.();
       disposeLog?.();
       disposeApplyEdit?.();
+      disposeConfig?.();
       disposeWorkspaceApplyEdit?.();
       disposeStatus?.();
       disposeCaps?.();

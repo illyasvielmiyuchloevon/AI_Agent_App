@@ -363,4 +363,5 @@ export const initialWorkspaceState = {
 export const SETTINGS_TAB_PATH = '__system__/settings';
 export const TERMINAL_SETTINGS_TAB_PATH = '__system__/terminal-settings';
 export const TERMINAL_EDITOR_TAB_PATH = '__system__/terminal-editor';
+export const EXTENSIONS_TAB_PREFIX = '__system__/extensions/';
 export const DIFF_TAB_PREFIX = '__diff__/';

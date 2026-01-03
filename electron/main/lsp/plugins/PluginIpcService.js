@@ -59,6 +59,18 @@ function createPluginIpcService({ ipcMain, pluginManager, broadcast, notify, rea
     }
   });
 
+  ipcMain.handle('plugins:getDetails', async (event, id) => {
+    ensureSenderSubscribed(event);
+    await ensureReady();
+    try {
+      if (typeof pluginManager.getDetails !== 'function') return { ok: false, error: 'getDetails not supported' };
+      return await pluginManager.getDetails(id);
+    } catch (err) {
+      emitError({ action: 'getDetails', pluginId: id, message: err?.message || String(err) });
+      throw err;
+    }
+  });
+
   ipcMain.handle('plugins:listUpdates', async (event) => {
     ensureSenderSubscribed(event);
     await ensureReady();

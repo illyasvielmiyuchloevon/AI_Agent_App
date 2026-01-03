@@ -86,6 +86,12 @@ export const pluginsService = (() => {
     },
     listInstalled,
     listUpdates,
+    getDetails: async (id) => {
+      const a = api();
+      if (!a?.getDetails) return { ok: false, error: 'plugins.getDetails unavailable' };
+      ensureSubscriptions();
+      return a.getDetails(id);
+    },
     install: async (ref) => {
       const a = api();
       if (!a?.install) return { ok: false };

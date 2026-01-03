@@ -23,6 +23,7 @@ function WorkspaceEditorGroups({
   terminalSettingsTabPath = '',
   terminalEditorTabPath = '',
   welcomeTabPath = '',
+  extensionsTabPrefix = '',
   onActiveGroupChange,
   onActiveFileChange,
   onTabReorder,
@@ -160,6 +161,7 @@ function WorkspaceEditorGroups({
       terminalSettingsTabPath,
       terminalEditorTabPath,
       welcomeTabPath,
+      extensionsTabPrefix,
       diffTabPrefix,
     });
     return (
@@ -173,6 +175,7 @@ function WorkspaceEditorGroups({
               terminalSettingsTabPath,
               terminalEditorTabPath,
               welcomeTabPath,
+              extensionsTabPrefix,
               diffTabPrefix,
             });
             const tabClass = [
@@ -214,6 +217,7 @@ function WorkspaceEditorGroups({
                     terminalSettingsTabPath,
                     terminalEditorTabPath,
                     welcomeTabPath,
+                    extensionsTabPrefix,
                     diffTabPrefix,
                     diffTabs,
                   })}</span>
@@ -255,6 +259,7 @@ function WorkspaceEditorGroups({
     );
   }, [
     activeGroupId,
+    extensionsTabPrefix,
     diffTabPrefix,
     diffTabs,
     getTabFlags,
@@ -281,6 +286,7 @@ function WorkspaceEditorGroups({
       terminalSettingsTabPath,
       terminalEditorTabPath,
       welcomeTabPath,
+      extensionsTabPrefix,
       diffTabPrefix,
     })) return <div className="editor-breadcrumbs" role="navigation" aria-label="Breadcrumbs" />;
     const parts = f.split('/').filter(Boolean);
@@ -299,6 +305,7 @@ function WorkspaceEditorGroups({
   }, [
     diffTabPrefix,
     editorNavigationMode,
+    extensionsTabPrefix,
     settingsTabPath,
     terminalEditorTabPath,
     terminalSettingsTabPath,

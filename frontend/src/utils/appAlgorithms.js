@@ -84,6 +84,7 @@ export const getTabIconClass = (path = '', {
   terminalSettingsTabPath = '',
   terminalEditorTabPath = '',
   welcomeTabPath = '',
+  extensionsTabPrefix = '',
   diffTabPrefix = '',
 } = {}) => {
   const p = String(path || '');
@@ -91,6 +92,7 @@ export const getTabIconClass = (path = '', {
   if (terminalSettingsTabPath && p === terminalSettingsTabPath) return 'codicon-terminal';
   if (terminalEditorTabPath && p === terminalEditorTabPath) return 'codicon-terminal';
   if (welcomeTabPath && p === welcomeTabPath) return 'codicon-home';
+  if (extensionsTabPrefix && p.startsWith(extensionsTabPrefix)) return 'codicon-extensions';
   if (diffTabPrefix && p.startsWith(diffTabPrefix)) return 'codicon-diff';
   return getFileIconClass(p);
 };
@@ -274,6 +276,7 @@ export const isSpecialTabPath = (tabPath, {
   terminalSettingsTabPath,
   terminalEditorTabPath,
   welcomeTabPath,
+  extensionsTabPrefix,
   diffTabPrefix,
 } = {}) => {
   const p = String(tabPath || '');
@@ -282,6 +285,7 @@ export const isSpecialTabPath = (tabPath, {
   if (terminalSettingsTabPath && p === terminalSettingsTabPath) return true;
   if (terminalEditorTabPath && p === terminalEditorTabPath) return true;
   if (welcomeTabPath && p === welcomeTabPath) return true;
+  if (extensionsTabPrefix && p.startsWith(extensionsTabPrefix)) return true;
   if (diffTabPrefix && p.startsWith(diffTabPrefix)) return true;
   return false;
 };
@@ -301,6 +305,7 @@ export const getTabTitle = (tabPath, {
   terminalSettingsTabPath,
   terminalEditorTabPath,
   welcomeTabPath,
+  extensionsTabPrefix,
   diffTabPrefix,
   diffTabs,
 } = {}) => {
@@ -309,6 +314,7 @@ export const getTabTitle = (tabPath, {
   const isTerminalSettingsTab = terminalSettingsTabPath && p === terminalSettingsTabPath;
   const isTerminalEditorTab = terminalEditorTabPath && p === terminalEditorTabPath;
   const isWelcomeTab = welcomeTabPath && p === welcomeTabPath;
+  const isExtensionsTab = extensionsTabPrefix && p.startsWith(extensionsTabPrefix);
   const isDiffTab = diffTabPrefix && p.startsWith(diffTabPrefix);
   const diff = isDiffTab && diffTabs ? diffTabs[p] : null;
   const diffLabel = diff
@@ -320,7 +326,11 @@ export const getTabTitle = (tabPath, {
       ? '终端设置'
       : (isTerminalEditorTab
         ? '终端'
-        : (isWelcomeTab ? 'Welcome' : (isDiffTab ? diffLabel : p.split('/').pop()))));
+        : (isWelcomeTab
+          ? 'Welcome'
+          : (isExtensionsTab
+            ? `Extension: ${decodeURIComponent(p.slice(String(extensionsTabPrefix || '').length) || '')}`
+            : (isDiffTab ? diffLabel : p.split('/').pop())))));
 };
 
 export const themedFallback = (message) => `

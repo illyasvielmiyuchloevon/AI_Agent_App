@@ -3,6 +3,7 @@ import { BackendWorkspaceDriver } from '../utils/backendWorkspaceDriver';
 import { WELCOME_TAB_PATH } from '../workbench/constants';
 import {
   DIFF_TAB_PREFIX,
+  EXTENSIONS_TAB_PREFIX,
   SETTINGS_TAB_PATH,
   TERMINAL_EDITOR_TAB_PATH,
   TERMINAL_SETTINGS_TAB_PATH,
@@ -205,6 +206,7 @@ export function useWorkspace({
           terminalSettingsTabPath: TERMINAL_SETTINGS_TAB_PATH,
           terminalEditorTabPath: TERMINAL_EDITOR_TAB_PATH,
           welcomeTabPath: WELCOME_TAB_PATH,
+          extensionsTabPrefix: EXTENSIONS_TAB_PREFIX,
           diffTabPrefix: DIFF_TAB_PREFIX,
         }) || existingFilePaths.has(p);
 
@@ -269,11 +271,14 @@ export function useWorkspace({
   const openFile = useCallback((path, options = {}) => {
     const filePath = String(path || '');
     if (!filePath) return;
-    const isSpecialTab = filePath === WELCOME_TAB_PATH
-      || filePath === SETTINGS_TAB_PATH
-      || filePath === TERMINAL_SETTINGS_TAB_PATH
-      || filePath === TERMINAL_EDITOR_TAB_PATH
-      || (filePath && filePath.startsWith(DIFF_TAB_PREFIX));
+    const isSpecialTab = isSpecialTabPath(filePath, {
+      settingsTabPath: SETTINGS_TAB_PATH,
+      terminalSettingsTabPath: TERMINAL_SETTINGS_TAB_PATH,
+      terminalEditorTabPath: TERMINAL_EDITOR_TAB_PATH,
+      welcomeTabPath: WELCOME_TAB_PATH,
+      extensionsTabPrefix: EXTENSIONS_TAB_PREFIX,
+      diffTabPrefix: DIFF_TAB_PREFIX,
+    });
 
     if (!isSpecialTab && !workspaceDriver) {
       alert('请先选择项目文件夹');
@@ -288,6 +293,68 @@ export function useWorkspace({
 
     if (!isSpecialTab) loadFileContent(filePath);
   }, [ensureEditorGroups, loadFileContent, syncLegacyTabsFromGroups, tabMetaKey, workspaceDriver]);
+
+  useEffect(() => {
+    const ideBus = globalThis?.window?.electronAPI?.ideBus || null;
+    if (!ideBus?.onNotification) return undefined;
+
+    const fileUriToFsPath = (uri) => {
+      const raw = String(uri || '').trim();
+      if (!raw) return '';
+      if (!raw.startsWith('file:')) return raw;
+      try {
+        const u = new URL(raw);
+        let p = decodeURIComponent(u.pathname || '');
+        if (/^\/[a-zA-Z]:\//.test(p)) p = p.slice(1);
+        if (backendWorkspaceRoot && backendWorkspaceRoot.includes('\\')) p = p.replace(/\//g, '\\');
+        return p;
+      } catch {
+        return raw;
+      }
+    };
+
+    const normalizeOpenPath = (uriOrPath) => {
+      const raw = String(uriOrPath || '').trim();
+      if (!raw) return '';
+      if (raw.startsWith('__system__/')) return raw;
+      if (raw.startsWith('__diff__/')) return raw;
+      const fsPath = fileUriToFsPath(raw);
+      if (backendWorkspaceRoot && fsPath && (fsPath.includes('\\') || fsPath.includes('/'))) {
+        const rel = pathRelativeToRoot(backendWorkspaceRoot, fsPath);
+        if (rel) return rel;
+      }
+      return raw;
+    };
+
+    const disposeShowTextDocument = ideBus.onNotification('window/showTextDocument', (payload) => {
+      const uriOrPath = payload?.uriOrPath != null ? payload.uriOrPath : (payload?.uri || payload?.path || payload?.fileName);
+      const options = payload?.options && typeof payload.options === 'object' ? payload.options : {};
+      const tabPath = normalizeOpenPath(uriOrPath);
+      if (!tabPath) return;
+      openFile(tabPath, { mode: options.preview ? 'preview' : 'persistent' });
+    });
+
+    const shouldSync = (payload) => String(payload?.source || '') === 'extensionHost';
+    const disposeCreated = ideBus.onNotification('workspace/didCreateFiles', (payload) => {
+      if (!shouldSync(payload)) return;
+      void syncWorkspaceFromDisk?.({ includeContent: false, highlight: false });
+    });
+    const disposeDeleted = ideBus.onNotification('workspace/didDeleteFiles', (payload) => {
+      if (!shouldSync(payload)) return;
+      void syncWorkspaceFromDisk?.({ includeContent: false, highlight: false });
+    });
+    const disposeRenamed = ideBus.onNotification('workspace/didRenameFiles', (payload) => {
+      if (!shouldSync(payload)) return;
+      void syncWorkspaceFromDisk?.({ includeContent: false, highlight: false });
+    });
+
+    return () => {
+      try { disposeShowTextDocument?.(); } catch {}
+      try { disposeCreated?.(); } catch {}
+      try { disposeDeleted?.(); } catch {}
+      try { disposeRenamed?.(); } catch {}
+    };
+  }, [backendWorkspaceRoot, openFile, syncWorkspaceFromDisk]);
 
   const closeFile = useCallback((path, options = {}) => {
     const tabPath = String(path || '');

@@ -19,6 +19,7 @@ import { buildAppShellProps } from './utils/buildAppShellProps';
 import {
   DEFAULT_PROJECT_CONFIG,
   DIFF_TAB_PREFIX,
+  EXTENSIONS_TAB_PREFIX,
   MODE_OPTIONS,
   SETTINGS_TAB_PATH,
   TERMINAL_EDITOR_TAB_PATH,
@@ -871,6 +872,7 @@ export function AppShellContainer({
   appShellProps.settingsTabPath = SETTINGS_TAB_PATH;
   appShellProps.terminalSettingsTabPath = TERMINAL_SETTINGS_TAB_PATH;
   appShellProps.terminalEditorTabPath = TERMINAL_EDITOR_TAB_PATH;
+  appShellProps.extensionsTabPrefix = EXTENSIONS_TAB_PREFIX;
   appShellProps.welcomeTabPath = WELCOME_TAB_PATH;
 
   return <AppShell {...appShellProps} />;
