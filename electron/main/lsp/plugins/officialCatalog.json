@@ -33,6 +33,37 @@
       }
     },
     {
+      "id": "jsonls",
+      "name": "JSON Language Server",
+      "description": "vscode-json-languageserver via local npm install (runs via node).",
+      "version": "latest",
+      "trust": "official",
+      "languages": ["json", "jsonc"],
+      "source": { "providerId": "official" },
+      "install": {
+        "kind": "npm",
+        "packages": [
+          { "name": "vscode-json-languageserver", "version": "latest" }
+        ]
+      },
+      "manifest": {
+        "requires": { "node": true, "npm": true },
+        "servers": [
+          {
+            "id": "jsonls",
+            "languageIds": ["json", "jsonc"],
+            "fileExtensions": [".json", ".jsonc"],
+            "initializeTimeoutMs": 30000,
+            "transport": {
+              "kind": "stdio",
+              "command": "${NODE}",
+              "args": ["${PLUGIN_DIR}/node_modules/vscode-json-languageserver/out/node/jsonServerMain.js"]
+            }
+          }
+        ]
+      }
+    },
+    {
       "id": "pyright",
       "name": "Pyright Language Server",
       "description": "pyright via local npm install (runs via node).",

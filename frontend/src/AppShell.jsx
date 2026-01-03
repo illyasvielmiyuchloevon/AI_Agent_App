@@ -16,11 +16,13 @@ import WelcomeEditor from './workbench/editors/WelcomeEditor';
 import ConnectRemoteModal from './components/ConnectRemoteModal';
 import CloneRepositoryModal from './components/CloneRepositoryModal';
 import SearchPanel from './components/SearchPanel';
+import ExtensionsPanel from './components/ExtensionsPanel';
 import CommandPalette from './components/CommandPalette';
 import Modal from './components/Modal';
 import StatusBar from './components/StatusBar';
 import InputModal from './components/InputModal';
 import { outputService } from './workbench/services/outputService';
+import ExtensionDetailsEditor from './workbench/editors/ExtensionDetailsEditor';
 
 function AppShell({
   theme,
@@ -194,6 +196,7 @@ function AppShell({
   applyWorkspaceEditDeletePath,
   applyWorkspaceEditReadFile,
   applyWorkspaceEditWriteFile,
+  extensionsTabPrefix,
   settingsTabPath,
   terminalSettingsTabPath,
   terminalEditorTabPath,
@@ -427,11 +430,11 @@ function AppShell({
               initialQuery={globalSearchQuery}
             />
           )}
-          {!sidebarCollapsed && activeSidebarPanel === 'git' && (
-            <SourceControlPanel
-              gitStatus={gitStatus}
-              gitRemotes={gitRemotes}
-              gitLog={gitLog}
+	          {!sidebarCollapsed && activeSidebarPanel === 'git' && (
+	            <SourceControlPanel
+	              gitStatus={gitStatus}
+	              gitRemotes={gitRemotes}
+	              gitLog={gitLog}
               gitBranches={gitBranches}
               onCommit={handleGitCommit}
               onStage={handleGitStage}
@@ -461,12 +464,23 @@ function AppShell({
               onOpenAllDiffs={handleOpenAllCommitDiffs}
               onOpenBatchDiffs={handleOpenBatchDiffs}
               loading={gitLoading}
-              repositoryLabel={workspaceRootLabel}
+	              repositoryLabel={workspaceRootLabel}
+	            />
+	          )}
+          {!sidebarCollapsed && activeSidebarPanel === 'extensions' && (
+            <ExtensionsPanel
+              language={language}
+              onOpenDetails={(id) => {
+                const pid = String(id || '').trim();
+                if (!pid) return;
+                const prefix = String(extensionsTabPrefix || '__system__/extensions/');
+                openFile(`${prefix}${encodeURIComponent(pid)}`, { mode: 'persistent' });
+              }}
             />
           )}
-        </div>
-        <div
-          ref={sidebarResizerGhostRef}
+	        </div>
+	        <div
+	          ref={sidebarResizerGhostRef}
           onMouseDown={startResize('sidebar')}
           onPointerDown={startResize('sidebar')}
           className={`sidebar-resizer ${sidebarCollapsed ? 'collapsed' : ''}`}
@@ -539,6 +553,14 @@ function AppShell({
                   onOpenRecent={(proj) => workspaceController.openWorkspace(proj?.fsPath || proj?.id || null, { preferredRoot: proj?.fsPath || '' })}
                   onRemoveRecent={(proj) => removeRecentProject(proj)}
                   onOpenBackendWorkspace={handleOpenBackendWorkspaceFromList}
+                />
+              )}
+              extensionsTabPrefix={extensionsTabPrefix}
+              renderExtensionsTab={(tabPath) => (
+                <ExtensionDetailsEditor
+                  tabPath={tabPath}
+                  language={language}
+                  onClose={() => closeFile(tabPath)}
                 />
               )}
               onSelectFolder={handleSelectWorkspace}

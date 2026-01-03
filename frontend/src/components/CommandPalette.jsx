@@ -268,9 +268,23 @@ const CommandPalette = ({
         }
 
         const trimmedQuery = query.trim();
-        const inCommandMode = trimmedQuery.startsWith('>') || trimmedQuery.startsWith('/');
-        const commandQuery = inCommandMode ? trimmedQuery.slice(1).trim().toLowerCase() : '';
+        const loweredQuery = trimmedQuery.toLowerCase();
+        const barePluginCommand = loweredQuery === 'plugin' || loweredQuery.startsWith('plugin ');
+        const inCommandMode = trimmedQuery.startsWith('>') || trimmedQuery.startsWith('/') || barePluginCommand;
+        const commandQuery = inCommandMode
+            ? (trimmedQuery.startsWith('>') || trimmedQuery.startsWith('/')
+                ? trimmedQuery.slice(1).trim().toLowerCase()
+                : loweredQuery)
+            : '';
         
+        const commandMatches = (hay) => {
+            const cq = String(commandQuery || '').trim();
+            if (!cq) return true;
+            const tokens = cq.split(/\s+/).filter(Boolean);
+            if (!tokens.length) return true;
+            return tokens.every((t) => hay.includes(t));
+        };
+
         const pushIfMatch = (it) => {
             if (!inCommandMode) {
                 items.push(it);
@@ -281,7 +295,7 @@ const CommandPalette = ({
                 return;
             }
             const hay = `${it.label || ''} ${it.description || ''}`.toLowerCase();
-            if (hay.includes(commandQuery)) items.push(it);
+            if (commandMatches(hay)) items.push(it);
         };
 
         if (!inCommandMode && query) {

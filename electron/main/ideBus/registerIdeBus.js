@@ -239,14 +239,15 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       if (dapService) {
         methods.push('debug/startSession', 'debug/stopSession', 'debug/sendRequest', 'debug/listSessions');
       }
-      if (plugins?.manager) {
-        methods.push(
-          'plugins/search',
-          'plugins/listInstalled',
-          'plugins/listUpdates',
-          'plugins/install',
-          'plugins/uninstall',
-          'plugins/enable',
+	      if (plugins?.manager) {
+	        methods.push(
+	          'plugins/search',
+	          'plugins/listInstalled',
+	          'plugins/getDetails',
+	          'plugins/listUpdates',
+	          'plugins/install',
+	          'plugins/uninstall',
+	          'plugins/enable',
           'plugins/disable',
           'plugins/doctor',
           'plugins/listEnabledLanguages',
@@ -254,14 +255,18 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         );
       }
 
-      const notifications = [
-        'workspace/configurationChanged',
-        'commands/changed',
-        'window/showInformationMessage',
-        'window/showInputBoxRequest',
-        'window/showQuickPickRequest',
-        'output/append',
-        'output/clear',
+	      const notifications = [
+	        'workspace/configurationChanged',
+	        'workspace/didCreateFiles',
+	        'workspace/didDeleteFiles',
+	        'workspace/didRenameFiles',
+	        'commands/changed',
+	        'window/showInformationMessage',
+	        'window/showTextDocument',
+	        'window/showInputBoxRequest',
+	        'window/showQuickPickRequest',
+	        'output/append',
+	        'output/clear',
         'diagnostics/publish',
         'lsp/applyEditRequest',
         'workspace/applyEditRequest',
@@ -326,10 +331,10 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     // ignore
   }
 
-  try {
-    connection.onNotification('editor/textDocumentDidOpen', (payload) => {
-      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidOpen', payload); } catch {}
-    });
+	  try {
+	    connection.onNotification('editor/textDocumentDidOpen', (payload) => {
+	      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidOpen', payload); } catch {}
+	    });
     connection.onNotification('editor/textDocumentDidChange', (payload) => {
       try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidChange', payload); } catch {}
     });
@@ -339,12 +344,21 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     connection.onNotification('editor/textDocumentDidSave', (payload) => {
       try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidSave', payload); } catch {}
     });
-    connection.onNotification('editor/activeTextEditorChanged', (payload) => {
-      try { extensionHostService?.connection?.sendNotification?.('editor/activeTextEditorChanged', payload); } catch {}
-    });
-  } catch {
-    // ignore
-  }
+	    connection.onNotification('editor/activeTextEditorChanged', (payload) => {
+	      try { extensionHostService?.connection?.sendNotification?.('editor/activeTextEditorChanged', payload); } catch {}
+	    });
+	    connection.onNotification('workspace/didCreateFiles', (payload) => {
+	      try { extensionHostService?.connection?.sendNotification?.('workspace/didCreateFiles', payload); } catch {}
+	    });
+	    connection.onNotification('workspace/didDeleteFiles', (payload) => {
+	      try { extensionHostService?.connection?.sendNotification?.('workspace/didDeleteFiles', payload); } catch {}
+	    });
+	    connection.onNotification('workspace/didRenameFiles', (payload) => {
+	      try { extensionHostService?.connection?.sendNotification?.('workspace/didRenameFiles', payload); } catch {}
+	    });
+	  } catch {
+	    // ignore
+	  }
 
     connection.onRequest('telemetry/getRpcStats', async () => {
       const items = Array.from(rpcStats.values()).map((s) => ({
@@ -474,16 +488,23 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       return { ok: true, items };
     });
 
-    connection.onRequest('plugins/listInstalled', async () => {
-      if (!plugins?.manager?.listInstalled) return { ok: false, error: 'plugins service unavailable' };
-      await ensurePluginsReady();
-      return { ok: true, items: plugins.manager.listInstalled() };
-    });
+	    connection.onRequest('plugins/listInstalled', async () => {
+	      if (!plugins?.manager?.listInstalled) return { ok: false, error: 'plugins service unavailable' };
+	      await ensurePluginsReady();
+	      return { ok: true, items: plugins.manager.listInstalled() };
+	    });
 
-    connection.onRequest('plugins/listUpdates', async () => {
-      if (!plugins?.manager?.listUpdates) return { ok: false, error: 'plugins service unavailable' };
-      await ensurePluginsReady();
-      const items = await plugins.manager.listUpdates();
+	    connection.onRequest('plugins/getDetails', async (payload) => {
+	      if (!plugins?.manager?.getDetails) return { ok: false, error: 'plugins service unavailable' };
+	      await ensurePluginsReady();
+	      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+	      return await plugins.manager.getDetails(id);
+	    });
+
+	    connection.onRequest('plugins/listUpdates', async () => {
+	      if (!plugins?.manager?.listUpdates) return { ok: false, error: 'plugins service unavailable' };
+	      await ensurePluginsReady();
+	      const items = await plugins.manager.listUpdates();
       return { ok: true, items };
     });
 

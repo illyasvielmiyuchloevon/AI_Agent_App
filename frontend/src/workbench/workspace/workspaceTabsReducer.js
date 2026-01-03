@@ -1,6 +1,7 @@
 import { WELCOME_TAB_PATH } from '../constants';
 import {
   DIFF_TAB_PREFIX,
+  EXTENSIONS_TAB_PREFIX,
   SETTINGS_TAB_PATH,
   TERMINAL_EDITOR_TAB_PATH,
   TERMINAL_SETTINGS_TAB_PATH,
@@ -31,11 +32,14 @@ export function workspaceTabsReducer(prevRaw, action, ctx) {
     const targetGroup = groups.find((g) => g.id === targetGroupId) || groups[0];
     const previewEnabled = prev.previewEditorEnabled !== false;
     const groupLocked = !!targetGroup.locked;
-    const isSpecialTab = filePath === WELCOME_TAB_PATH
-      || filePath === SETTINGS_TAB_PATH
-      || filePath === TERMINAL_SETTINGS_TAB_PATH
-      || filePath === TERMINAL_EDITOR_TAB_PATH
-      || (filePath && filePath.startsWith(DIFF_TAB_PREFIX));
+    const isSpecialTab = isSpecialTabPath(filePath, {
+      settingsTabPath: SETTINGS_TAB_PATH,
+      terminalSettingsTabPath: TERMINAL_SETTINGS_TAB_PATH,
+      terminalEditorTabPath: TERMINAL_EDITOR_TAB_PATH,
+      welcomeTabPath: WELCOME_TAB_PATH,
+      extensionsTabPrefix: EXTENSIONS_TAB_PREFIX,
+      diffTabPrefix: DIFF_TAB_PREFIX,
+    });
     const requestedModeRaw = String(action?.options?.mode || '').trim();
     const requestedMode = requestedModeRaw === 'persistent' || requestedModeRaw === 'preview' ? requestedModeRaw : '';
     const mode = requestedMode || ((previewEnabled && !groupLocked && !isSpecialTab) ? 'preview' : 'persistent');
@@ -300,6 +304,7 @@ export function workspaceTabsReducer(prevRaw, action, ctx) {
       terminalSettingsTabPath: TERMINAL_SETTINGS_TAB_PATH,
       terminalEditorTabPath: TERMINAL_EDITOR_TAB_PATH,
       welcomeTabPath: WELCOME_TAB_PATH,
+      extensionsTabPrefix: EXTENSIONS_TAB_PREFIX,
       diffTabPrefix: DIFF_TAB_PREFIX,
     });
 

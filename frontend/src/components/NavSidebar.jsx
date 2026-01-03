@@ -62,6 +62,7 @@ function NavSidebar({
     const isExplorerActive = activeSidebar === 'explorer' && !sidebarCollapsed;
     const isSearchActive = activeSidebar === 'search' && !sidebarCollapsed;
     const isGitActive = activeSidebar === 'git' && !sidebarCollapsed;
+    const isExtensionsActive = activeSidebar === 'extensions' && !sidebarCollapsed;
     const t = (key) => getTranslation(language, key);
 
     return (
@@ -104,6 +105,13 @@ function NavSidebar({
                 {gitBadgeCount > 0 && (
                     <span className="activity-badge">{gitBadgeCount}</span>
                 )}
+            </button>
+            <button 
+                className={`activity-item ${isExtensionsActive ? 'active' : ''}`} 
+                onClick={() => onSelectSidebar('extensions')}
+                title={t('extensions') || 'Extensions'}
+            >
+                <span className="codicon codicon-extensions" style={{ fontSize: 22 }} aria-hidden />
             </button>
             <div className="activity-spacer" />
 

@@ -5,7 +5,7 @@ const { MessageReader } = require('../lsp/transport/MessageReader');
 const { MessageWriter } = require('../lsp/transport/MessageWriter');
 const { JsonRpcConnection } = require('../lsp/jsonrpc/JsonRpcConnection');
 const { CompletionProviderRegistry } = require('./completionProviderRegistry');
-const { Disposable, Uri, TextDocument, TextEditor } = require('./vscodeTypes');
+const { Disposable, Uri, TextDocument } = require('./vscodeTypes');
 const { singleFolderFromFsPath, diffWorkspaceFolders } = require('./workspaceFoldersModel');
 
 class ProcessTransport {
@@ -91,6 +91,9 @@ const openTextDocumentListeners = new Set();
 const changeTextDocumentListeners = new Set();
 const closeTextDocumentListeners = new Set();
 const saveTextDocumentListeners = new Set();
+const createFilesListeners = new Set();
+const deleteFilesListeners = new Set();
+const renameFilesListeners = new Set();
 const activeTextEditorListeners = new Set();
 let activeTextEditor = undefined;
 const workspaceFoldersListeners = new Set();
@@ -301,7 +304,7 @@ const makeVscodeApi = () => {
     },
   };
 
-  const window = {
+	  const window = {
     async showInformationMessage(message, ...items) {
       const msg = String(message || '');
       const list = items.map((x) => String(x));
@@ -379,13 +382,46 @@ const makeVscodeApi = () => {
     get activeTextEditor() {
       return activeTextEditor;
     },
-    onDidChangeActiveTextEditor(handler) {
-      const fn = typeof handler === 'function' ? handler : null;
-      if (!fn) return new Disposable(() => {});
-      activeTextEditorListeners.add(fn);
-      return new Disposable(() => activeTextEditorListeners.delete(fn));
-    },
-  };
+	    onDidChangeActiveTextEditor(handler) {
+	      const fn = typeof handler === 'function' ? handler : null;
+	      if (!fn) return new Disposable(() => {});
+	      activeTextEditorListeners.add(fn);
+	      return new Disposable(() => activeTextEditorListeners.delete(fn));
+	    },
+	    async showTextDocument(documentOrUri, options) {
+	      const opt = options && typeof options === 'object' ? options : {};
+	      const raw = documentOrUri == null ? '' : documentOrUri;
+	      const uriOrPath = normalizeUri(raw);
+	      const doc = (() => {
+	        if (raw && typeof raw === 'object' && raw.uri) return raw;
+	        if (uriOrPath) return openDocumentsByUri.get(uriOrPath) || null;
+	        return null;
+	      })();
+
+	      const ensureDoc = async () => {
+	        if (doc && typeof doc.getText === 'function') return doc;
+	        if (!uriOrPath) throw new Error('window.showTextDocument: missing uri');
+	        const opened = await vscodeApi.workspace.openTextDocument(uriOrPath);
+	        const key = opened?.uri ? String(opened.uri.toString()) : '';
+	        if (key) openDocumentsByUri.set(key, opened);
+	        return opened;
+	      };
+
+	      const finalDoc = await ensureDoc();
+	      try {
+	        await connection.sendRequest('window/showTextDocument', { uriOrPath, options: opt }, { timeoutMs: 10_000 });
+	      } catch {
+	        // ignore
+	      }
+
+	      activeTextEditor = createActiveTextEditor(finalDoc);
+	      for (const fn of Array.from(activeTextEditorListeners)) {
+	        try { fn(activeTextEditor); } catch {}
+	      }
+
+	      return activeTextEditor;
+	    },
+	  };
 
   const DiagnosticSeverity = {
     Error: 1,
@@ -528,7 +564,7 @@ const makeVscodeApi = () => {
     },
   };
 
-  const workspace = {
+	  const workspace = {
     get workspaceFolders() {
       return workspaceFolders;
     },
@@ -562,26 +598,55 @@ const makeVscodeApi = () => {
       }
       return rel;
     },
-    fs: {
-      async readFile(uri) {
-        const u = normalizeUri(uri);
-        const res = await connection.sendRequest('workspace/fsReadFile', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.readFile failed');
-        return decodeBase64(res.dataB64);
-      },
-      async writeFile(uri, content) {
-        const u = normalizeUri(uri);
-        const dataB64 = encodeBase64(content);
-        const res = await connection.sendRequest('workspace/fsWriteFile', { uri: u, dataB64 }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.writeFile failed');
-        return undefined;
-      },
-      async stat(uri) {
-        const u = normalizeUri(uri);
-        const res = await connection.sendRequest('workspace/fsStat', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.stat failed');
-        return res.stat || { type: FileType.Unknown, ctime: 0, mtime: 0, size: 0 };
-      },
+	    fs: {
+	      async readFile(uri) {
+	        const u = normalizeUri(uri);
+	        const res = await connection.sendRequest('workspace/fsReadFile', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.readFile failed');
+	        return decodeBase64(res.dataB64);
+	      },
+	      async writeFile(uri, content) {
+	        const u = normalizeUri(uri);
+	        const dataB64 = encodeBase64(content);
+	        const res = await connection.sendRequest('workspace/fsWriteFile', { uri: u, dataB64 }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.writeFile failed');
+	        return undefined;
+	      },
+	      async createDirectory(uri) {
+	        const u = normalizeUri(uri);
+	        const res = await connection.sendRequest('workspace/fsCreateDirectory', { uri: u }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.createDirectory failed');
+	        return undefined;
+	      },
+	      async delete(uri, options) {
+	        const u = normalizeUri(uri);
+	        const opt = options && typeof options === 'object' ? options : {};
+	        const res = await connection.sendRequest('workspace/fsDelete', { uri: u, options: opt }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.delete failed');
+	        return undefined;
+	      },
+	      async rename(oldUri, newUri, options) {
+	        const from = normalizeUri(oldUri);
+	        const to = normalizeUri(newUri);
+	        const opt = options && typeof options === 'object' ? options : {};
+	        const res = await connection.sendRequest('workspace/fsRename', { from, to, options: opt }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.rename failed');
+	        return undefined;
+	      },
+	      async copy(source, destination, options) {
+	        const from = normalizeUri(source);
+	        const to = normalizeUri(destination);
+	        const opt = options && typeof options === 'object' ? options : {};
+	        const res = await connection.sendRequest('workspace/fsCopy', { from, to, options: opt }, { timeoutMs: 30_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.copy failed');
+	        return undefined;
+	      },
+	      async stat(uri) {
+	        const u = normalizeUri(uri);
+	        const res = await connection.sendRequest('workspace/fsStat', { uri: u }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	        if (!res || !res.ok) throw new Error(res?.error || 'workspace.fs.stat failed');
+	        return res.stat || { type: FileType.Unknown, ctime: 0, mtime: 0, size: 0 };
+	      },
       async readDirectory(uri) {
         const u = normalizeUri(uri);
         const res = await connection.sendRequest('workspace/fsReadDirectory', { uri: u }, { timeoutMs: 15_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
@@ -707,25 +772,134 @@ const makeVscodeApi = () => {
       closeTextDocumentListeners.add(fn);
       return new Disposable(() => closeTextDocumentListeners.delete(fn));
     },
-    onDidSaveTextDocument(handler) {
-      const fn = typeof handler === 'function' ? handler : null;
-      if (!fn) return new Disposable(() => {});
-      saveTextDocumentListeners.add(fn);
-      return new Disposable(() => saveTextDocumentListeners.delete(fn));
-    },
-    async openTextDocument(uriOrFileName) {
-      const raw = uriOrFileName == null ? '' : uriOrFileName;
-      const res = await connection.sendRequest('workspace/openTextDocument', { uriOrPath: raw }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-      if (!res || !res.ok) throw new Error(res?.error || 'openTextDocument failed');
-      const uri = Uri.parse(res.uri || '');
-      return new TextDocument({ uri, fileName: res.fileName || '', languageId: res.languageId || '', version: res.version || 1, text: res.text || '' });
-    },
-  };
+	    onDidSaveTextDocument(handler) {
+	      const fn = typeof handler === 'function' ? handler : null;
+	      if (!fn) return new Disposable(() => {});
+	      saveTextDocumentListeners.add(fn);
+	      return new Disposable(() => saveTextDocumentListeners.delete(fn));
+	    },
+	    onDidCreateFiles(handler) {
+	      const fn = typeof handler === 'function' ? handler : null;
+	      if (!fn) return new Disposable(() => {});
+	      createFilesListeners.add(fn);
+	      return new Disposable(() => createFilesListeners.delete(fn));
+	    },
+	    onDidDeleteFiles(handler) {
+	      const fn = typeof handler === 'function' ? handler : null;
+	      if (!fn) return new Disposable(() => {});
+	      deleteFilesListeners.add(fn);
+	      return new Disposable(() => deleteFilesListeners.delete(fn));
+	    },
+	    onDidRenameFiles(handler) {
+	      const fn = typeof handler === 'function' ? handler : null;
+	      if (!fn) return new Disposable(() => {});
+	      renameFilesListeners.add(fn);
+	      return new Disposable(() => renameFilesListeners.delete(fn));
+	    },
+	    async openTextDocument(uriOrFileName) {
+	      const raw = uriOrFileName == null ? '' : uriOrFileName;
+	      const res = await connection.sendRequest('workspace/openTextDocument', { uriOrPath: raw }, { timeoutMs: 10_000 }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+	      if (!res || !res.ok) throw new Error(res?.error || 'openTextDocument failed');
+	      const uri = Uri.parse(res.uri || '');
+	      return new TextDocument({ uri, fileName: res.fileName || '', languageId: res.languageId || '', version: res.version || 1, text: res.text || '' });
+	    },
+	  };
 
   return { commands, window, workspace, languages, Disposable, Uri, DiagnosticSeverity, FileType, RelativePattern, Position, Range, WorkspaceEdit };
 };
 
 const vscodeApi = makeVscodeApi();
+
+const createActiveTextEditor = (doc) => {
+  if (!doc) return undefined;
+  return {
+    document: doc,
+    async edit(callback, options) {
+      const fn = typeof callback === 'function' ? callback : null;
+      if (!fn) return false;
+      const editBuilder = new vscodeApi.WorkspaceEdit();
+      const builder = {
+        replace(rangeOrLocation, newText) {
+          editBuilder.replace(doc.uri, rangeOrLocation, newText);
+        },
+        insert(position, newText) {
+          editBuilder.insert(doc.uri, position, newText);
+        },
+        delete(range) {
+          editBuilder.delete(doc.uri, range);
+        },
+        setEndOfLine() {
+          // not supported in MVP
+        },
+      };
+      try {
+        const maybePromise = fn(builder);
+        if (maybePromise && typeof maybePromise.then === 'function') await maybePromise;
+        const applied = await vscodeApi.workspace.applyEdit(editBuilder);
+        void options;
+        return !!applied;
+      } catch {
+        return false;
+      }
+    },
+  };
+};
+
+const normalizeWorkspaceEventFileList = (payload, { allowPairs = false } = {}) => {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const filesRaw = Array.isArray(p.files) ? p.files : [];
+  const pathsRaw = Array.isArray(p.paths) ? p.paths : [];
+  const pairsRaw = allowPairs && Array.isArray(p.pairs) ? p.pairs : [];
+  const list = filesRaw.length ? filesRaw : (pathsRaw.length ? pathsRaw : pairsRaw);
+
+  const toFsPath = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string') {
+      const s = value.trim();
+      if (!s) return '';
+      if (s.startsWith('file:')) return Uri.parse(s).fsPath || '';
+      if (/^[a-zA-Z]:[\\/]/.test(s) || s.startsWith('\\\\') || s.startsWith('/')) return s;
+      if (workspaceRootFsPath) return path.join(workspaceRootFsPath, s);
+      return s;
+    }
+    if (typeof value === 'object') {
+      const uri = value.uri != null ? String(value.uri) : '';
+      const fsPath = value.fsPath != null ? String(value.fsPath) : '';
+      const pth = value.path != null ? String(value.path) : (value.relPath != null ? String(value.relPath) : '');
+      return fsPath || (uri ? (Uri.parse(uri).fsPath || '') : (pth ? toFsPath(pth) : ''));
+    }
+    return '';
+  };
+
+  const toUri = (value) => {
+    if (!value) return null;
+    if (value instanceof Uri) return value;
+    if (typeof value === 'string' && value.trim().startsWith('file:')) return Uri.parse(value);
+    const fsPath = toFsPath(value);
+    if (!fsPath) return null;
+    return Uri.file(fsPath);
+  };
+
+  if (!allowPairs) {
+    const out = [];
+    for (const it of Array.isArray(list) ? list : []) {
+      const u = toUri(it);
+      if (u) out.push(u);
+    }
+    return out;
+  }
+
+  const pairs = [];
+  for (const it of Array.isArray(list) ? list : []) {
+    if (!it || typeof it !== 'object') continue;
+    const oldV = it.oldUri != null ? it.oldUri : (it.from != null ? it.from : it.oldPath);
+    const newV = it.newUri != null ? it.newUri : (it.to != null ? it.to : it.newPath);
+    const oldUri = toUri(oldV);
+    const newUri = toUri(newV);
+    if (oldUri && newUri) pairs.push({ oldUri, newUri });
+  }
+  return pairs;
+};
 
 const installVscodeModule = () => {
   const virtualId = path.join(__dirname, '__virtual_vscode__.js');
@@ -775,6 +949,33 @@ connection.onNotification('workspace/fileSystemWatcherEvent', (params) => {
   if (type === 'create' && !w.ignoreCreate) w.create.fire(u);
   else if (type === 'change' && !w.ignoreChange) w.change.fire(u);
   else if (type === 'delete' && !w.ignoreDelete) w.del.fire(u);
+});
+
+connection.onNotification('workspace/didCreateFiles', (payload) => {
+  const files = normalizeWorkspaceEventFileList(payload);
+  if (!files.length) return;
+  const evt = { files };
+  for (const fn of Array.from(createFilesListeners)) {
+    try { fn(evt); } catch {}
+  }
+});
+
+connection.onNotification('workspace/didDeleteFiles', (payload) => {
+  const files = normalizeWorkspaceEventFileList(payload);
+  if (!files.length) return;
+  const evt = { files };
+  for (const fn of Array.from(deleteFilesListeners)) {
+    try { fn(evt); } catch {}
+  }
+});
+
+connection.onNotification('workspace/didRenameFiles', (payload) => {
+  const files = normalizeWorkspaceEventFileList(payload, { allowPairs: true });
+  if (!files.length) return;
+  const evt = { files };
+  for (const fn of Array.from(renameFilesListeners)) {
+    try { fn(evt); } catch {}
+  }
 });
 
 connection.onNotification('workspace/setConfiguration', (params) => {
@@ -845,7 +1046,7 @@ connection.onNotification('editor/textDocumentDidSave', (params) => {
 connection.onNotification('editor/activeTextEditorChanged', (params) => {
   const uri = params?.uri ? String(params.uri) : '';
   const doc = uri ? openDocumentsByUri.get(uri) : null;
-  activeTextEditor = doc ? new TextEditor(doc) : undefined;
+  activeTextEditor = doc ? createActiveTextEditor(doc) : undefined;
   for (const fn of Array.from(activeTextEditorListeners)) {
     try {
       fn(activeTextEditor);

@@ -8,6 +8,7 @@ const { readWorkspaceSettingsSync, openTextDocument } = require('../workspace/do
 const { createPromptCoordinator } = require('../ui/promptCoordinator');
 const { findFilesInWorkspace, normalizeGlobArg } = require('./fileSearch');
 const { resolveWorkspaceFileFsPath, fsPathToFileUri, isUnderRoot } = require('./workspaceFsUtils');
+const { fsCreateDirectory, fsDelete, fsRename, fsCopy } = require('./workspaceFsOps');
 const minimatchPkg = require('minimatch');
 const minimatch =
   (typeof minimatchPkg === 'function' && minimatchPkg) ||
@@ -272,26 +273,51 @@ class ExtensionHostService {
       return { ok: true };
     });
 
-    const pickActiveWebContents = () => {
-      try {
-        const focused = BrowserWindow.getFocusedWindow?.();
-        if (focused?.webContents && !(focused.webContents.isDestroyed?.() || false)) return focused.webContents;
-      } catch {}
-      for (const win of BrowserWindow.getAllWindows()) {
-        const wc = win?.webContents;
-        if (!wc) continue;
-        try {
-          if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
-        } catch {}
-        return wc;
-      }
-      return null;
-    };
+	    const pickActiveWebContents = () => {
+	      try {
+	        const focused = BrowserWindow.getFocusedWindow?.();
+	        if (focused?.webContents && !(focused.webContents.isDestroyed?.() || false)) return focused.webContents;
+	      } catch {}
+	      for (const win of BrowserWindow.getAllWindows()) {
+	        const wc = win?.webContents;
+	        if (!wc) continue;
+	        try {
+	          if (typeof wc.isDestroyed === 'function' && wc.isDestroyed()) continue;
+	        } catch {}
+	        return wc;
+	      }
+	      return null;
+	    };
 
-    const requestPrompt = async ({ kind, payload } = {}) => {
-      const wc = pickActiveWebContents();
-      if (!wc) return { ok: false, error: 'no active window' };
-      const requestId = `p_${Date.now()}_${this._promptSeq++}`;
+	    const notifyActiveRenderer = (method, params) => {
+	      const wc = pickActiveWebContents();
+	      if (!wc) return false;
+	      try {
+	        wc.send('idebus:message', { jsonrpc: '2.0', method: String(method || ''), params: { ...(params || {}), source: 'extensionHost', ts: Date.now() } });
+	        return true;
+	      } catch {
+	        return false;
+	      }
+	    };
+
+	    const notifyWorkspaceFileEvent = (method, params) => {
+	      try {
+	        conn.sendNotification(String(method || ''), params && typeof params === 'object' ? params : {});
+	      } catch {}
+	      notifyActiveRenderer(method, params);
+	    };
+
+	    conn.onRequest('window/showTextDocument', async (params) => {
+	      const uriOrPath = params?.uriOrPath != null ? params.uriOrPath : (params?.uri || params?.path || params?.fileName);
+	      const options = params?.options && typeof params.options === 'object' ? params.options : {};
+	      const ok = notifyActiveRenderer('window/showTextDocument', { uriOrPath, options });
+	      return ok ? { ok: true } : { ok: false, error: 'no active window' };
+	    });
+
+	    const requestPrompt = async ({ kind, payload } = {}) => {
+	      const wc = pickActiveWebContents();
+	      if (!wc) return { ok: false, error: 'no active window' };
+	      const requestId = `p_${Date.now()}_${this._promptSeq++}`;
       const k = String(kind || '');
       const method = k === 'quickPick' ? 'window/showQuickPickRequest' : 'window/showInputBoxRequest';
       return await this._promptCoordinator.request({
@@ -389,20 +415,79 @@ class ExtensionHostService {
       }
     });
 
-    conn.onRequest('workspace/fsWriteFile', async (params) => {
+	    conn.onRequest('workspace/fsWriteFile', async (params) => {
+	      if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted' };
+	      const workspaceRootFsPath = this._getWorkspaceFsPath();
+	      const uri = params?.uri != null ? params.uri : (params?.path || params?.fsPath);
+	      const resolved = resolveWorkspaceFileFsPath(workspaceRootFsPath, uri);
+	      if (!resolved.ok) return { ok: false, error: resolved.error };
+	      const dataB64 = params?.dataB64 != null ? String(params.dataB64) : '';
+	      let existed = true;
+	      try {
+	        await fs.promises.lstat(resolved.fsPath);
+	      } catch {
+	        existed = false;
+	      }
+	      try {
+	        const buf = dataB64 ? Buffer.from(dataB64, 'base64') : Buffer.from('');
+	        await fs.promises.writeFile(resolved.fsPath, buf);
+	        if (!existed) {
+	          const fileUri = fsPathToFileUri(resolved.fsPath);
+	          if (fileUri) notifyWorkspaceFileEvent('workspace/didCreateFiles', { files: [fileUri] });
+	        }
+	        return { ok: true };
+	      } catch (err) {
+	        return { ok: false, error: err?.message || String(err) };
+	      }
+	    });
+
+	    conn.onRequest('workspace/fsCreateDirectory', async (params) => {
+	      if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted' };
+	      const workspaceRootFsPath = this._getWorkspaceFsPath();
+	      const uri = params?.uri != null ? params.uri : (params?.path || params?.fsPath);
+	      const res = await fsCreateDirectory({ workspaceRootFsPath, uri });
+	      if (res?.ok) {
+	        const resolved = resolveWorkspaceFileFsPath(workspaceRootFsPath, uri);
+	        const dirUri = resolved.ok ? fsPathToFileUri(resolved.fsPath) : '';
+	        if (dirUri) notifyWorkspaceFileEvent('workspace/didCreateFiles', { files: [dirUri] });
+	      }
+	      return res;
+	    });
+
+	    conn.onRequest('workspace/fsDelete', async (params) => {
+	      if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted' };
+	      const workspaceRootFsPath = this._getWorkspaceFsPath();
+	      const uri = params?.uri != null ? params.uri : (params?.path || params?.fsPath);
+	      const options = params?.options && typeof params.options === 'object' ? params.options : {};
+	      const resolved = resolveWorkspaceFileFsPath(workspaceRootFsPath, uri);
+	      const targetUri = resolved.ok ? fsPathToFileUri(resolved.fsPath) : '';
+	      const res = await fsDelete({ workspaceRootFsPath, uri, options });
+	      if (res?.ok && targetUri) notifyWorkspaceFileEvent('workspace/didDeleteFiles', { files: [targetUri] });
+	      return res;
+	    });
+
+	    conn.onRequest('workspace/fsRename', async (params) => {
+	      if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted' };
+	      const workspaceRootFsPath = this._getWorkspaceFsPath();
+	      const from = params?.from != null ? params.from : (params?.oldUri || params?.oldPath || params?.source);
+	      const to = params?.to != null ? params.to : (params?.newUri || params?.newPath || params?.target);
+	      const options = params?.options && typeof params.options === 'object' ? params.options : {};
+	      const src = resolveWorkspaceFileFsPath(workspaceRootFsPath, from);
+	      const dst = resolveWorkspaceFileFsPath(workspaceRootFsPath, to);
+	      const oldUri = src.ok ? fsPathToFileUri(src.fsPath) : '';
+	      const newUri = dst.ok ? fsPathToFileUri(dst.fsPath) : '';
+	      const res = await fsRename({ workspaceRootFsPath, from, to, options });
+	      if (res?.ok && oldUri && newUri) notifyWorkspaceFileEvent('workspace/didRenameFiles', { files: [{ oldUri, newUri }] });
+	      return res;
+	    });
+
+    conn.onRequest('workspace/fsCopy', async (params) => {
       if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted' };
       const workspaceRootFsPath = this._getWorkspaceFsPath();
-      const uri = params?.uri != null ? params.uri : (params?.path || params?.fsPath);
-      const resolved = resolveWorkspaceFileFsPath(workspaceRootFsPath, uri);
-      if (!resolved.ok) return { ok: false, error: resolved.error };
-      const dataB64 = params?.dataB64 != null ? String(params.dataB64) : '';
-      try {
-        const buf = dataB64 ? Buffer.from(dataB64, 'base64') : Buffer.from('');
-        await fs.promises.writeFile(resolved.fsPath, buf);
-        return { ok: true };
-      } catch (err) {
-        return { ok: false, error: err?.message || String(err) };
-      }
+      const from = params?.from != null ? params.from : (params?.sourceUri || params?.sourcePath || params?.source);
+      const to = params?.to != null ? params.to : (params?.targetUri || params?.targetPath || params?.target);
+      const options = params?.options && typeof params.options === 'object' ? params.options : {};
+      return await fsCopy({ workspaceRootFsPath, from, to, options });
     });
 
     conn.onRequest('workspace/fsStat', async (params) => {

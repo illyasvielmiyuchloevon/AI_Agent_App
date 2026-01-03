@@ -93,13 +93,15 @@ function Workspace({
   onWorkspaceDeletePath,
   onWorkspaceReadFile,
   onWorkspaceWriteFile,
-  onPreviewEntryChange,
-  settingsTabPath,
-  renderSettingsTab,
-  terminalSettingsTabPath,
-  renderTerminalSettingsTab,
-  terminalEditorTabPath,
-  renderTerminalEditorTab,
+	  onPreviewEntryChange,
+	  settingsTabPath,
+	  renderSettingsTab,
+	  extensionsTabPrefix,
+	  renderExtensionsTab,
+	  terminalSettingsTabPath,
+	  renderTerminalSettingsTab,
+	  terminalEditorTabPath,
+	  renderTerminalEditorTab,
   taskReview,
   onTaskKeepFile,
   onTaskRevertFile,
@@ -170,10 +172,21 @@ function Workspace({
   const canUseEditorAi = !!aiEngineClient && !!activeFile
     && !(settingsTabPath && activeFile === settingsTabPath)
     && !(welcomeTabPath && activeFile === welcomeTabPath)
+    && !(extensionsTabPrefix && activeFile.startsWith(extensionsTabPrefix))
     && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix));
 
   const filesRef = useRef(files);
   const activeGroupIdRef = useRef(activeGroupId);
+  const lspHandlersRef = useRef({
+    onFileChange: null,
+    onOpenFile: null,
+    onSyncStructure: null,
+    onWorkspaceCreateFile: null,
+    onWorkspaceRenamePath: null,
+    onWorkspaceDeletePath: null,
+    onWorkspaceReadFile: null,
+    onWorkspaceWriteFile: null,
+  });
 
   useEffect(() => {
     filesRef.current = files;
@@ -183,31 +196,62 @@ function Workspace({
     activeGroupIdRef.current = activeGroupId;
   }, [activeGroupId]);
 
-  const getFilesForLsp = useCallback(() => filesRef.current, []);
-  const getActiveGroupIdForLsp = useCallback(() => activeGroupIdRef.current || 'group-1', []);
-
-  const lspUiContext = useMemo(() => ({
-    getFiles: getFilesForLsp,
+  useEffect(() => {
+    lspHandlersRef.current = {
+      onFileChange,
+      onOpenFile,
+      onSyncStructure,
+      onWorkspaceCreateFile,
+      onWorkspaceRenamePath,
+      onWorkspaceDeletePath,
+      onWorkspaceReadFile,
+      onWorkspaceWriteFile,
+    };
+  }, [
     onFileChange,
     onOpenFile,
     onSyncStructure,
     onWorkspaceCreateFile,
-    onWorkspaceRenamePath,
     onWorkspaceDeletePath,
     onWorkspaceReadFile,
+    onWorkspaceRenamePath,
     onWorkspaceWriteFile,
+  ]);
+
+  const getFilesForLsp = useCallback(() => filesRef.current, []);
+  const getActiveGroupIdForLsp = useCallback(() => activeGroupIdRef.current || 'group-1', []);
+
+  const onFileChangeForLsp = useCallback((...args) => lspHandlersRef.current.onFileChange?.(...args), []);
+  const onOpenFileForLsp = useCallback((...args) => lspHandlersRef.current.onOpenFile?.(...args), []);
+  const onSyncStructureForLsp = useCallback((...args) => lspHandlersRef.current.onSyncStructure?.(...args), []);
+  const onWorkspaceCreateFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceCreateFile?.(...args), []);
+  const onWorkspaceRenamePathForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceRenamePath?.(...args), []);
+  const onWorkspaceDeletePathForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceDeletePath?.(...args), []);
+  const onWorkspaceReadFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceReadFile?.(...args), []);
+  const onWorkspaceWriteFileForLsp = useCallback((...args) => lspHandlersRef.current.onWorkspaceWriteFile?.(...args), []);
+
+  const lspUiContext = useMemo(() => ({
+    getFiles: getFilesForLsp,
+    onFileChange: onFileChangeForLsp,
+    onOpenFile: onOpenFileForLsp,
+    onSyncStructure: onSyncStructureForLsp,
+    onWorkspaceCreateFile: onWorkspaceCreateFileForLsp,
+    onWorkspaceRenamePath: onWorkspaceRenamePathForLsp,
+    onWorkspaceDeletePath: onWorkspaceDeletePathForLsp,
+    onWorkspaceReadFile: onWorkspaceReadFileForLsp,
+    onWorkspaceWriteFile: onWorkspaceWriteFileForLsp,
     getActiveGroupId: getActiveGroupIdForLsp,
   }), [
     getActiveGroupIdForLsp,
     getFilesForLsp,
-    onFileChange,
-    onOpenFile,
-    onSyncStructure,
-    onWorkspaceCreateFile,
-    onWorkspaceDeletePath,
-    onWorkspaceReadFile,
-    onWorkspaceRenamePath,
-    onWorkspaceWriteFile,
+    onFileChangeForLsp,
+    onOpenFileForLsp,
+    onSyncStructureForLsp,
+    onWorkspaceCreateFileForLsp,
+    onWorkspaceDeletePathForLsp,
+    onWorkspaceReadFileForLsp,
+    onWorkspaceRenamePathForLsp,
+    onWorkspaceWriteFileForLsp,
   ]);
 
   useEffect(() => {
@@ -249,6 +293,7 @@ function Workspace({
   const hasTaskReview = !!activeFile
     && !(settingsTabPath && activeFile === settingsTabPath)
     && !(welcomeTabPath && activeFile === welcomeTabPath)
+    && !(extensionsTabPrefix && activeFile.startsWith(extensionsTabPrefix))
     && !(diffTabPrefix && activeFile && activeFile.startsWith(diffTabPrefix))
     && !!taskReviewFile
     && taskBlocks.length > 0;
@@ -442,6 +487,7 @@ function Workspace({
     if (terminalSettingsTabPath && filePath === terminalSettingsTabPath && renderTerminalSettingsTab) return renderTerminalSettingsTab();
     if (terminalEditorTabPath && filePath === terminalEditorTabPath && renderTerminalEditorTab) return renderTerminalEditorTab();
     if (welcomeTabPath && filePath === welcomeTabPath && renderWelcomeTab) return renderWelcomeTab();
+    if (extensionsTabPrefix && filePath.startsWith(extensionsTabPrefix) && renderExtensionsTab) return renderExtensionsTab(filePath, { groupId: group.id });
 
     if (diffTabPrefix && filePath.startsWith(diffTabPrefix) && diffTabs && diffTabs[filePath]) {
       const diff = diffTabs[filePath];
@@ -553,6 +599,7 @@ function Workspace({
       terminalSettingsTabPath={terminalSettingsTabPath}
       terminalEditorTabPath={terminalEditorTabPath}
       welcomeTabPath={welcomeTabPath}
+      extensionsTabPrefix={extensionsTabPrefix}
       onActiveGroupChange={onActiveGroupChange}
       onActiveFileChange={onActiveFileChange}
       onTabReorder={onTabReorder}

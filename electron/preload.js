@@ -372,14 +372,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.off('lsp:serverCapabilities', fn);
     },
   },
-  plugins: {
-    search: (query, providerIds, options) =>
-      tryBus('plugins/search', { query, providerIds, options }, () => ipcRenderer.invoke('plugins:search', query, providerIds, options)),
-    listInstalled: () => tryBus('plugins/listInstalled', undefined, () => ipcRenderer.invoke('plugins:listInstalled')),
-    listUpdates: () => tryBus('plugins/listUpdates', undefined, () => ipcRenderer.invoke('plugins:listUpdates')),
-    install: (ref) => tryBus('plugins/install', ref, () => ipcRenderer.invoke('plugins:install', ref)),
-    uninstall: (id) => tryBus('plugins/uninstall', { id }, () => ipcRenderer.invoke('plugins:uninstall', id)),
-    enable: (id, trust) => tryBus('plugins/enable', { id, trust }, () => ipcRenderer.invoke('plugins:enable', id, trust)),
+	  plugins: {
+	    search: (query, providerIds, options) =>
+	      tryBus('plugins/search', { query, providerIds, options }, () => ipcRenderer.invoke('plugins:search', query, providerIds, options)),
+	    listInstalled: () => tryBus('plugins/listInstalled', undefined, () => ipcRenderer.invoke('plugins:listInstalled')),
+	    getDetails: (id) => tryBus('plugins/getDetails', { id }, () => ipcRenderer.invoke('plugins:getDetails', id)),
+	    listUpdates: () => tryBus('plugins/listUpdates', undefined, () => ipcRenderer.invoke('plugins:listUpdates')),
+	    install: (ref) => tryBus('plugins/install', ref, () => ipcRenderer.invoke('plugins:install', ref)),
+	    uninstall: (id) => tryBus('plugins/uninstall', { id }, () => ipcRenderer.invoke('plugins:uninstall', id)),
+	    enable: (id, trust) => tryBus('plugins/enable', { id, trust }, () => ipcRenderer.invoke('plugins:enable', id, trust)),
     disable: (id) => tryBus('plugins/disable', { id }, () => ipcRenderer.invoke('plugins:disable', id)),
     doctor: (id) => tryBus('plugins/doctor', { id }, () => ipcRenderer.invoke('plugins:doctor', id)),
     listEnabledLanguages: () => tryBus('plugins/listEnabledLanguages', undefined, () => ipcRenderer.invoke('plugins:listEnabledLanguages')),
