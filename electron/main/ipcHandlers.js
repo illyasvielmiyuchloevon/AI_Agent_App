@@ -180,7 +180,7 @@ function registerIpcHandlers() {
     const fsPath = payload && payload.fsPath ? String(payload.fsPath) : '';
     const name = payload && payload.name ? String(payload.name) : '';
     try {
-      await workspaceService.start({ fsPath });
+      await workspaceService.start({ fsPath, workspaceId: id, name });
     } catch {
       // ignore lifecycle errors (placeholder service)
     }

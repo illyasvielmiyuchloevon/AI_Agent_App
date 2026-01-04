@@ -4,7 +4,7 @@ import {
   toFileUri,
   toLspRangeFromMonacoRange,
 } from '../adapters/toLsp';
-import { guessIsWindows, fileUriToFsPath, toWorkspaceRelativePath } from '../util/fsPath';
+import { fileUriToWorkspaceRelativePath } from '../util/fsPath';
 
 export const createModelSync = ({
   bridge,
@@ -166,11 +166,10 @@ export const createModelSync = ({
   const lspUriToModelPath = (uri) => {
     const u = String(uri || '');
     if (!u) return '';
-    if (u.startsWith('file://')) {
+    if (/^file:\/\//i.test(u)) {
       const rootFsPath = String(getRootFsPath?.() || '');
-      const windows = guessIsWindows(rootFsPath);
-      const fsPath = fileUriToFsPath(u, { windows });
-      return toWorkspaceRelativePath(fsPath, rootFsPath) || u;
+      const rel = fileUriToWorkspaceRelativePath(u, rootFsPath);
+      return rel || u;
     }
     return u;
   };

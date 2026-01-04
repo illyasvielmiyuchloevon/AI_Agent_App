@@ -60,7 +60,7 @@ export function useWorkspaceFiles({
     }
     saveTimersRef.current[path] = setTimeout(async () => {
       try {
-        await workspaceDriver.writeFile(path, content, { createDirectories: true });
+        await workspaceDriver.writeFile(path, content, { createDirectories: true, notifyCreate: false });
         if (saveSeqRef.current[path] === seq) {
           setWorkspaceState?.((prev) => ({
             ...prev,
@@ -89,4 +89,3 @@ export function useWorkspaceFiles({
 
   return { loadFileContent, scheduleSave };
 }
-

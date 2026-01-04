@@ -12,6 +12,10 @@ export function useWorkspaceFileOps({
   setWorkspaceBindingStatus,
 } = {}) {
   const ideBus = globalThis?.window?.electronAPI?.ideBus || null;
+  const hasDriverFileOpHook = (name) => {
+    const hooks = workspaceDriver?.fileOpsHooks;
+    return hooks && typeof hooks === 'object' && typeof hooks[name] === 'function';
+  };
   const notifyBus = (method, payload) => {
     try {
       ideBus?.notify?.(String(method || ''), payload && typeof payload === 'object' ? payload : {});
@@ -36,11 +40,11 @@ export function useWorkspaceFileOps({
       onConfirm: async (name) => {
         if (!name) return;
         try {
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('willCreateFiles')) {
             try { await lspService?.willCreateFiles?.([name]); } catch {}
           }
           await workspaceDriver.writeFile(name, '', { createDirectories: true });
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('didCreateFiles')) {
             try { await lspService?.didCreateFiles?.([name]); } catch {}
           }
           notifyBus('workspace/didCreateFiles', { paths: [name], source: 'ui' });
@@ -70,11 +74,11 @@ export function useWorkspaceFileOps({
       onConfirm: async (name) => {
         if (!name) return;
         try {
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('willCreateFiles')) {
             try { await lspService?.willCreateFiles?.([name]); } catch {}
           }
           await workspaceDriver.createFolder(name);
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('didCreateFiles')) {
             try { await lspService?.didCreateFiles?.([name]); } catch {}
           }
           notifyBus('workspace/didCreateFiles', { paths: [name], source: 'ui' });
@@ -95,11 +99,11 @@ export function useWorkspaceFileOps({
     if (!path) return;
     if (!window.confirm(`确认删除 ${path} ?`)) return;
     try {
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      if (!hasDriverFileOpHook('willDeleteFiles')) {
         try { await lspService?.willDeleteFiles?.([path]); } catch {}
       }
       await workspaceDriver.deletePath(path);
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      if (!hasDriverFileOpHook('didDeleteFiles')) {
         try { await lspService?.didDeleteFiles?.([path]); } catch {}
       }
       notifyBus('workspace/didDeleteFiles', { paths: [path], source: 'ui' });
@@ -141,11 +145,11 @@ export function useWorkspaceFileOps({
     }
     if (nextPathInput) {
       try {
-        if (!workspaceDriver?.setFileOperationsHooks) {
+        if (!hasDriverFileOpHook('willRenameFiles')) {
           try { await lspService?.willRenameFiles?.([{ from: oldPath, to: nextPathInput }]); } catch {}
         }
         await workspaceDriver.renamePath(oldPath, nextPathInput);
-        if (!workspaceDriver?.setFileOperationsHooks) {
+        if (!hasDriverFileOpHook('didRenameFiles')) {
           try { await lspService?.didRenameFiles?.([{ from: oldPath, to: nextPathInput }]); } catch {}
         }
         notifyBus('workspace/didRenameFiles', { files: [{ from: oldPath, to: nextPathInput }], source: 'ui' });
@@ -169,11 +173,11 @@ export function useWorkspaceFileOps({
           return;
         }
         try {
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('willRenameFiles')) {
             try { await lspService?.willRenameFiles?.([{ from: oldPath, to: nextPath }]); } catch {}
           }
           await workspaceDriver.renamePath(oldPath, nextPath);
-          if (!workspaceDriver?.setFileOperationsHooks) {
+          if (!hasDriverFileOpHook('didRenameFiles')) {
             try { await lspService?.didRenameFiles?.([{ from: oldPath, to: nextPath }]); } catch {}
           }
           notifyBus('workspace/didRenameFiles', { files: [{ from: oldPath, to: nextPath }], source: 'ui' });

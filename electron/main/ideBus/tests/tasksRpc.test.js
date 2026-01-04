@@ -37,6 +37,7 @@ function createHarness({ workspaceFsPath, trusted }) {
 
   const workspaceService = {
     getCurrent: () => ({ fsPath: workspaceFsPath }),
+    getWorkspace: () => ({ workspaceId: 'w1', fsPath: workspaceFsPath, rootFsPath: workspaceFsPath, rootUri: '', folders: [] }),
     onDidChangeConfiguration: () => {},
   };
 
@@ -139,4 +140,3 @@ test('tasks/terminate terminates a running task', async () => {
   assert.equal(stopped.ok, true);
   assert.equal(stopped.taskId, started.taskId);
 });
-

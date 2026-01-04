@@ -9,7 +9,7 @@ import {
 import { lspDiagnosticToMonacoMarker, lspRangeToMonacoRange } from '../../lsp/adapters/fromLsp';
 import { outputService } from './outputService';
 import { applyLspTextEdits } from '../../lsp/util/textEdits';
-import { guessIsWindows, fileUriToFsPath, toWorkspaceRelativePath } from '../../lsp/util/fsPath';
+import { guessIsWindows, fileUriToFsPath, fileUriToWorkspaceRelativePath, toWorkspaceRelativePath } from '../../lsp/util/fsPath';
 import { createDebouncedCachedRequest } from '../../lsp/util/requestCache';
 import { registerEditorOpener } from '../../lsp/monaco/registerEditorOpener';
 import { registerLanguageFeatures } from '../../lsp/monaco/providers/registerLanguageFeatures';
@@ -423,7 +423,7 @@ export const lspService = (() => {
     const uriToModelPath = (uri) => {
       const u = String(uri || '').trim();
       if (!u) return '';
-      if (u.startsWith('file://')) {
+      if (/^file:\/\//i.test(u)) {
         const fsPath = fileUriToFsPath(u, { windows });
         if (!fsPath) return '';
         const roots = (Array.isArray(workspaceFolders) && workspaceFolders.length ? workspaceFolders : [effectiveRootFsPath])
@@ -431,7 +431,9 @@ export const lspService = (() => {
           .filter(Boolean);
         const chosenRoot = pickContainingRootFsPath(roots, fsPath) || effectiveRootFsPath;
         const rel = toWorkspaceRelativePath(fsPath, chosenRoot);
-        return String(rel || '').trim();
+        const relOut = String(rel || '').trim();
+        if (relOut) return relOut;
+        return String(fileUriToWorkspaceRelativePath(u, chosenRoot) || '').trim();
       }
       if (looksAbsolutePath(u)) {
         const roots = (Array.isArray(workspaceFolders) && workspaceFolders.length ? workspaceFolders : [effectiveRootFsPath])
@@ -851,10 +853,18 @@ export const lspService = (() => {
       })
       : null;
     outputService.ensureChannel('LSP', 'LSP');
+    const appendLspLines = (lines, prefix = '') => {
+      const list = (Array.isArray(lines) ? lines : [lines])
+        .flatMap((x) => String(x ?? '').split(/\r?\n/))
+        .map((x) => x.trimEnd())
+        .filter((x) => x);
+      if (!list.length) return;
+      outputService.appendMany('LSP', list.map((l) => `${prefix}${l}`));
+    };
     const disposeLog = bridge.onLog((payload) => {
       const level = String(payload?.level || 'info').toUpperCase();
       const server = payload?.serverId ? ` ${payload.serverId}` : '';
-      outputService.append('LSP', `[${level}]${server} ${String(payload?.message || '').trim()}`);
+      appendLspLines(String(payload?.message ?? ''), `[${level}]${server} `);
     });
     const disposeApplyEdit = bridge.onApplyEditRequest(async (payload) => {
       const requestId = String(payload?.requestId || '').trim();
@@ -864,6 +874,11 @@ export const lspService = (() => {
         await applyWorkspaceEdit(payload?.edit);
         await bridge.applyEditResponse(requestId, { applied: true });
       } catch (err) {
+        try {
+          const label = payload?.label ? ` label=${String(payload.label)}` : '';
+          appendLspLines(`${err?.message || String(err)}${label}`, '[ERROR] applyWorkspaceEdit failed: ');
+        } catch {
+        }
         try {
           await bridge.applyEditResponse(requestId, { applied: false, failureReason: err?.message || String(err) });
         } catch {
@@ -879,8 +894,8 @@ export const lspService = (() => {
       if (payload?.timeoutMs) parts.push(`timeout=${Number(payload.timeoutMs)}ms`);
       if (payload?.error) parts.push(`error=${String(payload.error)}`);
       if (payload?.hint) parts.push(`hint=${String(payload.hint)}`);
-      outputService.append('LSP', parts.join(' '));
-      if (payload?.stderrTail) outputService.append('LSP', `[STDERR] ${server} ${String(payload.stderrTail)}`);
+      appendLspLines(parts.join(' '));
+      if (payload?.stderrTail) appendLspLines(String(payload.stderrTail), `[STDERR] ${server} `);
       try {
         globalThis.window.dispatchEvent(new CustomEvent('workbench:lspServerStatus', { detail: payload || {} }));
       } catch {
@@ -929,6 +944,11 @@ export const lspService = (() => {
           await applyWorkspaceEdit(payload?.edit);
           await ideBus.request('workspace/applyEditResponse', { requestId, result: { applied: true } }, { timeoutMs: 10_000 });
         } catch (err) {
+          try {
+            const label = payload?.label ? ` label=${String(payload.label)}` : '';
+            appendLspLines(`${err?.message || String(err)}${label}`, '[ERROR] applyWorkspaceEdit failed: ');
+          } catch {
+          }
           try {
             await ideBus.request('workspace/applyEditResponse', { requestId, result: { applied: false, failureReason: err?.message || String(err) } }, { timeoutMs: 10_000 });
           } catch {

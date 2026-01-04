@@ -8,16 +8,31 @@ const fileUriToFsPath = (uri, { windowsHint = false } = {}) => {
   try {
     const u = new URL(raw);
     if (u.protocol !== 'file:') return '';
-    const pathname = decodeURIComponent(u.pathname || '');
-    const hostname = u.hostname ? decodeURIComponent(u.hostname) : '';
-    const looksWindowsDrive = /^[a-zA-Z]:/.test(pathname.replace(/^\//, ''));
-    const windows = !!(windowsHint || hostname || looksWindowsDrive);
+    const pathnameRaw = decodeURIComponent(u.pathname || '');
+    const hostnameRaw = u.hostname ? decodeURIComponent(u.hostname) : '';
+    const looksWindowsDrive = /^[a-zA-Z]:/.test(pathnameRaw.replace(/^\//, '')) || /^[a-zA-Z]:$/.test(hostnameRaw);
+    const windows = !!(windowsHint || hostnameRaw || looksWindowsDrive);
 
     if (windows) {
-      if (hostname) return `\\\\${hostname}${pathname.replace(/\//g, '\\')}`;
-      return pathname.replace(/^\//, '').replace(/\//g, '\\');
+      const hostname = hostnameRaw.toLowerCase();
+      const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+      const hostLooksDrive = /^[a-zA-Z]:$/.test(hostnameRaw);
+      const pathLooksDrive = /^\/[a-zA-Z]:[\\/]/.test(pathnameRaw) || /^[a-zA-Z]:[\\/]/.test(pathnameRaw);
+
+      if (hostLooksDrive) {
+        const drive = hostnameRaw.toUpperCase();
+        const rest = pathnameRaw.replace(/\//g, '\\');
+        return `${drive}${rest}`;
+      }
+
+      if (hostnameRaw && !isLocalhost && !pathLooksDrive) {
+        return `\\\\${hostnameRaw}${pathnameRaw.replace(/\//g, '\\')}`;
+      }
+
+      const withoutLeadingSlash = /^\/[a-zA-Z]:[\\/]/.test(pathnameRaw) ? pathnameRaw.slice(1) : pathnameRaw;
+      return withoutLeadingSlash.replace(/^\//, '').replace(/\//g, '\\');
     }
-    return pathname;
+    return pathnameRaw;
   } catch {
     return '';
   }

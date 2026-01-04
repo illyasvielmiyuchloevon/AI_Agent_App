@@ -1582,6 +1582,9 @@ class LspManager {
       await this.shutdownServer(id);
     }
     try {
+      this.watchHub?.disposeWorkspace?.(wid);
+    } catch {}
+    try {
       this.workspaceSettings.delete(wid);
     } catch {
       // ignore

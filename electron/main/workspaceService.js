@@ -1,7 +1,18 @@
 function createWorkspaceService() {
   let current = null;
+  const workspaceListeners = new Set();
   const configListeners = new Set();
   let currentSettings = {};
+
+  const emitWorkspace = (workspace) => {
+    for (const fn of Array.from(workspaceListeners)) {
+      try {
+        fn(workspace);
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   const emitConfiguration = (settings) => {
     const payload = settings && typeof settings === 'object' ? settings : {};
@@ -16,7 +27,8 @@ function createWorkspaceService() {
   };
 
   const stop = async () => {
-    if (!current) return;
+    if (!current) return null;
+    const prev = current;
     const disposables = current.disposables || [];
     current = null;
     disposables.forEach((dispose) => {
@@ -27,12 +39,40 @@ function createWorkspaceService() {
       }
     });
     emitConfiguration({});
+    emitWorkspace(null);
+    return prev;
   };
 
-  const start = async ({ fsPath }) => {
-    await stop();
+  const start = async ({ fsPath, workspaceId, name }) => {
+    const prev = await stop();
+    const rootFsPath = fsPath || '';
+    let rootUri = '';
+    try {
+      // eslint-disable-next-line global-require
+      const { pathToFileURL } = require('node:url');
+      rootUri = rootFsPath ? pathToFileURL(rootFsPath).toString() : '';
+    } catch {
+      rootUri = '';
+    }
+    const safeName = (() => {
+      const p = String(rootFsPath || '').trim().replace(/[\\\/]+$/, '');
+      if (!p) return String(name || '') || '';
+      try {
+        // eslint-disable-next-line global-require
+        const path = require('path');
+        return path.basename(p) || p;
+      } catch {
+        return p;
+      }
+    })();
+
     current = {
-      fsPath: fsPath || '',
+      workspaceId: workspaceId || '',
+      name: safeName || String(name || ''),
+      fsPath: rootFsPath,
+      rootFsPath,
+      rootUri,
+      folders: rootFsPath && rootUri ? [{ name: safeName || rootFsPath, uri: rootUri }] : [],
       disposables: [],
     };
 
@@ -66,10 +106,20 @@ function createWorkspaceService() {
     } catch {
       // ignore
     }
+
+    emitWorkspace({ ...current, disposables: [] });
+    return { ok: true, prev, current: { ...current, disposables: [] } };
   };
 
   const getCurrent = () => current;
+  const getWorkspace = () => (current ? { ...current, disposables: [] } : null);
   const getConfiguration = () => currentSettings;
+  const onDidChangeWorkspace = (handler) => {
+    const fn = typeof handler === 'function' ? handler : null;
+    if (!fn) return () => {};
+    workspaceListeners.add(fn);
+    return () => workspaceListeners.delete(fn);
+  };
   const onDidChangeConfiguration = (handler) => {
     const fn = typeof handler === 'function' ? handler : null;
     if (!fn) return () => {};
@@ -77,7 +127,7 @@ function createWorkspaceService() {
     return () => configListeners.delete(fn);
   };
 
-  return { start, stop, getCurrent, getConfiguration, onDidChangeConfiguration };
+  return { start, stop, getCurrent, getWorkspace, getConfiguration, onDidChangeWorkspace, onDidChangeConfiguration };
 }
 
 module.exports = { createWorkspaceService };

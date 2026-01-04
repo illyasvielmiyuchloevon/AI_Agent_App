@@ -47,6 +47,18 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
 
   const connections = new Map();
   const runningTasks = new Map();
+  let didWireWorkspaceConfig = false;
+  let didWireWorkspaceState = false;
+
+  const notifyAll = (method, params) => {
+    const m = String(method || '').trim();
+    if (!m) return;
+    for (const entry of Array.from(connections.values())) {
+      try {
+        entry?.transport?.send?.({ jsonrpc: '2.0', method: m, ...(params !== undefined ? { params } : {}) });
+      } catch {}
+    }
+  };
 
   const ensureConnection = (event) => {
     const sender = event?.sender;
@@ -68,6 +80,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'commands/list': 150,
         'commands/execute': 250,
         'workspace/getTrust': 100,
+        'workspace/getState': 100,
         'workspace/setTrust': 150,
         'workspace/open': 1200,
         'workspace/close': 800,
@@ -187,7 +200,15 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       const outcome = evt?.outcome ? String(evt.outcome) : '';
       const traceId = evt?.traceId ? String(evt.traceId) : '';
       const shortTrace = traceId ? traceId.slice(-8) : '';
+      let workspaceId = '';
+      try {
+        workspaceId = String(workspaceService?.getWorkspace?.()?.workspaceId || '').trim();
+      } catch {
+        workspaceId = '';
+      }
+      const shortWs = workspaceId ? workspaceId.slice(-8) : '';
       const parts = ['[idebus]', method, outcome || 'done', `${dur}ms`];
+      if (shortWs) parts.push(`ws=${shortWs}`);
       if (shortTrace) parts.push(`trace=${shortTrace}`);
       if (thresholdMs > 0 && dur >= thresholdMs) parts.push(`slow>=${thresholdMs}ms`);
       if (evt?.errorMessage) parts.push(String(evt.errorMessage).slice(0, 240));
@@ -212,6 +233,7 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'workspace/open',
         'workspace/close',
         'workspace/getTrust',
+        'workspace/getState',
         'workspace/setTrust',
         'workspace/getWorkspaceFolders',
         'workspace/getConfiguration',
@@ -280,6 +302,8 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
 
 	      const notifications = [
 	        'workspace/configurationChanged',
+          'workspace/stateChanged',
+          'workspace/trustChanged',
 	        'workspace/didCreateFiles',
 	        'workspace/didDeleteFiles',
 	        'workspace/didRenameFiles',
@@ -363,19 +387,36 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     try {
       transport.send({ jsonrpc: '2.0', method: String(method || ''), ...(params !== undefined ? { params } : {}) });
     } catch {}
-  };
+    };
 
-  try {
-    workspaceService?.onDidChangeConfiguration?.((settings) => {
-      const payload = { settings: settings && typeof settings === 'object' ? settings : {}, ts: Date.now() };
-      notifyPlugins('workspace/configurationChanged', payload);
-      try {
-        extensionHostService?.connection?.sendNotification?.('workspace/setConfiguration', payload);
-      } catch {}
-    });
-  } catch {
-    // ignore
-  }
+    try {
+      if (!didWireWorkspaceConfig && typeof workspaceService?.onDidChangeConfiguration === 'function') {
+        didWireWorkspaceConfig = true;
+        workspaceService.onDidChangeConfiguration((settings) => {
+          const payload = { settings: settings && typeof settings === 'object' ? settings : {}, ts: Date.now() };
+          notifyAll('workspace/configurationChanged', payload);
+          try {
+            extensionHostService?.connection?.sendNotification?.('workspace/setConfiguration', payload);
+          } catch {}
+          try {
+            const wid = String(workspaceService?.getWorkspace?.()?.workspaceId || '').trim();
+            if (wid && lspService?.manager?.didChangeConfiguration) {
+              lspService.manager.didChangeConfiguration(wid, payload.settings).catch?.(() => {});
+            }
+          } catch {}
+        });
+      }
+    } catch {}
+
+    try {
+      if (!didWireWorkspaceState && typeof workspaceService?.onDidChangeWorkspace === 'function') {
+        didWireWorkspaceState = true;
+        workspaceService.onDidChangeWorkspace((ws) => {
+          const payload = { workspace: ws || null, ts: Date.now() };
+          notifyAll('workspace/stateChanged', payload);
+        });
+      }
+    } catch {}
 
 	  try {
 	    connection.onNotification('editor/textDocumentDidOpen', async (payload) => {
@@ -1029,11 +1070,23 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       const fsPath = payload && payload.fsPath ? String(payload.fsPath) : '';
       const name = payload && payload.name ? String(payload.name) : '';
       try {
-        await workspaceService?.start?.({ fsPath });
+        const r = await workspaceService?.start?.({ fsPath, workspaceId: id, name });
+        const prevWid = String(r?.prev?.workspaceId || '').trim();
+        if (prevWid && prevWid !== id) {
+          try { await dapService?.stopAllSessions?.(); } catch {}
+          try { await lspService?.manager?.shutdownWorkspace?.(prevWid); } catch {}
+        }
       } catch {}
       const recent = recentStore?.touch ? recentStore.touch({ id, fsPath, name }) : null;
       try { await extensionHostService?.restart?.('workspace/open'); } catch {}
       return { ok: true, recent };
+    });
+
+    connection.onRequest('workspace/getState', async () => {
+      const ws = workspaceService?.getWorkspace?.() || null;
+      const fsPath = String(ws?.fsPath || '').trim();
+      const trusted = fsPath ? !!recentStore?.getTrustedByFsPath?.(fsPath) : false;
+      return { ok: true, workspace: ws, trusted };
     });
 
     connection.onRequest('workspace/getTrust', async (payload) => {
@@ -1049,11 +1102,24 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       try {
         recentStore?.setTrustedByFsPath?.(fsPath, trusted);
       } catch {}
+      try {
+        const wid = String(workspaceService?.getWorkspace?.()?.workspaceId || '').trim();
+        notifyAll('workspace/trustChanged', { workspaceId: wid, fsPath, trusted: !!trusted, ts: Date.now() });
+      } catch {}
       try { await extensionHostService?.restart?.('workspace/setTrust'); } catch {}
       return { ok: true, fsPath, trusted };
     });
 
     connection.onRequest('workspace/close', async () => {
+      try { await dapService?.stopAllSessions?.(); } catch {}
+      try {
+        const wid = String(workspaceService?.getWorkspace?.()?.workspaceId || '').trim();
+        if (wid) await lspService?.manager?.shutdownWorkspace?.(wid);
+      } catch {}
+      for (const [taskId, entry] of Array.from(runningTasks.entries())) {
+        try { entry?.child?.kill?.(); } catch {}
+        runningTasks.delete(taskId);
+      }
       try {
         await workspaceService?.stop?.();
       } catch {}

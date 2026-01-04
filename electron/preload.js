@@ -242,6 +242,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     open: (payload) => tryBus('workspace/open', payload, () => ipcRenderer.invoke('workspace:open', payload)),
     close: () => tryBus('workspace/close', undefined, () => ipcRenderer.invoke('workspace:close')),
     getTrust: (fsPath) => tryBus('workspace/getTrust', { fsPath }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: false })),
+    getState: () => tryBus('workspace/getState', undefined, async () => ({ ok: false, workspace: null, trusted: false })),
     setTrust: (fsPath, trusted) => tryBus('workspace/setTrust', { fsPath, trusted: !!trusted }, async () => ({ ok: false, fsPath: String(fsPath || ''), trusted: !!trusted })),
     getConfiguration: (section, fsPath) =>
       tryBus('workspace/getConfiguration', { section: section == null ? '' : String(section), fsPath: fsPath == null ? '' : String(fsPath) }, async () => ({ ok: false, settings: {}, section: section == null ? '' : String(section) })),

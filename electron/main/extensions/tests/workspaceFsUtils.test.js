@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const { resolveWorkspaceFileFsPath, fsPathToFileUri } = require('../workspaceFsUtils');
 
@@ -32,3 +33,23 @@ test('resolveWorkspaceFileFsPath accepts file:// uri inside root', () => {
   assert.equal(path.basename(res.fsPath), 'c.txt');
 });
 
+test('frontend file uri parsing handles windows localhost and drive host', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../');
+  const fsPathMod = await import(pathToFileURL(path.join(repoRoot, 'frontend/src/lsp/util/fsPath.js')).href);
+  const toLspMod = await import(pathToFileURL(path.join(repoRoot, 'frontend/src/lsp/adapters/toLsp.js')).href);
+
+  const windows = true;
+  assert.equal(fsPathMod.fileUriToFsPath('file://localhost/C:/Users/me/a.ts', { windows }), 'C:\\Users\\me\\a.ts');
+  assert.equal(fsPathMod.fileUriToFsPath('file://C:/Users/me/a.ts', { windows }), 'C:\\Users\\me\\a.ts');
+  assert.equal(fsPathMod.fileUriToFsPath('file://server/share/a.ts', { windows }), '\\\\server\\share\\a.ts');
+  assert.equal(fsPathMod.toWorkspaceRelativePath('C:\\Users\\me\\a.ts', 'c:\\users\\me'), 'a.ts');
+
+  assert.equal(toLspMod.resolveFsPath('C:\\Users\\me', 'file://localhost/C:/Users/me/a.ts'), 'C:\\Users\\me\\a.ts');
+  assert.equal(toLspMod.resolveFsPath('C:\\Users\\me', 'file://C:/Users/me/a.ts'), 'C:\\Users\\me\\a.ts');
+});
+
+test('modelSync lspUriToModelPath accepts workspace-relative file uri', async () => {
+  const repoRoot = path.resolve(__dirname, '../../../../');
+  const fsPathMod = await import(pathToFileURL(path.join(repoRoot, 'frontend/src/lsp/util/fsPath.js')).href);
+  assert.equal(fsPathMod.fileUriToWorkspaceRelativePath('file:///todo-app/src/script.js', 'C:\\Users\\me\\Documents\\1112'), 'todo-app/src/script.js');
+});

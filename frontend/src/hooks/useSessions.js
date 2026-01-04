@@ -449,11 +449,15 @@ export function useSessions({
     setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
     try {
       if (target.changeType === 'added') {
-        if (!workspaceDriver?.setFileOperationsHooks) {
+        const hasDeleteHook = !!(workspaceDriver?.fileOpsHooks
+          && typeof workspaceDriver.fileOpsHooks === 'object'
+          && typeof workspaceDriver.fileOpsHooks.willDeleteFiles === 'function'
+          && typeof workspaceDriver.fileOpsHooks.didDeleteFiles === 'function');
+        if (!hasDeleteHook) {
           try { await lspService?.willDeleteFiles?.([path]); } catch {}
         }
         await workspaceDriver.deletePath(path);
-        if (!workspaceDriver?.setFileOperationsHooks) {
+        if (!hasDeleteHook) {
           try { await lspService?.didDeleteFiles?.([path]); } catch {}
         }
       } else {
@@ -482,7 +486,11 @@ export function useSessions({
     setTaskReview((prev) => (prev ? { ...prev, status: 'applying' } : prev));
     try {
       const deletePaths = taskReview.files.filter((f) => f?.changeType === 'added').map((f) => f.path).filter(Boolean);
-      if (deletePaths.length && !workspaceDriver?.setFileOperationsHooks) {
+      const hasDeleteHook = !!(workspaceDriver?.fileOpsHooks
+        && typeof workspaceDriver.fileOpsHooks === 'object'
+        && typeof workspaceDriver.fileOpsHooks.willDeleteFiles === 'function'
+        && typeof workspaceDriver.fileOpsHooks.didDeleteFiles === 'function');
+      if (deletePaths.length && !hasDeleteHook) {
         try { await lspService?.willDeleteFiles?.(deletePaths); } catch {}
       }
       for (const file of taskReview.files) {
@@ -492,7 +500,7 @@ export function useSessions({
           await workspaceDriver.writeFile(file.path, file.before || '', { createDirectories: true });
         }
       }
-      if (deletePaths.length && !workspaceDriver?.setFileOperationsHooks) {
+      if (deletePaths.length && !hasDeleteHook) {
         try { await lspService?.didDeleteFiles?.(deletePaths); } catch {}
       }
       await syncWorkspaceFromDisk?.({ includeContent: true, highlight: false, force: true });

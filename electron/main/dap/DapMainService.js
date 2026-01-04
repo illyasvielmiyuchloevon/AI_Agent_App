@@ -184,6 +184,16 @@ function createDapMainService({ ipcMain, broadcast, notify, workspaceService, re
     return { ok: true };
   };
 
+  const stopAllSessions = async () => {
+    for (const id of Array.from(sessions.keys())) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await stopSession(id);
+      } catch {}
+    }
+    return { ok: true };
+  };
+
   const sendRequest = async (sessionId, command, args, options) => {
     const s = getSession(sessionId);
     if (!s) return { ok: false, error: 'session not found' };
@@ -221,6 +231,7 @@ function createDapMainService({ ipcMain, broadcast, notify, workspaceService, re
     touchSender,
     startSession,
     stopSession,
+    stopAllSessions,
     sendRequest,
     listSessions: () => Array.from(sessions.entries()).map(([id, s]) => ({
       sessionId: id,

@@ -135,13 +135,17 @@ export function useGit({
       await GitDriver.restore(backendWorkspaceRoot, tracked);
     }
     if (untracked.length > 0 && workspaceDriver) {
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      const hasDeleteHook = !!(workspaceDriver?.fileOpsHooks
+        && typeof workspaceDriver.fileOpsHooks === 'object'
+        && typeof workspaceDriver.fileOpsHooks.willDeleteFiles === 'function'
+        && typeof workspaceDriver.fileOpsHooks.didDeleteFiles === 'function');
+      if (!hasDeleteHook) {
         try { await lspService?.willDeleteFiles?.(untracked); } catch {}
       }
       for (const p of untracked) {
         try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
       }
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      if (!hasDeleteHook) {
         try { await lspService?.didDeleteFiles?.(untracked); } catch {}
       }
     }
@@ -165,13 +169,17 @@ export function useGit({
       await GitDriver.restore(backendWorkspaceRoot, tracked.length === files.length ? '.' : tracked);
     }
     if (untracked.length > 0 && workspaceDriver) {
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      const hasDeleteHook = !!(workspaceDriver?.fileOpsHooks
+        && typeof workspaceDriver.fileOpsHooks === 'object'
+        && typeof workspaceDriver.fileOpsHooks.willDeleteFiles === 'function'
+        && typeof workspaceDriver.fileOpsHooks.didDeleteFiles === 'function');
+      if (!hasDeleteHook) {
         try { await lspService?.willDeleteFiles?.(untracked); } catch {}
       }
       for (const p of untracked) {
         try { await workspaceDriver.deletePath(p); } catch (e) { console.error(e); }
       }
-      if (!workspaceDriver?.setFileOperationsHooks) {
+      if (!hasDeleteHook) {
         try { await lspService?.didDeleteFiles?.(untracked); } catch {}
       }
     }

@@ -619,14 +619,18 @@ export function useWorkspace({
 
     const spec = getTemplateSpec(templateId);
     const createdPaths = [folder, ...Object.keys(spec.files || {}).map((rel) => `${folder}/${rel}`)].filter(Boolean);
-    if (!workspaceDriver?.setFileOperationsHooks) {
+    const hasCreateHook = !!(workspaceDriver?.fileOpsHooks
+      && typeof workspaceDriver.fileOpsHooks === 'object'
+      && typeof workspaceDriver.fileOpsHooks.willCreateFiles === 'function'
+      && typeof workspaceDriver.fileOpsHooks.didCreateFiles === 'function');
+    if (!hasCreateHook) {
       try { await lspService?.willCreateFiles?.(createdPaths); } catch {}
     }
     await workspaceDriver.createFolder(folder);
     for (const [rel, content] of Object.entries(spec.files || {})) {
       await workspaceDriver.writeFile(`${folder}/${rel}`, String(content || ''), { createDirectories: true });
     }
-    if (!workspaceDriver?.setFileOperationsHooks) {
+    if (!hasCreateHook) {
       try { await lspService?.didCreateFiles?.(createdPaths); } catch {}
     }
     await syncWorkspaceFromDisk({ includeContent: true, highlight: true, force: true });

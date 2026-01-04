@@ -34,6 +34,45 @@
 
 ---
 
+## 里程碑（M0–M2）：核心稳定性与基础体验（前置）
+
+后续 Phase 0–5 更偏“扩展生态与宿主能力对标”，但它们依赖稳定的 Workspace/进程模型与可观测性基线，因此先用 M0–M2 固化 IDE 核心底座与高频工作流。
+
+### M0 稳定底座（1–2 周）
+
+- 统一 Workspace 模型：`workspaceId/rootUri/folders/trust`，并打通生命周期钩子（open/close/switch、trust change）。
+- 进程自恢复：LSP/DAP/ExtHost 崩溃/卡死的 watchdog、退避重启、状态上报；关闭/切换工作区“关闭必清理”（watcher、pty、dap session、rpc connection）。
+- IDE Bus 可观测：trace/stats/log 口径固定（同一字段、同一维度、同一采样策略），并可定位到 workspaceId 与进程实例。
+- 最小稳定性回归测试：workspace open/close/switch trust 的自动化回归（含异常路径）。
+
+验收：
+- 任意一次 open/close/switch/trust 切换后，无残留 watcher/进程，且状态可在 UI/日志中归因。
+- 任意一次 LSP/DAP/ExtHost 异常退出后，能自动恢复到可用态且不影响主进程。
+
+### M1 基础体验固化（4–6 周）
+
+- 编辑器分屏与布局（基础拖拽/聚焦/关闭规则）。
+- Breadcrumbs、Outline、符号跳转（文件内 + 工作区级）。
+- 搜索：过滤/替换/正则与结果管理。
+- `tasks.json`：解析/运行/输出/终止，并与 Workspace Trust 联动（不信任默认阻断高危执行）。
+- 文件操作与 LSP file-ops 打通：`workspace/will*` 与 `did*` 的事件一致性与顺序保证。
+
+验收：
+- 覆盖“编辑→跳转→搜索→运行任务→查看输出”的高频链路，无明显阻塞与状态错乱。
+- LSP 在文件增删改/重命名时能收到对应 will/did 事件，且不会出现重复/乱序导致的诊断漂移。
+
+### M2 调试与语言深度集成（8–10 周）
+
+- DAP UI：断点/调用栈/变量/Watch/控制台（含会话生命周期与错误态呈现）。
+- 行内断点交互与 Hover Debug（hover 时展示调试值与基本操作）。
+- 重构预览：LSP `rename/codeAction/workspaceEdit` 的可视化 diff、应用与回滚。
+
+验收：
+- 典型调试流程可用：设置断点 → 启动 → 单步 → 查看变量/Watch → 控制台交互 → 结束会话。
+- 对 rename/codeAction 的 workspaceEdit 能预览差异并可一键回滚，失败时不破坏工作区状态。
+
+---
+
 ## Phase 0（第 1–3 周）：可观测基线与工程地基
 
 ### 0.1 目标
@@ -247,4 +286,3 @@
 
 - 本计划会覆盖并扩展现有总览性路线图（见 [DEVELOPMENT_PLAN.md](file:///d:/Copilot/v0.1.07%20dev01/docs/DEVELOPMENT_PLAN.md)），并把“扩展生态”前置到可交付闭环的阶段。
 - 对扩展/宿主/权限/性能的通信与分层，遵循 IDE Bus 方案（见 [IDE_Data_Exchange_Plan.md](file:///d:/Copilot/v0.1.07%20dev01/docs/IDE_Data_Exchange_Plan.md#L32-L245)）。
-

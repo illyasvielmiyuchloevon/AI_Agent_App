@@ -58,6 +58,7 @@ export class BackendWorkspaceDriver {
   this.pathLabel = meta.pathLabel || root;
   this.workspaceId = meta.workspaceId || '';
   this.workspaceRoots = Array.isArray(meta.workspaceRoots) ? meta.workspaceRoots : [];
+  this.fileOpsHooks = meta.fileOpsHooks && typeof meta.fileOpsHooks === 'object' ? meta.fileOpsHooks : null;
   }
 
   static isAvailable() {
@@ -71,7 +72,12 @@ export class BackendWorkspaceDriver {
       pathLabel: meta.pathLabel,
       workspaceId: meta.workspaceId,
       workspaceRoots: meta.workspaceRoots,
+      fileOpsHooks: meta.fileOpsHooks,
     });
+  }
+
+  setFileOperationsHooks(hooks) {
+    this.fileOpsHooks = hooks && typeof hooks === 'object' ? hooks : null;
   }
 
   _headers(extra = {}) {
@@ -124,32 +130,72 @@ export class BackendWorkspaceDriver {
     };
   }
 
-  async writeFile(path, content, { createDirectories = false } = {}) {
+  async writeFile(path, content, { createDirectories = false, notifyCreate = true } = {}) {
     const safe = denyEscapes(path);
+    const hooks = this.fileOpsHooks;
+    const wantNotify = !!hooks && typeof hooks === 'object';
+    const wantCreateNotify = !!notifyCreate && wantNotify && (typeof hooks.willCreateFiles === 'function' || typeof hooks.didCreateFiles === 'function');
+    let existed = true;
+    if (wantCreateNotify) {
+      try {
+        const res = await this.readFile(safe, { allowMissing: true });
+        existed = res?.exists !== false;
+      } catch {
+        existed = true;
+      }
+    }
+    const shouldNotifyCreate = wantCreateNotify && !existed;
+    if (shouldNotifyCreate && typeof hooks.willCreateFiles === 'function') {
+      try { await hooks.willCreateFiles([safe]); } catch {}
+    }
     await this._postJson('/api/workspace/write', {
       path: safe,
       content: String(content ?? ''),
       create_directories: !!createDirectories,
     });
+    if (shouldNotifyCreate && typeof hooks.didCreateFiles === 'function') {
+      try { await hooks.didCreateFiles([safe]); } catch {}
+    }
     return true;
   }
 
-  async createFolder(path) {
+  async createFolder(path, { notifyCreate = true } = {}) {
     const safe = denyEscapes(path);
+    const hooks = this.fileOpsHooks;
+    if (notifyCreate && hooks && typeof hooks === 'object' && typeof hooks.willCreateFiles === 'function') {
+      try { await hooks.willCreateFiles([safe]); } catch {}
+    }
     await this._postJson('/api/workspace/mkdir', { path: safe, recursive: true });
+    if (notifyCreate && hooks && typeof hooks === 'object' && typeof hooks.didCreateFiles === 'function') {
+      try { await hooks.didCreateFiles([safe]); } catch {}
+    }
     return true;
   }
 
-  async deletePath(path) {
+  async deletePath(path, { notify = true } = {}) {
     const safe = denyEscapes(path);
+    const hooks = this.fileOpsHooks;
+    if (notify && hooks && typeof hooks === 'object' && typeof hooks.willDeleteFiles === 'function') {
+      try { await hooks.willDeleteFiles([safe]); } catch {}
+    }
     await this._postJson('/api/workspace/delete', { path: safe, recursive: true });
+    if (notify && hooks && typeof hooks === 'object' && typeof hooks.didDeleteFiles === 'function') {
+      try { await hooks.didDeleteFiles([safe]); } catch {}
+    }
     return true;
   }
 
-  async renamePath(oldPath, newPath) {
+  async renamePath(oldPath, newPath, { notify = true } = {}) {
     const from = denyEscapes(oldPath);
     const to = denyEscapes(newPath);
+    const hooks = this.fileOpsHooks;
+    if (notify && hooks && typeof hooks === 'object' && typeof hooks.willRenameFiles === 'function') {
+      try { await hooks.willRenameFiles([{ from, to }]); } catch {}
+    }
     await this._postJson('/api/workspace/rename', { from, to });
+    if (notify && hooks && typeof hooks === 'object' && typeof hooks.didRenameFiles === 'function') {
+      try { await hooks.didRenameFiles([{ from, to }]); } catch {}
+    }
     return true;
   }
 
