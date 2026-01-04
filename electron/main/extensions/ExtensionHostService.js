@@ -7,7 +7,7 @@ const commandsService = require('../commands/commandsService');
 const { readWorkspaceSettingsSync, openTextDocument } = require('../workspace/documentModel');
 const { createPromptCoordinator } = require('../ui/promptCoordinator');
 const { findFilesInWorkspace, normalizeGlobArg } = require('./fileSearch');
-const { resolveWorkspaceFileFsPath, fsPathToFileUri, isUnderRoot } = require('./workspaceFsUtils');
+const { resolveWorkspaceFileFsPath, fsPathToFileUri, fileUriToFsPath, isUnderRoot } = require('./workspaceFsUtils');
 const { fsCreateDirectory, fsDelete, fsRename, fsCopy } = require('./workspaceFsOps');
 const minimatchPkg = require('minimatch');
 const minimatch =
@@ -26,10 +26,12 @@ const broadcastToRenderers = (method, params) => {
 };
 
 class ExtensionHostService {
-  constructor({ logger, workspaceService, recentStore } = {}) {
+  constructor({ logger, workspaceService, recentStore, vscodeExtensions, vscodeExtensionsReady } = {}) {
     this.logger = logger;
     this.workspaceService = workspaceService;
     this.recentStore = recentStore;
+    this.vscodeExtensions = vscodeExtensions || null;
+    this.vscodeExtensionsReady = vscodeExtensionsReady || null;
     this.transport = null;
     this.connection = null;
     this._ready = null;
@@ -45,6 +47,9 @@ class ExtensionHostService {
     this._watcherSeq = 1;
     this._workspaceApplyEditSeq = 1;
     this._workspaceApplyEditCoordinator = createApplyEditCoordinator({ timeoutMs: 15_000 });
+    this._activationIndex = { extensions: new Map(), byCommand: new Map(), byLanguage: new Map(), workspaceContains: [], startup: new Set() };
+    this._loadedExtensionIds = new Set();
+    this._activationInFlight = new Map();
   }
 
   get ready() {
@@ -88,6 +93,9 @@ class ExtensionHostService {
     const conn = this.connection;
     if (!conn || typeof conn.sendRequest !== 'function') return { ok: false, error: 'extension host not running' };
     try {
+      await this.activateByLanguageId(String(languageId || ''));
+    } catch {}
+    try {
       return await conn.sendRequest('extHost/provideCompletionItems', {
         languageId: String(languageId || ''),
         uri: String(uri || ''),
@@ -99,6 +107,111 @@ class ExtensionHostService {
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
+  }
+
+  async executeCommand(command, args = []) {
+    const id = String(command || '').trim();
+    if (!id) throw new Error('missing command');
+    const meta = commandsService.getCommandMeta(id);
+    if (meta?.source === 'extension') {
+      await this.activateByCommandId(id).catch(() => {});
+      const conn = this.connection;
+      if (conn && typeof conn.sendRequest === 'function') {
+        try {
+          return await conn.sendRequest('extHost/executeCommand', { command: id, args: Array.isArray(args) ? args : [args] }, { timeoutMs: 30_000 });
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return await commandsService.executeCommand(id, args);
+  }
+
+  async handleTextDocumentDidOpen(payload) {
+    const languageId = payload?.languageId != null ? String(payload.languageId) : '';
+    await this.activateByLanguageId(languageId).catch(() => {});
+    try {
+      this.connection?.sendNotification?.('editor/textDocumentDidOpen', payload);
+    } catch {}
+  }
+
+  _normalizeWorkspaceEventFsPaths(payload, { allowPairs = false } = {}) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const workspaceRootFsPath = this._getWorkspaceFsPath();
+    const root = String(workspaceRootFsPath || '').trim();
+
+    const filesRaw = Array.isArray(p.files) ? p.files : [];
+    const pathsRaw = Array.isArray(p.paths) ? p.paths : [];
+    const pairsRaw = allowPairs && Array.isArray(p.pairs) ? p.pairs : [];
+    const list = filesRaw.length ? filesRaw : (pathsRaw.length ? pathsRaw : pairsRaw);
+
+    const toFsPath = (value) => {
+      if (!value) return '';
+      if (typeof value === 'string') {
+        const s = value.trim();
+        if (!s) return '';
+        if (s.startsWith('file:')) return fileUriToFsPath(s);
+        if (path.isAbsolute(s)) return s;
+        if (root) return path.join(root, s);
+        return s;
+      }
+      if (typeof value === 'object') {
+        const uri = value.uri != null ? String(value.uri) : '';
+        const fsPath = value.fsPath != null ? String(value.fsPath) : '';
+        const pth = value.path != null ? String(value.path) : (value.relPath != null ? String(value.relPath) : '');
+        if (fsPath) return fsPath;
+        if (uri && uri.trim().startsWith('file:')) return fileUriToFsPath(uri);
+        if (pth) return toFsPath(pth);
+        return '';
+      }
+      return '';
+    };
+
+    if (!allowPairs) {
+      return (Array.isArray(list) ? list : []).map((it) => toFsPath(it)).filter(Boolean);
+    }
+
+    const out = [];
+    for (const it of Array.isArray(list) ? list : []) {
+      if (!it || typeof it !== 'object') continue;
+      const oldV = it.oldUri != null ? it.oldUri : (it.from != null ? it.from : it.oldPath);
+      const newV = it.newUri != null ? it.newUri : (it.to != null ? it.to : it.newPath);
+      const oldFsPath = toFsPath(oldV);
+      const newFsPath = toFsPath(newV);
+      if (oldFsPath && newFsPath) out.push({ oldFsPath, newFsPath });
+    }
+    return out;
+  }
+
+  async handleWorkspaceDidCreateFiles(payload) {
+    if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted', activated: [] };
+    const fsPaths = this._normalizeWorkspaceEventFsPaths(payload);
+    return await this._activateWorkspaceContainsForFsPaths(fsPaths, { reason: 'workspace/didCreateFiles' });
+  }
+
+  async handleWorkspaceDidRenameFiles(payload) {
+    if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted', activated: [] };
+    const pairs = this._normalizeWorkspaceEventFsPaths(payload, { allowPairs: true });
+    const fsPaths = (Array.isArray(pairs) ? pairs : []).map((p) => p?.newFsPath).filter(Boolean);
+    return await this._activateWorkspaceContainsForFsPaths(fsPaths, { reason: 'workspace/didRenameFiles' });
+  }
+
+  async activateByCommandId(commandId) {
+    const cmd = String(commandId || '').trim();
+    if (!cmd) return { ok: true, activated: [] };
+    if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted', activated: [] };
+    await this._refreshActivationIndex().catch(() => {});
+    const ids = this._activationIndex.byCommand.get(cmd) || [];
+    return await this._activateExtensions(ids, { reason: `onCommand:${cmd}` });
+  }
+
+  async activateByLanguageId(languageId) {
+    const lang = String(languageId || '').trim();
+    if (!lang) return { ok: true, activated: [] };
+    if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted', activated: [] };
+    await this._refreshActivationIndex().catch(() => {});
+    const ids = this._activationIndex.byLanguage.get(lang) || [];
+    return await this._activateExtensions(ids, { reason: `onLanguage:${lang}` });
   }
 
   start() {
@@ -214,6 +327,8 @@ class ExtensionHostService {
 
     const conn = new JsonRpcConnection(t, { logger: this.logger, name: 'extHost:main:stdio', traceMeta: true });
     this.connection = conn;
+    this._loadedExtensionIds.clear();
+    this._activationInFlight.clear();
 
     try {
       conn.sendNotification('workspace/setRoot', { fsPath: this._getWorkspaceFsPath() });
@@ -372,7 +487,12 @@ class ExtensionHostService {
       if (meta?.source === 'extension' && !this._shouldAllowExtensionCommands()) {
         return { ok: false, error: 'workspace not trusted' };
       }
-      const result = await commandsService.executeCommand(command, args);
+      let result;
+      try {
+        result = await this.executeCommand(command, args);
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
       return { ok: true, result };
     });
 
@@ -434,6 +554,7 @@ class ExtensionHostService {
 	        if (!existed) {
 	          const fileUri = fsPathToFileUri(resolved.fsPath);
 	          if (fileUri) notifyWorkspaceFileEvent('workspace/didCreateFiles', { files: [fileUri] });
+            try { await this._activateWorkspaceContainsForFsPaths([resolved.fsPath], { reason: 'workspace/fsWriteFile' }); } catch {}
 	        }
 	        return { ok: true };
 	      } catch (err) {
@@ -450,6 +571,9 @@ class ExtensionHostService {
 	        const resolved = resolveWorkspaceFileFsPath(workspaceRootFsPath, uri);
 	        const dirUri = resolved.ok ? fsPathToFileUri(resolved.fsPath) : '';
 	        if (dirUri) notifyWorkspaceFileEvent('workspace/didCreateFiles', { files: [dirUri] });
+          if (resolved.ok) {
+            try { await this._activateWorkspaceContainsForFsPaths([resolved.fsPath], { reason: 'workspace/fsCreateDirectory' }); } catch {}
+          }
 	      }
 	      return res;
 	    });
@@ -478,6 +602,9 @@ class ExtensionHostService {
 	      const newUri = dst.ok ? fsPathToFileUri(dst.fsPath) : '';
 	      const res = await fsRename({ workspaceRootFsPath, from, to, options });
 	      if (res?.ok && oldUri && newUri) notifyWorkspaceFileEvent('workspace/didRenameFiles', { files: [{ oldUri, newUri }] });
+        if (res?.ok && dst.ok) {
+          try { await this._activateWorkspaceContainsForFsPaths([dst.fsPath], { reason: 'workspace/fsRename' }); } catch {}
+        }
 	      return res;
 	    });
 
@@ -487,7 +614,14 @@ class ExtensionHostService {
       const from = params?.from != null ? params.from : (params?.sourceUri || params?.sourcePath || params?.source);
       const to = params?.to != null ? params.to : (params?.targetUri || params?.targetPath || params?.target);
       const options = params?.options && typeof params.options === 'object' ? params.options : {};
-      return await fsCopy({ workspaceRootFsPath, from, to, options });
+      const dst = resolveWorkspaceFileFsPath(workspaceRootFsPath, to);
+      const targetUri = dst.ok ? fsPathToFileUri(dst.fsPath) : '';
+      const res = await fsCopy({ workspaceRootFsPath, from, to, options });
+      if (res?.ok && targetUri) notifyWorkspaceFileEvent('workspace/didCreateFiles', { files: [targetUri] });
+      if (res?.ok && dst.ok) {
+        try { await this._activateWorkspaceContainsForFsPaths([dst.fsPath], { reason: 'workspace/fsCopy' }); } catch {}
+      }
+      return res;
     });
 
     conn.onRequest('workspace/fsStat', async (params) => {
@@ -639,24 +773,194 @@ class ExtensionHostService {
       broadcastToRenderers('diagnostics/publish', { uri, diagnostics, owner, ts: Date.now() });
     });
 
-    if (!this._isWorkspaceTrusted()) {
-      this._restartDelayMs = 750;
-      return true;
-    }
+    try {
+      await (this.vscodeExtensionsReady || Promise.resolve());
+    } catch {}
 
-    const demoEntry = path.join(__dirname, 'demoExtension.js');
-    await conn.sendRequest('extHost/loadExtensions', {
-      extensions: [
-        {
-          id: 'demo.extension',
-          extensionPath: __dirname,
-          main: demoEntry,
-        },
-      ],
-    }, { timeoutMs: 20_000 });
+    await this._refreshActivationIndex().catch(() => {});
+
+    if (this._isWorkspaceTrusted()) {
+      const startup = Array.from(this._activationIndex.startup.values());
+      if (startup.length) await this._activateExtensions(startup, { reason: '*' }).catch(() => {});
+      await this._activateWorkspaceContains().catch(() => {});
+    }
 
     this._restartDelayMs = 750;
     return true;
+  }
+
+  async _refreshActivationIndex() {
+    const installed = (() => {
+      try {
+        return Array.isArray(this.vscodeExtensions?.listInstalled?.()) ? this.vscodeExtensions.listInstalled() : [];
+      } catch {
+        return [];
+      }
+    })();
+
+    const enabled = installed.filter((x) => !!x?.enabled);
+    const extensions = new Map();
+    const byCommand = new Map();
+    const byLanguage = new Map();
+    const workspaceContains = [];
+    const startup = new Set();
+    const commandContributions = [];
+
+    for (const it of enabled) {
+      const id = String(it?.id || '').trim();
+      const installDir = String(it?.installDir || '').trim();
+      const manifest = it?.manifest && typeof it.manifest === 'object' ? it.manifest : {};
+      const extensionPath = installDir ? path.join(installDir, 'extension') : '';
+      const mainRel = manifest?.main != null ? String(manifest.main).trim() : '';
+      const mainAbs = (extensionPath && mainRel) ? path.join(extensionPath, mainRel) : '';
+      if (!id || !extensionPath || !mainAbs) continue;
+
+      extensions.set(id, { id, extensionPath, main: mainAbs, manifest });
+
+      const contributes = manifest?.contributes && typeof manifest.contributes === 'object' ? manifest.contributes : {};
+      const contribCommands = Array.isArray(contributes.commands) ? contributes.commands : [];
+      for (const c of contribCommands) {
+        const command = c?.command != null ? String(c.command).trim() : '';
+        if (!command) continue;
+        const title = c?.title != null ? String(c.title) : command;
+        commandContributions.push({ command, title });
+        if (!byCommand.has(command)) byCommand.set(command, []);
+        byCommand.get(command).push(id);
+      }
+
+      const events = Array.isArray(manifest.activationEvents) ? manifest.activationEvents.map((e) => String(e || '').trim()).filter(Boolean) : [];
+      for (const e of events) {
+        if (e === '*') {
+          startup.add(id);
+          continue;
+        }
+        if (e.startsWith('onCommand:')) {
+          const cmd = e.slice('onCommand:'.length).trim();
+          if (!cmd) continue;
+          if (!byCommand.has(cmd)) byCommand.set(cmd, []);
+          byCommand.get(cmd).push(id);
+          continue;
+        }
+        if (e.startsWith('onLanguage:')) {
+          const lang = e.slice('onLanguage:'.length).trim();
+          if (!lang) continue;
+          if (!byLanguage.has(lang)) byLanguage.set(lang, []);
+          byLanguage.get(lang).push(id);
+          continue;
+        }
+        if (e.startsWith('workspaceContains:')) {
+          const glob = e.slice('workspaceContains:'.length).trim();
+          if (!glob) continue;
+          workspaceContains.push({ id, glob });
+        }
+      }
+    }
+
+    const uniq = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : []).filter(Boolean)));
+    for (const [cmd, list] of byCommand.entries()) byCommand.set(cmd, uniq(list));
+    for (const [lang, list] of byLanguage.entries()) byLanguage.set(lang, uniq(list));
+
+    this._activationIndex = { extensions, byCommand, byLanguage, workspaceContains, startup };
+    commandsService.setExtensionContributions(commandContributions);
+    broadcastToRenderers('commands/changed', { ts: Date.now() });
+  }
+
+  async _activateWorkspaceContains() {
+    const workspaceRootFsPath = this._getWorkspaceFsPath();
+    const root = String(workspaceRootFsPath || '').trim();
+    if (!root) return { ok: true, activated: [] };
+    const matches = new Set();
+    const list = Array.isArray(this._activationIndex.workspaceContains) ? this._activationIndex.workspaceContains : [];
+    for (const it of list) {
+      const id = String(it?.id || '').trim();
+      const glob = String(it?.glob || '').trim();
+      if (!id || !glob) continue;
+      const res = await findFilesInWorkspace({ workspaceRootFsPath: root, include: glob, maxResults: 1 }).catch(() => null);
+      if (res?.ok && Array.isArray(res.uris) && res.uris.length) matches.add(id);
+    }
+    return await this._activateExtensions(Array.from(matches.values()), { reason: 'workspaceContains' });
+  }
+
+  async _activateWorkspaceContainsForFsPaths(fsPaths = [], { reason } = {}) {
+    if (!this._isWorkspaceTrusted()) return { ok: false, error: 'workspace not trusted', activated: [] };
+    const workspaceRootFsPath = this._getWorkspaceFsPath();
+    const root = String(workspaceRootFsPath || '').trim();
+    if (!root) return { ok: true, activated: [] };
+    if (typeof minimatch !== 'function') return { ok: false, error: 'minimatch dependency is not available', activated: [] };
+
+    const list = Array.isArray(fsPaths) ? fsPaths.map((p) => String(p || '').trim()).filter(Boolean) : [];
+    if (!list.length) return { ok: true, activated: [] };
+
+    await this._refreshActivationIndex().catch(() => {});
+    const patterns = Array.isArray(this._activationIndex.workspaceContains) ? this._activationIndex.workspaceContains : [];
+    if (!patterns.length) return { ok: true, activated: [] };
+
+    const mmOpts = { dot: true, nocase: process.platform === 'win32' };
+    const normalizePattern = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/^\//, '');
+
+    const matches = new Set();
+    for (const fsPath of list) {
+      if (!isUnderRoot(root, fsPath)) continue;
+      const rel = path.relative(root, fsPath).replace(/\\/g, '/');
+      if (!rel || rel.startsWith('..')) continue;
+      for (const it of patterns) {
+        const id = String(it?.id || '').trim();
+        const glob = normalizePattern(it?.glob);
+        if (!id || !glob) continue;
+        if (!minimatch(rel, glob, mmOpts)) continue;
+        matches.add(id);
+      }
+    }
+
+    if (!matches.size) return { ok: true, activated: [] };
+    return await this._activateExtensions(Array.from(matches.values()), { reason: String(reason || 'workspaceContains:fileEvent') });
+  }
+
+  async _activateExtensions(extensionIds = [], { reason } = {}) {
+    const ids = Array.isArray(extensionIds) ? extensionIds.map((x) => String(x || '').trim()).filter(Boolean) : [];
+    if (!ids.length) return { ok: true, activated: [] };
+    const pending = ids.filter((id) => !this._loadedExtensionIds.has(id));
+    if (!pending.length) return { ok: true, activated: [] };
+
+    const tasks = pending.map((id) => {
+      if (this._activationInFlight.has(id)) return this._activationInFlight.get(id);
+      const p = this._activateOne(id, { reason });
+      this._activationInFlight.set(id, p);
+      return p;
+    });
+    const results = await Promise.allSettled(tasks);
+    const activated = [];
+    for (const r of results) {
+      if (r.status !== 'fulfilled') continue;
+      const id = r.value?.id ? String(r.value.id) : '';
+      if (id) activated.push(id);
+    }
+    return { ok: true, activated };
+  }
+
+  async _activateOne(id, { reason } = {}) {
+    const extId = String(id || '').trim();
+    if (!extId) return { ok: false, id: '', error: 'missing id' };
+    if (this._loadedExtensionIds.has(extId)) return { ok: true, id: extId, already: true };
+    const rec = this._activationIndex.extensions.get(extId);
+    if (!rec) return { ok: false, id: extId, error: 'extension not enabled' };
+
+    try {
+      await this.start();
+    } catch {}
+    const conn = this.connection;
+    if (!conn || typeof conn.sendRequest !== 'function') return { ok: false, id: extId, error: 'extension host not running' };
+
+    try {
+      const res = await conn.sendRequest('extHost/loadExtensions', { extensions: [rec] }, { timeoutMs: 20_000 });
+      const ok = Array.isArray(res?.loaded) ? res.loaded.find((x) => String(x?.id || '') === extId)?.ok : true;
+      if (!ok) return { ok: false, id: extId, error: 'failed to load' };
+      this._loadedExtensionIds.add(extId);
+      try { this.logger?.info?.('extension activated', { id: extId, reason: String(reason || '') }); } catch {}
+      return { ok: true, id: extId };
+    } finally {
+      this._activationInFlight.delete(extId);
+    }
   }
 
   _disposeFileWatchers() {

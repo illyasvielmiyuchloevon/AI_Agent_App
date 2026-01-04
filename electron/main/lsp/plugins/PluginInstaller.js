@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const { Readable } = require('node:stream');
 const yauzl = require('yauzl');
 const tar = require('tar');
 
@@ -73,16 +75,46 @@ async function downloadWithResume(url, destPath, { onProgress, logger } = {}) {
   const file = fs.createWriteStream(tmp, { flags: startAt > 0 && isPartial ? 'a' : 'w' });
 
   let loaded = isPartial ? startAt : 0;
-  await new Promise((resolve, reject) => {
-    res.body.on('data', (chunk) => {
-      loaded += chunk.length;
-      try { onProgress?.({ loadedBytes: loaded, totalBytes: total, stage: 'download' }); } catch {}
+  const body = res.body;
+  if (!body) throw new Error('download failed: missing response body');
+
+  const stream = (() => {
+    if (body && typeof body.pipe === 'function' && typeof body.on === 'function') return body;
+    if (Readable && typeof Readable.fromWeb === 'function' && body && typeof body.getReader === 'function') return Readable.fromWeb(body);
+    return null;
+  })();
+
+  if (stream) {
+    await new Promise((resolve, reject) => {
+      stream.on('data', (chunk) => {
+        loaded += chunk.length;
+        try { onProgress?.({ loadedBytes: loaded, totalBytes: total, stage: 'download' }); } catch {}
+      });
+      stream.on('error', reject);
+      file.on('error', reject);
+      file.on('finish', resolve);
+      stream.pipe(file);
     });
-    res.body.on('error', reject);
-    file.on('error', reject);
-    file.on('finish', resolve);
-    res.body.pipe(file);
-  });
+  } else if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        loaded += chunk.length;
+        try { onProgress?.({ loadedBytes: loaded, totalBytes: total, stage: 'download' }); } catch {}
+        if (!file.write(chunk)) await once(file, 'drain');
+      }
+      file.end();
+      await once(file, 'finish');
+    } catch (err) {
+      try { await reader.cancel(); } catch {}
+      throw err;
+    }
+  } else {
+    throw new Error('download failed: unsupported response body stream');
+  }
 
   try {
     await fsp.rename(tmp, target);

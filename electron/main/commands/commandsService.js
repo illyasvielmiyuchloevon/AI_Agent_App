@@ -1,6 +1,7 @@
 const commandOwners = new Map();
 const commandMeta = new Map();
 const builtins = new Map();
+const extensionContributions = new Map();
 
 function normalizeId(id) {
   return String(id || '').trim();
@@ -16,6 +17,29 @@ function registerBuiltin(command, handler, meta = {}) {
     title: meta?.title ? String(meta.title) : id,
     source: 'builtin',
   });
+}
+
+function setExtensionContributions(items = []) {
+  extensionContributions.clear();
+  const list = Array.isArray(items) ? items : [];
+  for (const it of list) {
+    const id = normalizeId(it?.command);
+    if (!id) continue;
+    const title = it?.title != null ? String(it.title) : id;
+    extensionContributions.set(id, { id, title, source: 'extension' });
+  }
+
+  for (const [id, meta] of Array.from(commandMeta.entries())) {
+    if (meta?.source !== 'extension') continue;
+    if (commandOwners.has(id)) continue;
+    if (!extensionContributions.has(id)) commandMeta.delete(id);
+  }
+
+  for (const [id, meta] of extensionContributions.entries()) {
+    if (builtins.has(id)) continue;
+    if (commandOwners.has(id)) continue;
+    commandMeta.set(id, meta);
+  }
 }
 
 function registerFromExtensionHost({ command, title, owner } = {}) {
@@ -35,7 +59,8 @@ function unregisterFromExtensionHost(command) {
   const meta = commandMeta.get(id);
   if (meta?.source === 'extension') {
     commandOwners.delete(id);
-    commandMeta.delete(id);
+    if (extensionContributions.has(id)) commandMeta.set(id, extensionContributions.get(id));
+    else commandMeta.delete(id);
   }
 }
 
@@ -57,7 +82,8 @@ function unregisterAllFromOwner(owner) {
     commandOwners.delete(id);
     const meta = commandMeta.get(id);
     if (meta?.source === 'extension') {
-      commandMeta.delete(id);
+      if (extensionContributions.has(id)) commandMeta.set(id, extensionContributions.get(id));
+      else commandMeta.delete(id);
     }
     removed += 1;
   }
@@ -83,6 +109,7 @@ async function executeCommand(command, args = []) {
 
 module.exports = {
   registerBuiltin,
+  setExtensionContributions,
   registerFromExtensionHost,
   unregisterFromExtensionHost,
   unregisterAllFromOwner,
@@ -90,4 +117,3 @@ module.exports = {
   getCommandMeta,
   executeCommand,
 };
-

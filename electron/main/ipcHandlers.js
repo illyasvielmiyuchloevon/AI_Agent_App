@@ -12,12 +12,14 @@ const { GitHubReleasesProvider } = require('./lsp/plugins/providers/GitHubReleas
 const { createPluginIpcService } = require('./lsp/plugins/PluginIpcService');
 const { registerIdeBus } = require('./ideBus/registerIdeBus');
 const { ExtensionHostService } = require('./extensions/ExtensionHostService');
+const { VscodeExtensionRegistry } = require('./extensions/VscodeExtensionRegistry');
+const { VscodeExtensionInstaller } = require('./extensions/VscodeExtensionInstaller');
+const { VscodeExtensionManager } = require('./extensions/VscodeExtensionManager');
 const { createDapMainService } = require('./dap/DapMainService');
 const { resolvePreloadPath } = require('./preloadPath');
 
 const workspaceService = createWorkspaceService();
 const lspBroadcaster = createLspBroadcaster();
-const extensionHostService = new ExtensionHostService({ workspaceService, recentStore });
 
 function registerIpcHandlers() {
   const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
@@ -113,7 +115,34 @@ function registerIpcHandlers() {
   const lspService = createLspMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, notify: notifyIdeBus, plugins: { manager: pluginManager, ready: pluginsReady } });
   const dapService = createDapMainService({ ipcMain, broadcast: lspBroadcaster.broadcast, notify: notifyIdeBus, workspaceService, recentStore });
 
-  registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService, dapService, lspService, plugins: pluginService });
+  const vscodeExtensionsRootDir = path.join(app.getPath('userData'), 'extensions');
+  const vscodeExtensionsRegistry = new VscodeExtensionRegistry({ registryPath: path.join(vscodeExtensionsRootDir, 'registry.json') });
+  const vscodeExtensionsInstaller = new VscodeExtensionInstaller({ extensionsRootDir: vscodeExtensionsRootDir });
+  const vscodeExtensionsManager = new VscodeExtensionManager({
+    registry: vscodeExtensionsRegistry,
+    installer: vscodeExtensionsInstaller,
+    extensionsRootDir: vscodeExtensionsRootDir,
+  });
+  const vscodeExtensionsReady = vscodeExtensionsManager.init().catch(() => {});
+
+  const extensionHostService = new ExtensionHostService({
+    workspaceService,
+    recentStore,
+    vscodeExtensions: vscodeExtensionsManager,
+    vscodeExtensionsReady,
+  });
+
+  registerIdeBus({
+    ipcMain,
+    workspaceService,
+    recentStore,
+    extensionHostService,
+    dapService,
+    lspService,
+    plugins: pluginService,
+    vscodeExtensions: { manager: vscodeExtensionsManager, ready: vscodeExtensionsReady, notify: notifyIdeBus },
+  });
+
   extensionHostService.start().catch(() => {});
 
   ipcMain.handle('recent:list', async () => {

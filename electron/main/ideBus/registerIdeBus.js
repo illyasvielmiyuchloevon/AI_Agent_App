@@ -42,7 +42,7 @@ class IpcMainTransport {
   }
 }
 
-function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService, dapService, lspService, plugins } = {}) {
+function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostService, dapService, lspService, plugins, vscodeExtensions } = {}) {
   if (!ipcMain) throw new Error('registerIdeBus: ipcMain is required');
 
   const connections = new Map();
@@ -265,6 +265,18 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
           'plugins/getDetail',
         );
       }
+      if (vscodeExtensions?.manager) {
+        methods.push(
+          'vscodeExtensions/search',
+          'vscodeExtensions/install',
+          'vscodeExtensions/installFromOpenVsx',
+          'vscodeExtensions/listInstalled',
+          'vscodeExtensions/enable',
+          'vscodeExtensions/disable',
+          'vscodeExtensions/uninstall',
+          'vscodeExtensions/getDetail',
+        );
+      }
 
 	      const notifications = [
 	        'workspace/configurationChanged',
@@ -293,6 +305,9 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
         'lsp/serverCapabilities',
         'debug/event',
         'debug/status',
+        'vscodeExtensions/changed',
+        'vscodeExtensions/progress',
+        'vscodeExtensions/error',
       ];
       return {
         serverVersion: app.getVersion(),
@@ -314,6 +329,26 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     } catch {
       // ignore
     }
+  };
+
+  const ensureVscodeExtensionsReady = async () => {
+    try {
+      await vscodeExtensions?.ready;
+    } catch {
+    }
+  };
+
+  const notifyVscodeExtensions = (method, params) => {
+    if (typeof vscodeExtensions?.notify === 'function') {
+      try {
+        vscodeExtensions.notify(String(method || ''), params);
+        return;
+      } catch {
+      }
+    }
+    try {
+      transport.send({ jsonrpc: '2.0', method: String(method || ''), ...(params !== undefined ? { params } : {}) });
+    } catch {}
   };
 
   const notifyPlugins = (method, params) => {
@@ -343,7 +378,15 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
   }
 
 	  try {
-	    connection.onNotification('editor/textDocumentDidOpen', (payload) => {
+	    connection.onNotification('editor/textDocumentDidOpen', async (payload) => {
+	      try {
+	        if (extensionHostService?.handleTextDocumentDidOpen) {
+	          await extensionHostService.handleTextDocumentDidOpen(payload);
+	          return;
+	        }
+	      } catch {
+	        // ignore
+	      }
 	      try { extensionHostService?.connection?.sendNotification?.('editor/textDocumentDidOpen', payload); } catch {}
 	    });
     connection.onNotification('editor/textDocumentDidChange', (payload) => {
@@ -360,12 +403,14 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
 	    });
 	    connection.onNotification('workspace/didCreateFiles', (payload) => {
 	      try { extensionHostService?.connection?.sendNotification?.('workspace/didCreateFiles', payload); } catch {}
+        try { extensionHostService?.handleWorkspaceDidCreateFiles?.(payload).catch(() => {}); } catch {}
 	    });
 	    connection.onNotification('workspace/didDeleteFiles', (payload) => {
 	      try { extensionHostService?.connection?.sendNotification?.('workspace/didDeleteFiles', payload); } catch {}
 	    });
 	    connection.onNotification('workspace/didRenameFiles', (payload) => {
 	      try { extensionHostService?.connection?.sendNotification?.('workspace/didRenameFiles', payload); } catch {}
+        try { extensionHostService?.handleWorkspaceDidRenameFiles?.(payload).catch(() => {}); } catch {}
 	    });
 	  } catch {
 	    // ignore
@@ -432,8 +477,14 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
       if (meta?.source === 'extension' && !trusted) {
         return { ok: false, error: 'workspace not trusted' };
       }
-      const result = await commandsService.executeCommand(command, args);
-      return { ok: true, result };
+      try {
+        const result = await (extensionHostService?.executeCommand
+          ? extensionHostService.executeCommand(command, args)
+          : commandsService.executeCommand(command, args));
+        return { ok: true, result };
+      } catch (err) {
+        return { ok: false, error: err?.message || String(err) };
+      }
     });
 
     const getWorkspaceFsPath = () => String(workspaceService?.getCurrent?.()?.fsPath || '').trim();
@@ -658,6 +709,128 @@ function registerIdeBus({ ipcMain, workspaceService, recentStore, extensionHostS
     connection.onRequest('extensions/listExtensions', async () => {
       if (!extensionHostService?.listExtensions) return { ok: false, error: 'extension host service unavailable' };
       return extensionHostService.listExtensions();
+    });
+
+    connection.onRequest('vscodeExtensions/listInstalled', async () => {
+      if (!vscodeExtensions?.manager?.listInstalled) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const items = vscodeExtensions.manager.listInstalled();
+      return { ok: true, items };
+    });
+
+    connection.onRequest('vscodeExtensions/search', async (payload) => {
+      if (!vscodeExtensions?.manager?.search) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const query = payload?.query != null ? String(payload.query) : '';
+      const providerIds = Array.isArray(payload?.providerIds) ? payload.providerIds : undefined;
+      const options = payload?.options && typeof payload.options === 'object' ? payload.options : undefined;
+      try {
+        const items = await vscodeExtensions.manager.search({ query, providerIds, options });
+        return { ok: true, items };
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'search', query, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('vscodeExtensions/getDetail', async (payload) => {
+      if (!vscodeExtensions?.manager?.getDetail) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      return vscodeExtensions.manager.getDetail(id);
+    });
+
+    connection.onRequest('vscodeExtensions/install', async (payload) => {
+      if (!vscodeExtensions?.manager?.installFromVsixFile) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const filePath = payload?.filePath != null ? String(payload.filePath) : String(payload || '');
+      if (!filePath) return { ok: false, error: 'missing filePath' };
+      try {
+        const res = await vscodeExtensions.manager.installFromVsixFile(filePath, {
+          onProgress: (p) => notifyVscodeExtensions('vscodeExtensions/progress', { ...(p || {}), ts: Date.now() }),
+        });
+        notifyVscodeExtensions('vscodeExtensions/changed', { items: vscodeExtensions.manager.listInstalled?.() || [], ts: Date.now() });
+        if (res?.needsRestart) {
+          try { await extensionHostService?.restart?.('vscodeExtensions:install'); } catch {}
+        }
+        return res;
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'install', filePath, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('vscodeExtensions/installFromOpenVsx', async (payload) => {
+      if (!vscodeExtensions?.manager?.installFromOpenVsxRef) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const namespace = payload?.namespace != null ? String(payload.namespace) : '';
+      const name = payload?.name != null ? String(payload.name) : '';
+      const version = payload?.version != null ? String(payload.version) : '';
+      if (!namespace || !name) return { ok: false, error: 'missing namespace/name' };
+      try {
+        const res = await vscodeExtensions.manager.installFromOpenVsxRef({ namespace, name, version }, {
+          onProgress: (p) => notifyVscodeExtensions('vscodeExtensions/progress', { ...(p || {}), ts: Date.now() }),
+        });
+        notifyVscodeExtensions('vscodeExtensions/changed', { items: vscodeExtensions.manager.listInstalled?.() || [], ts: Date.now() });
+        if (res?.needsRestart) {
+          try { await extensionHostService?.restart?.('vscodeExtensions:installFromOpenVsx'); } catch {}
+        }
+        return res;
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'installFromOpenVsx', namespace, name, version, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('vscodeExtensions/enable', async (payload) => {
+      if (!vscodeExtensions?.manager?.enable) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      try {
+        const res = await vscodeExtensions.manager.enable(id);
+        notifyVscodeExtensions('vscodeExtensions/changed', { items: vscodeExtensions.manager.listInstalled?.() || [], ts: Date.now() });
+        if (res?.needsRestart) {
+          try { await extensionHostService?.restart?.('vscodeExtensions:enable'); } catch {}
+        }
+        return res;
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'enable', id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('vscodeExtensions/disable', async (payload) => {
+      if (!vscodeExtensions?.manager?.disable) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      try {
+        const res = await vscodeExtensions.manager.disable(id);
+        notifyVscodeExtensions('vscodeExtensions/changed', { items: vscodeExtensions.manager.listInstalled?.() || [], ts: Date.now() });
+        if (res?.needsRestart) {
+          try { await extensionHostService?.restart?.('vscodeExtensions:disable'); } catch {}
+        }
+        return res;
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'disable', id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
+    });
+
+    connection.onRequest('vscodeExtensions/uninstall', async (payload) => {
+      if (!vscodeExtensions?.manager?.uninstall) return { ok: false, error: 'vscode extensions service unavailable' };
+      await ensureVscodeExtensionsReady();
+      const id = payload?.id != null ? String(payload.id) : String(payload || '');
+      try {
+        const res = await vscodeExtensions.manager.uninstall(id);
+        notifyVscodeExtensions('vscodeExtensions/changed', { items: vscodeExtensions.manager.listInstalled?.() || [], ts: Date.now() });
+        if (res?.needsRestart) {
+          try { await extensionHostService?.restart?.('vscodeExtensions:uninstall'); } catch {}
+        }
+        return res;
+      } catch (err) {
+        notifyVscodeExtensions('vscodeExtensions/error', { action: 'uninstall', id, message: err?.message || String(err), ts: Date.now() });
+        return { ok: false, error: err?.message || String(err) };
+      }
     });
 
     connection.onRequest('debug/startSession', async (payload) => {
