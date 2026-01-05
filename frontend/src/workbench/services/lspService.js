@@ -1,6 +1,7 @@
 import { LspUiBridge } from '../../lsp/LspUiBridge';
 import { applyDiagnosticsToMonaco } from '../../lsp/features/diagnosticsUI';
 import {
+  inferLanguageIdFromPath,
   resolveFsPath,
   toFileUri,
   toLspPositionFromMonaco,
@@ -385,6 +386,19 @@ export const lspService = (() => {
     return bridge.didDeleteFiles(wid, { files });
   };
 
+  let UndoRedoGroupClass = null;
+
+  const getUndoRedoGroupInstance = async () => {
+    if (UndoRedoGroupClass) return new UndoRedoGroupClass();
+    try {
+      const mod = await import('monaco-editor/esm/vs/platform/undoRedo/common/undoRedo.js');
+      UndoRedoGroupClass = mod?.UndoRedoGroup || null;
+    } catch {
+      UndoRedoGroupClass = null;
+    }
+    return UndoRedoGroupClass ? new UndoRedoGroupClass() : null;
+  };
+
   const applyWorkspaceEdit = async (edit, { preferOpenModels = true } = {}) => {
     const monaco = monacoRef;
     if (!monaco) return;
@@ -476,11 +490,13 @@ export const lspService = (() => {
       }
     };
 
+    const undoGroup = await getUndoRedoGroupInstance();
+
     const applyEditsToPath = async (modelPath, edits) => {
       const mp = String(modelPath || '');
       if (!mp) return;
       const resource = monaco.Uri.parse(mp);
-      const model = preferOpenModels ? monaco.editor.getModel(resource) : null;
+      let model = preferOpenModels ? monaco.editor.getModel(resource) : null;
       const groupId = uiContext.getActiveGroupId?.() || 'group-1';
       const normalizedEdits = (Array.isArray(edits) ? edits : []).map(normalizeTextEdit).filter(Boolean);
       const applyToUi = async (nextContent) => {
@@ -493,26 +509,6 @@ export const lspService = (() => {
           uiContext.onFileChange(mp, nextContent, { groupId });
         }
       };
-      if (model) {
-        const current = model.getValue?.() ?? '';
-        const next = applyLspTextEdits(current, normalizedEdits);
-        const operations = (Array.isArray(edits) ? edits : [])
-          .map(normalizeTextEdit)
-          .filter(Boolean)
-          .map((e) => ({
-            range: lspRangeToMonacoRange(monaco, e.range),
-            text: String(e.newText ?? ''),
-            forceMoveMarkers: true,
-          }));
-        try {
-          model.pushEditOperations([], operations, () => null);
-        } catch {
-          // ignore
-        }
-        await applyToUi(next);
-        return;
-      }
-
       let current = '';
       if (typeof uiContext.onWorkspaceReadFile === 'function') {
         const res = await uiContext.onWorkspaceReadFile(mp).catch(() => null);
@@ -523,7 +519,37 @@ export const lspService = (() => {
         if (!fileEntry) fileOpsTouched = true;
         current = fileEntry ? String(fileEntry.content || '') : '';
       }
+      if (!model && typeof monaco.editor.createModel === 'function') {
+        const languageId = inferLanguageIdFromPath(mp);
+        try {
+          model = monaco.editor.createModel(current, languageId, resource);
+          void modelSync.openModelIfNeeded(model).catch(() => {});
+        } catch {
+          model = null;
+        }
+      }
+
       const next = applyLspTextEdits(current, normalizedEdits);
+
+      if (model) {
+        const operations = (Array.isArray(edits) ? edits : [])
+          .map(normalizeTextEdit)
+          .filter(Boolean)
+          .map((e) => ({
+            range: lspRangeToMonacoRange(monaco, e.range),
+            text: String(e.newText ?? ''),
+            forceMoveMarkers: true,
+          }));
+        try {
+          if (undoGroup) {
+            model.pushEditOperations([], operations, () => null, undoGroup);
+          } else {
+            model.pushEditOperations([], operations, () => null);
+          }
+        } catch {
+        }
+      }
+
       await applyToUi(next);
     };
 

@@ -68,10 +68,11 @@ export const useWorkspaceTaskReviewMonaco = ({
       preferredIndex,
     });
 
-    const startLineNumber = Math.max(1, pos.anchorLineNumber);
+    const lineCount = model.getLineCount?.() || 1;
+    const startLineNumber = Math.max(1, Math.min(lineCount, pos.anchorLineNumber));
     const range = (() => {
       if (!fromLines.length) return new monaco.Range(startLineNumber, 1, startLineNumber, 1);
-      const endLineNumber = Math.max(startLineNumber, startLineNumber + fromLines.length - 1);
+      const endLineNumber = Math.min(lineCount, Math.max(startLineNumber, startLineNumber + fromLines.length - 1));
       const endCol = model.getLineMaxColumn?.(endLineNumber) || 1;
       return new monaco.Range(startLineNumber, 1, endLineNumber, endCol);
     })();
@@ -387,4 +388,3 @@ export const useWorkspaceTaskReviewMonaco = ({
 
   return useMemo(() => ({ setTaskCursor }), [setTaskCursor]);
 };
-
